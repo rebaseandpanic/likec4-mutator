@@ -112,6 +112,21 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --output ./out
       "type": "element",
       "target": "app.newApi",
       "title": "New API"
+    },
+    {
+      "op": "updateElement",
+      "fqn": "app.api",
+      "description": "Updated REST API",
+      "technology": "Go / Fiber"
+    },
+    {
+      "op": "removeElement",
+      "fqn": "app.oldService"
+    },
+    {
+      "op": "removeRelationship",
+      "source": "app.api",
+      "target": "app.oldService"
     }
   ]
 }

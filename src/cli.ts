@@ -76,7 +76,32 @@ interface AddViewMutation {
   title?: string;
 }
 
-type Mutation = AddElementMutation | AddRelationshipMutation | AddViewMutation;
+interface UpdateElementMutation {
+  op: 'updateElement';
+  fqn: string;
+  title?: string;
+  description?: string;
+  technology?: string;
+}
+
+interface RemoveElementMutation {
+  op: 'removeElement';
+  fqn: string;
+}
+
+interface RemoveRelationshipMutation {
+  op: 'removeRelationship';
+  source: string;
+  target: string;
+}
+
+type Mutation =
+  | AddElementMutation
+  | AddRelationshipMutation
+  | AddViewMutation
+  | UpdateElementMutation
+  | RemoveElementMutation
+  | RemoveRelationshipMutation;
 
 interface MutationsFile {
   mutations: Mutation[];
@@ -356,6 +381,28 @@ program
               target: m.target,
               title: m.title,
             });
+            applied++;
+            break;
+          }
+          case 'updateElement': {
+            const m = mutation as UpdateElementMutation;
+            mutator.updateElement(m.fqn, {
+              title: m.title,
+              description: m.description,
+              technology: m.technology,
+            });
+            applied++;
+            break;
+          }
+          case 'removeElement': {
+            const m = mutation as RemoveElementMutation;
+            mutator.removeElement(m.fqn);
+            applied++;
+            break;
+          }
+          case 'removeRelationship': {
+            const m = mutation as RemoveRelationshipMutation;
+            mutator.removeRelationship(m.source, m.target);
             applied++;
             break;
           }
