@@ -1,0 +1,33 @@
+specification {
+  element system
+  element service
+  element database
+  tag deprecated
+  tag backend
+}
+model {
+  app = system 'My Application' {
+    description 'Main application system'
+
+    api = service 'REST API' {
+      description 'Backend API'
+      technology 'TypeScript / Express'
+    }
+
+    db = database 'PostgreSQL' {
+      description 'Main database'
+      technology 'PostgreSQL 16'
+    }
+
+    api -> db 'reads/writes'
+  }
+}
+views {
+  view index {
+    include *
+  }
+  view appView of app {
+    include *
+    autoLayout TopBottom
+  }
+}
