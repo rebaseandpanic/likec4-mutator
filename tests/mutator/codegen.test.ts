@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { generateElement, generateRelationship, generateView } from '../../src/mutator/codegen.js';
+import {
+  generateElement,
+  generateRelationship,
+  generateView,
+  generateStyleBlock,
+  escapeString,
+} from '../../src/mutator/codegen.js';
 
 // ---------------------------------------------------------------------------
 // generateElement
@@ -595,12 +601,10 @@ describe('generateElement edge cases', () => {
       kind: 'service',
       tags: ['#already-prefixed'],
     });
-    // The codegen unconditionally prefixes with '#', so '##already-prefixed' would
-    // be a bug.  Document current behavior: the raw tag string is used, so the
-    // caller must supply names WITHOUT the leading '#'.
-    expect(result).toContain('##already-prefixed');
-    // This test documents the current behavior — callers are expected to pass tag
-    // names without the '#' prefix. See the JSDoc on GenerateElementOpts.tags.
+    // The codegen strips a leading '#' before adding its own prefix, so the
+    // output must be '#already-prefixed', never '##already-prefixed'.
+    expect(result).toContain('#already-prefixed');
+    expect(result).not.toContain('##already-prefixed');
   });
 
   it('should handle a link URL that contains spaces — no label', () => {
@@ -622,5 +626,196 @@ describe('generateElement edge cases', () => {
       links: [{ url: 'https://example.com', label: "It's a doc" }],
     });
     expect(result).toContain("link https://example.com 'It\\'s a doc'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// escapeString edge cases (Task 3)
+// ---------------------------------------------------------------------------
+
+describe('escapeString', () => {
+  it('should escape a single backslash to double backslash', () => {
+    expect(escapeString('path\\to\\file')).toBe('path\\\\to\\\\file');
+  });
+
+  it('should escape a single quote to backslash-quote', () => {
+    expect(escapeString("it's")).toBe("it\\'s");
+  });
+
+  it('should replace a newline character with a space', () => {
+    // The grammar does not support embedded newlines — escapeString replaces
+    // them with spaces to prevent silent generation of invalid DSL.
+    const result = escapeString('line1\nline2');
+    expect(result).toBe('line1 line2');
+  });
+
+  it('should replace a tab character with a space', () => {
+    // Same as newline: tabs are replaced with spaces.
+    const result = escapeString('col1\tcol2');
+    expect(result).toBe('col1 col2');
+  });
+
+  it('should return an empty string unchanged', () => {
+    expect(escapeString('')).toBe('');
+  });
+
+  it('should escape multiple single quotes in sequence', () => {
+    expect(escapeString("a'b'c")).toBe("a\\'b\\'c");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateView additional edge cases (Task 3)
+// ---------------------------------------------------------------------------
+
+describe('generateView additional edge cases', () => {
+  it('should produce the correct "dynamic view" header for type dynamic', () => {
+    const result = generateView({ indent: '', id: 'dynFlow', type: 'dynamic' });
+    expect(result.startsWith('dynamic view dynFlow {')).toBe(true);
+  });
+
+  it('should produce the correct "deployment view" header for type deployment', () => {
+    const result = generateView({ indent: '', id: 'deployView', type: 'deployment' });
+    expect(result.startsWith('deployment view deployView {')).toBe(true);
+  });
+
+  it('should produce minimal output (only autoLayout) when title and includes are absent', () => {
+    const result = generateView({ indent: '', id: 'bare', type: 'element' });
+    // Only the header, autoLayout, and closing brace — no title or include lines
+    expect(result).toBe('view bare {\n  autoLayout TopBottom\n}');
+  });
+
+  it('should produce a dynamic view with a title inside the body', () => {
+    const result = generateView({ indent: '', id: 'df', type: 'dynamic', title: 'Dynamic Flow' });
+    expect(result).toContain("title 'Dynamic Flow'");
+    expect(result).toContain('dynamic view df {');
+  });
+
+  it('should produce a deployment view with includes', () => {
+    const result = generateView({
+      indent: '  ',
+      id: 'prod',
+      type: 'deployment',
+      includes: ['node.*'],
+    });
+    expect(result).toContain('  deployment view prod {');
+    expect(result).toContain('    include node.*');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateRelationship tag-stripping edge case (Task 4)
+// ---------------------------------------------------------------------------
+
+describe('generateRelationship tag stripping', () => {
+  it('should NOT produce ## when a relationship tag already starts with #', () => {
+    const result = generateRelationship({
+      indent: '',
+      source: 'a',
+      target: 'b',
+      tags: ['#prefixed'],
+    });
+    expect(result).toContain('#prefixed');
+    expect(result).not.toContain('##prefixed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateStyleBlock focused unit tests (I5)
+// ---------------------------------------------------------------------------
+
+describe('generateStyleBlock', () => {
+  it('should generate all properties when fully specified', () => {
+    const result = generateStyleBlock(
+      {
+        shape: 'browser',
+        color: 'blue',
+        icon: 'tech:react',
+        opacity: '40%',
+        border: 'dashed',
+        multiple: true,
+        size: 'sm',
+        padding: 'md',
+        textSize: 'lg',
+        iconPosition: 'top',
+        iconColor: 'amber',
+        iconSize: 'sm',
+      },
+      '  ',
+    );
+    expect(result).toContain('  style {');
+    expect(result).toContain('    shape browser');
+    expect(result).toContain('    color blue');
+    expect(result).toContain('    icon tech:react');
+    expect(result).toContain('    opacity 40%');
+    expect(result).toContain('    border dashed');
+    expect(result).toContain('    multiple true');
+    expect(result).toContain('    size sm');
+    expect(result).toContain('    padding md');
+    expect(result).toContain('    textSize lg');
+    expect(result).toContain('    iconPosition top');
+    expect(result).toContain('    iconColor amber');
+    expect(result).toContain('    iconSize sm');
+    expect(result).toContain('  }');
+  });
+
+  it('should emit a style block with only the closing brace when object is empty', () => {
+    // generateStyleBlock is only called when the style object is non-empty;
+    // if called with {}, it still emits the outer style block wrapper.
+    const result = generateStyleBlock({}, '  ');
+    expect(result).toContain('  style {');
+    expect(result).toContain('  }');
+    // No inner property lines
+    expect(result).toBe('  style {\n  }\n');
+  });
+
+  it('should emit multiple false', () => {
+    const result = generateStyleBlock({ multiple: false }, '');
+    expect(result).toContain('multiple false');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateRelationship empty style block (I6)
+// ---------------------------------------------------------------------------
+
+describe('generateRelationship empty style', () => {
+  it('should NOT emit a style block when style object is empty ({})', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      style: {},
+      description: 'Sends data',
+    });
+    expect(result).not.toContain('style {');
+    expect(result).toContain("    description 'Sends data'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateView autoLayout option (I7)
+// ---------------------------------------------------------------------------
+
+describe('generateView autoLayout option', () => {
+  it('should default to autoLayout TopBottom when autoLayout is not specified', () => {
+    const result = generateView({ indent: '', id: 'v', type: 'element' });
+    expect(result).toContain('autoLayout TopBottom');
+  });
+
+  it('should use a custom autoLayout value when specified', () => {
+    const result = generateView({ indent: '', id: 'v', type: 'element', autoLayout: 'LeftRight' });
+    expect(result).toContain('autoLayout LeftRight');
+    expect(result).not.toContain('autoLayout TopBottom');
+  });
+
+  it('should suppress the autoLayout directive when autoLayout is empty string', () => {
+    const result = generateView({ indent: '', id: 'v', type: 'element', autoLayout: '' });
+    expect(result).not.toContain('autoLayout');
+  });
+
+  it('should suppress the autoLayout directive when autoLayout is null', () => {
+    const result = generateView({ indent: '', id: 'v', type: 'element', autoLayout: null });
+    expect(result).not.toContain('autoLayout');
   });
 });

@@ -75,43 +75,49 @@ export function generateElement(opts: GenerateElementOpts): string {
   const { indent, name, kind, title, summary, description, technology, tags, links, style, metadata } = opts;
   const innerIndent = indent + '  ';
 
-  const hasTags = !!(tags && tags.length > 0);
-  const hasLinks = !!(links && links.length > 0);
-  const hasStyle = !!(style && Object.keys(style).length > 0);
-  const hasMetadata = !!(metadata && Object.keys(metadata).length > 0);
-  const hasBody = !!(summary || description || technology || hasTags || hasLinks || hasStyle || hasMetadata);
+  const hasBody = !!(
+    summary ||
+    description ||
+    technology ||
+    (tags && tags.length > 0) ||
+    (links && links.length > 0) ||
+    (style && Object.keys(style).length > 0) ||
+    (metadata && Object.keys(metadata).length > 0)
+  );
 
   let result = `${indent}${name} = ${kind}`;
   if (title) result += ` '${escapeString(title)}'`;
 
   if (hasBody) {
     result += ' {\n';
-    // Tags come first, each on its own line with a # prefix
-    if (hasTags) {
-      for (const tag of tags!) {
-        result += `${innerIndent}#${tag}\n`;
+    // Tags come first, each on its own line with a # prefix.
+    // Strip any leading '#' the caller may have included to avoid '##tag'.
+    if (tags && tags.length > 0) {
+      for (const tag of tags) {
+        const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
+        result += `${innerIndent}#${cleanTag}\n`;
       }
     }
     if (summary) result += `${innerIndent}summary '${escapeString(summary)}'\n`;
     if (description) result += `${innerIndent}description '${escapeString(description)}'\n`;
     if (technology) result += `${innerIndent}technology '${escapeString(technology)}'\n`;
-    if (hasLinks) {
-      for (const lnk of links!) {
+    if (links && links.length > 0) {
+      for (const lnk of links) {
         if (lnk.label) {
-          result += `${innerIndent}link ${lnk.url} '${escapeString(lnk.label)}'\n`;
+          result += `${innerIndent}link ${sanitizeUrl(lnk.url)} '${escapeString(lnk.label)}'\n`;
         } else {
-          result += `${innerIndent}link ${lnk.url}\n`;
+          result += `${innerIndent}link ${sanitizeUrl(lnk.url)}\n`;
         }
       }
     }
-    if (hasStyle) {
-      result += generateStyleBlock(style!, innerIndent);
+    if (style && Object.keys(style).length > 0) {
+      result += generateStyleBlock(style, innerIndent);
     }
-    if (hasMetadata) {
+    if (metadata && Object.keys(metadata).length > 0) {
       result += `${innerIndent}metadata {\n`;
       const innerInnerIndent = innerIndent + '  ';
-      for (const [key, value] of Object.entries(metadata!)) {
-        result += `${innerInnerIndent}${key} '${escapeString(value)}'\n`;
+      for (const [key, value] of Object.entries(metadata)) {
+        result += `${innerInnerIndent}${validateMetadataKey(key)} '${escapeString(value)}'\n`;
       }
       result += `${innerIndent}}\n`;
     }
@@ -201,7 +207,10 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
     result += ' {\n';
 
     if (tags) {
-      for (const tag of tags) result += `${innerIndent}#${tag}\n`;
+      for (const tag of tags) {
+        const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
+        result += `${innerIndent}#${cleanTag}\n`;
+      }
     }
 
     if (description) result += `${innerIndent}description '${escapeString(description)}'\n`;
@@ -210,9 +219,9 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
     if (links) {
       for (const link of links) {
         if (link.label) {
-          result += `${innerIndent}link ${link.url} '${escapeString(link.label)}'\n`;
+          result += `${innerIndent}link ${sanitizeUrl(link.url)} '${escapeString(link.label)}'\n`;
         } else {
-          result += `${innerIndent}link ${link.url}\n`;
+          result += `${innerIndent}link ${sanitizeUrl(link.url)}\n`;
         }
       }
     }
@@ -229,7 +238,7 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
     if (metadata && Object.keys(metadata).length > 0) {
       result += `${innerIndent}metadata {\n`;
       for (const [key, val] of Object.entries(metadata)) {
-        result += `${innerIndent}  ${key} '${escapeString(val)}'\n`;
+        result += `${innerIndent}  ${validateMetadataKey(key)} '${escapeString(val)}'\n`;
       }
       result += `${innerIndent}}\n`;
     }
@@ -257,14 +266,20 @@ export interface GenerateViewOpts {
   title?: string;
   /** Optional include expressions (each becomes an `include` statement) */
   includes?: string[];
+  /**
+   * Layout algorithm directive.  Defaults to `'TopBottom'`.
+   * Pass an empty string or `null`/`undefined` to suppress the directive entirely.
+   */
+  autoLayout?: string | null;
 }
 
 /**
- * Generate a LikeC4 view declaration snippet including a default
- * `autoLayout TopBottom` directive.
+ * Generate a LikeC4 view declaration snippet.  By default an
+ * `autoLayout TopBottom` directive is included; pass `autoLayout: ''`
+ * to suppress it.
  */
 export function generateView(opts: GenerateViewOpts): string {
-  const { indent, id, type, target, title, includes } = opts;
+  const { indent, id, type, target, title, includes, autoLayout = 'TopBottom' } = opts;
   const innerIndent = indent + '  ';
 
   let header: string;
@@ -286,7 +301,7 @@ export function generateView(opts: GenerateViewOpts): string {
       result += `${innerIndent}include ${inc}\n`;
     }
   }
-  result += `${innerIndent}autoLayout TopBottom\n`;
+  if (autoLayout) result += `${innerIndent}autoLayout ${autoLayout}\n`;
   result += `${indent}}`;
 
   return result;
@@ -298,12 +313,36 @@ export function generateView(opts: GenerateViewOpts): string {
 
 /**
  * Escape backslashes and single quotes for use inside LikeC4 single-quoted
- * string literals.  Note: the grammar does not support embedded newlines or
- * tab characters in string tokens; callers should strip or reject them before
- * calling this function.
+ * string literals.  Newline and tab characters are replaced with a space
+ * because the grammar does not support embedded newlines or tab characters
+ * in string tokens.
  */
 export function escapeString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, ' ').replace(/\t/g, ' ');
+}
+
+/**
+ * Strip characters that would break DSL syntax from a URL string.
+ * Single quotes and newlines are removed since they cannot appear inside
+ * an unquoted URL token in the LikeC4 grammar.
+ */
+function sanitizeUrl(url: string): string {
+  return url.replace(/[\n\r']/g, '');
+}
+
+/**
+ * Validate a metadata key.  Keys must contain only alphanumeric characters,
+ * underscores, or hyphens to be safe for direct emission into DSL output.
+ *
+ * @throws {Error} when the key contains invalid characters
+ */
+function validateMetadataKey(key: string): string {
+  if (!/^[\w-]+$/.test(key)) {
+    throw new Error(
+      `Invalid metadata key '${key}': must contain only alphanumeric, underscore, or hyphen characters`,
+    );
+  }
+  return key;
 }
 
 /**
@@ -316,6 +355,8 @@ export function escapeString(s: string): string {
 export function generateStyleBlock(style: ElementStyle, innerIndent: string): string {
   const styleIndent = innerIndent + '  ';
   let result = `${innerIndent}style {\n`;
+  // Truthiness checks are intentional: empty string values are treated as unset
+  // because an empty string for shape/color/border makes no sense in the DSL.
   if (style.shape) result += `${styleIndent}shape ${style.shape}\n`;
   if (style.color) result += `${styleIndent}color ${style.color}\n`;
   if (style.icon) result += `${styleIndent}icon ${style.icon}\n`;

@@ -131,7 +131,7 @@ likec4-mutator get-element --dir ./c4 --fqn app.api --source
 
 ### add-element
 
-Add a new element as a child of an existing element. Supports basic properties via CLI flags. For full property support (tags, links, metadata, style), use the `apply` command with JSON.
+Add a new element as a child of an existing element. Supports summary and tags directly via CLI flags. For full property support (links, metadata, style), use the `apply` command with JSON.
 
 ```bash
 likec4-mutator add-element --dir ./c4 \
@@ -139,8 +139,10 @@ likec4-mutator add-element --dir ./c4 \
   --kind service \
   --id myApi \
   --title 'My API' \
+  --summary 'Short label shown on diagrams' \
   --description 'REST API' \
   --technology 'TypeScript' \
+  --tags internal,backend \
   --output ./out
 ```
 
@@ -154,6 +156,36 @@ likec4-mutator add-relationship --dir ./c4 \
   --target app.db \
   --label 'reads/writes' \
   --output ./out
+```
+
+### update-element
+
+Update properties of an existing element. Only the flags you provide are changed; all other properties are left intact.
+
+```bash
+likec4-mutator update-element --dir ./c4 --fqn app.api \
+  --title 'New Title' \
+  --description 'New description' \
+  --technology 'Go' \
+  --summary 'Updated summary' \
+  --tags deprecated,legacy \
+  --output ./out
+```
+
+### remove-element
+
+Remove an element (and its entire body block) from the model.
+
+```bash
+likec4-mutator remove-element --dir ./c4 --fqn app.api --output ./out
+```
+
+### remove-relationship
+
+Remove a relationship matched by exact source and target identifiers.
+
+```bash
+likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db --output ./out
 ```
 
 ### apply

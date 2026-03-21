@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { resolve, join, relative, extname } from 'node:path';
 import { createRequire } from 'node:module';
 import { LikeC4Mutator } from './mutator/mutator.js';
@@ -20,6 +20,13 @@ const pkg = _require('../package.json') as { version: string };
 function loadDirectory(dir: string): Record<string, string> {
   const files: Record<string, string> = {};
   const absDir = resolve(dir);
+
+  if (!existsSync(absDir)) {
+    throw new Error(`Directory not found: ${absDir}`);
+  }
+  if (!statSync(absDir).isDirectory()) {
+    throw new Error(`Not a directory: ${absDir}`);
+  }
 
   function walk(currentDir: string) {
     for (const entry of readdirSync(currentDir)) {
@@ -43,10 +50,15 @@ function loadDirectory(dir: string): Record<string, string> {
  * preserving the relative path structure.
  */
 function writeOutput(mutator: LikeC4Mutator, outputDir: string) {
+  const absOutputDir = resolve(outputDir);
   const files = mutator.serialize();
-  mkdirSync(outputDir, { recursive: true });
+  mkdirSync(absOutputDir, { recursive: true });
   for (const [filename, content] of Object.entries(files)) {
-    const outPath = join(outputDir, filename);
+    const outPath = resolve(absOutputDir, filename);
+    // Prevent path traversal: ensure resolved output path stays within the output directory.
+    if (!outPath.startsWith(absOutputDir + '/') && outPath !== absOutputDir) {
+      throw new Error(`Path traversal detected: '${filename}' resolves outside output directory`);
+    }
     mkdirSync(resolve(outPath, '..'), { recursive: true });
     writeFileSync(outPath, content, 'utf-8');
   }
@@ -172,7 +184,7 @@ program
         process.exit(1);
       }
     } catch (err) {
-      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
   });
@@ -213,7 +225,7 @@ program
       }
       process.exit(0);
     } catch (err) {
-      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
   });
@@ -266,7 +278,7 @@ program
       }
       process.exit(0);
     } catch (err) {
-      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
   });
@@ -283,8 +295,10 @@ program
   .requiredOption('--kind <kind>', 'Element kind (e.g. service, database)')
   .requiredOption('--id <id>', 'Local identifier for the new element')
   .requiredOption('--title <title>', 'Title of the new element')
+  .option('--summary <text>', 'Short summary shown on diagrams')
   .option('--description <text>', 'Description of the new element')
   .option('--technology <text>', 'Technology label for the new element')
+  .option('--tags <tags>', 'Comma-separated list of tags (e.g. internal,backend)')
   .option('--output <path>', 'Output directory (defaults to --dir for in-place)')
   .action((opts: {
     dir: string;
@@ -292,26 +306,31 @@ program
     kind: string;
     id: string;
     title: string;
+    summary?: string;
     description?: string;
     technology?: string;
+    tags?: string;
     output?: string;
   }) => {
     try {
       const files = loadDirectory(opts.dir);
       const mutator = LikeC4Mutator.fromFiles(files);
+      const parsedTags = opts.tags ? opts.tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
       mutator.addElement(opts.parent, {
         name: opts.id,
         kind: opts.kind,
         title: opts.title,
+        summary: opts.summary,
         description: opts.description,
         technology: opts.technology,
+        tags: parsedTags,
       });
       const outDir = opts.output ?? opts.dir;
       writeOutput(mutator, resolve(outDir));
       process.stdout.write(`Element '${opts.parent}.${opts.id}' added successfully\n`);
       process.exit(0);
     } catch (err) {
-      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
   });
@@ -344,7 +363,104 @@ program
       process.stdout.write(`Relationship '${opts.source}' -> '${opts.target}' added successfully\n`);
       process.exit(0);
     } catch (err) {
-      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// update-element
+// ---------------------------------------------------------------------------
+
+program
+  .command('update-element')
+  .description('Update properties of an existing element')
+  .requiredOption('--dir <path>', 'Directory containing .c4 files')
+  .requiredOption('--fqn <fqn>', 'Fully qualified name of the element to update')
+  .option('--title <text>', 'New title for the element')
+  .option('--summary <text>', 'New summary for the element')
+  .option('--description <text>', 'New description for the element')
+  .option('--technology <text>', 'New technology label for the element')
+  .option('--tags <tags>', 'Comma-separated list of tags to add (e.g. internal,backend)')
+  .option('--output <path>', 'Output directory (defaults to --dir for in-place)')
+  .action((opts: {
+    dir: string;
+    fqn: string;
+    title?: string;
+    summary?: string;
+    description?: string;
+    technology?: string;
+    tags?: string;
+    output?: string;
+  }) => {
+    try {
+      const files = loadDirectory(opts.dir);
+      const mutator = LikeC4Mutator.fromFiles(files);
+      const parsedTags = opts.tags ? opts.tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+      mutator.updateElement(opts.fqn, {
+        title: opts.title,
+        summary: opts.summary,
+        description: opts.description,
+        technology: opts.technology,
+        tags: parsedTags,
+      });
+      const outDir = opts.output ?? opts.dir;
+      writeOutput(mutator, resolve(outDir));
+      process.stdout.write(`Element '${opts.fqn}' updated successfully\n`);
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// remove-element
+// ---------------------------------------------------------------------------
+
+program
+  .command('remove-element')
+  .description('Remove an element (and its entire body) from the model')
+  .requiredOption('--dir <path>', 'Directory containing .c4 files')
+  .requiredOption('--fqn <fqn>', 'Fully qualified name of the element to remove')
+  .option('--output <path>', 'Output directory (defaults to --dir for in-place)')
+  .action((opts: { dir: string; fqn: string; output?: string }) => {
+    try {
+      const files = loadDirectory(opts.dir);
+      const mutator = LikeC4Mutator.fromFiles(files);
+      mutator.removeElement(opts.fqn);
+      const outDir = opts.output ?? opts.dir;
+      writeOutput(mutator, resolve(outDir));
+      process.stdout.write(`Element '${opts.fqn}' removed successfully\n`);
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// remove-relationship
+// ---------------------------------------------------------------------------
+
+program
+  .command('remove-relationship')
+  .description('Remove a relationship between two elements')
+  .requiredOption('--dir <path>', 'Directory containing .c4 files')
+  .requiredOption('--source <fqn>', 'Source element FQN or local name')
+  .requiredOption('--target <fqn>', 'Target element FQN or local name')
+  .option('--output <path>', 'Output directory (defaults to --dir for in-place)')
+  .action((opts: { dir: string; source: string; target: string; output?: string }) => {
+    try {
+      const files = loadDirectory(opts.dir);
+      const mutator = LikeC4Mutator.fromFiles(files);
+      mutator.removeRelationship(opts.source, opts.target);
+      const outDir = opts.output ?? opts.dir;
+      writeOutput(mutator, resolve(outDir));
+      process.stdout.write(`Relationship '${opts.source}' -> '${opts.target}' removed successfully\n`);
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
   });
@@ -380,6 +496,48 @@ program
         if (!m || typeof m.op !== 'string') {
           process.stderr.write('Error: each mutation must have a string "op" field\n');
           process.exit(1);
+        }
+        // Validate required fields per op before attempting to apply any mutations.
+        switch (m.op) {
+          case 'addElement':
+            if (!m.parent || !m.kind || !m.id || !m.title) {
+              process.stderr.write('Error: addElement requires parent, kind, id, title\n');
+              process.exit(1);
+            }
+            break;
+          case 'updateElement':
+            if (!m.fqn) {
+              process.stderr.write('Error: updateElement requires fqn\n');
+              process.exit(1);
+            }
+            break;
+          case 'removeElement':
+            if (!m.fqn) {
+              process.stderr.write('Error: removeElement requires fqn\n');
+              process.exit(1);
+            }
+            break;
+          case 'addRelationship':
+            if (!m.source || !m.target) {
+              process.stderr.write('Error: addRelationship requires source, target\n');
+              process.exit(1);
+            }
+            break;
+          case 'removeRelationship':
+            if (!m.source || !m.target) {
+              process.stderr.write('Error: removeRelationship requires source, target\n');
+              process.exit(1);
+            }
+            break;
+          case 'addView':
+            if (!m.id || !m.type) {
+              process.stderr.write('Error: addView requires id, type\n');
+              process.exit(1);
+            }
+            break;
+          default:
+            process.stderr.write(`Error: unknown mutation op '${(m as { op: string }).op}'\n`);
+            process.exit(1);
         }
       }
 
@@ -476,7 +634,7 @@ program
       process.stdout.write(`Applied ${applied} mutation(s) successfully\n`);
       process.exit(0);
     } catch (err) {
-      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
   });
