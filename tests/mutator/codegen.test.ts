@@ -38,7 +38,7 @@ describe('generateElement', () => {
       title: 'API',
       description: 'Backend',
       technology: 'TypeScript',
-      link: { url: 'https://example.com', title: 'Docs' },
+      links: [{ url: 'https://example.com', label: 'Docs' }],
     });
     expect(result).toContain("    description 'Backend'");
     expect(result).toContain("    technology 'TypeScript'");
@@ -46,12 +46,12 @@ describe('generateElement', () => {
     expect(result).toContain('  }');
   });
 
-  it('should include a link without a title when link.title is absent', () => {
+  it('should include a link without a label when links[].label is absent', () => {
     const result = generateElement({
       indent: '',
       name: 'svc',
       kind: 'service',
-      link: { url: 'https://repo.example.com' },
+      links: [{ url: 'https://repo.example.com' }],
     });
     expect(result).toContain('link https://repo.example.com');
     expect(result).not.toMatch(/link https:\/\/repo\.example\.com '/);
@@ -106,6 +106,78 @@ describe('generateElement', () => {
     expect(result).toContain('\t  description');
     expect(result).toContain('\t}');
   });
+
+  it('should emit tags with # prefix inside the body', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      tags: ['internal', 'backend'],
+    });
+    expect(result).toContain('  svc = service {');
+    expect(result).toContain('    #internal');
+    expect(result).toContain('    #backend');
+    expect(result).toContain('  }');
+  });
+
+  it('should emit multiple links in order', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      links: [
+        { url: 'https://example.com/docs', label: 'Docs' },
+        { url: 'https://example.com/repo' },
+      ],
+    });
+    expect(result).toContain("    link https://example.com/docs 'Docs'");
+    expect(result).toContain('    link https://example.com/repo');
+    expect(result).not.toMatch(/link https:\/\/example\.com\/repo '/);
+  });
+
+  it('should emit a metadata block with key/value pairs', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      metadata: { owner: 'team-alpha', env: 'prod' },
+    });
+    expect(result).toContain('    metadata {');
+    expect(result).toContain("      owner 'team-alpha'");
+    expect(result).toContain("      env 'prod'");
+    expect(result).toContain('    }');
+  });
+
+  it('should emit all fields in the correct order when all are provided', () => {
+    const result = generateElement({
+      indent: '',
+      name: 'api',
+      kind: 'service',
+      title: 'My API',
+      tags: ['public'],
+      description: 'Handles requests',
+      technology: 'Node.js',
+      links: [{ url: 'https://api.example.com', label: 'API Docs' }],
+      metadata: { team: 'platform' },
+    });
+    const tagPos = result.indexOf('#public');
+    const descPos = result.indexOf('description');
+    const techPos = result.indexOf('technology');
+    const linkPos = result.indexOf('link');
+    const metaPos = result.indexOf('metadata');
+    // Verify ordering: tags < description < technology < links < metadata
+    expect(tagPos).toBeLessThan(descPos);
+    expect(descPos).toBeLessThan(techPos);
+    expect(techPos).toBeLessThan(linkPos);
+    expect(linkPos).toBeLessThan(metaPos);
+    expect(result).toContain("api = service 'My API' {");
+    expect(result).toContain('#public');
+    expect(result).toContain("description 'Handles requests'");
+    expect(result).toContain("technology 'Node.js'");
+    expect(result).toContain("link https://api.example.com 'API Docs'");
+    expect(result).toContain('metadata {');
+    expect(result).toContain("  team 'platform'");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -145,6 +217,31 @@ describe('generateRelationship', () => {
       target: 'app.db',
     });
     expect(result).toBe('  app.api -> app.db');
+  });
+
+  it('should emit a body block when description is provided', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      label: 'reads',
+      description: 'Queries the database',
+    });
+    expect(result).toContain("  api -> db 'reads' {");
+    expect(result).toContain("    description 'Queries the database'");
+    expect(result).toContain('  }');
+  });
+
+  it('should emit a body block with description and no label', () => {
+    const result = generateRelationship({
+      indent: '',
+      source: 'a',
+      target: 'b',
+      description: 'Sends data',
+    });
+    expect(result).toContain('a -> b {');
+    expect(result).toContain("  description 'Sends data'");
+    expect(result).toContain('}');
   });
 });
 

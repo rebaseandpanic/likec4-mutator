@@ -108,6 +108,44 @@ describe('LikeC4Mutator.addElement', () => {
     const m = makeMutator();
     expect(() => m.addElement('ghost', { name: 'x', kind: 'service' })).toThrow();
   });
+
+  it('should add element with tags and produce valid document', () => {
+    const m = makeMutator();
+    m.addElement('app', { name: 'tagged', kind: 'service', tags: ['internal', 'backend'] });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain('#internal');
+    expect(src).toContain('#backend');
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should add element with links and produce valid document', () => {
+    const m = makeMutator();
+    m.addElement('app', {
+      name: 'linked',
+      kind: 'service',
+      links: [{ url: 'https://linked.example.com', label: 'Home' }],
+    });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain("link https://linked.example.com 'Home'");
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should add element with metadata and produce valid document', () => {
+    const m = makeMutator();
+    m.addElement('app', {
+      name: 'meta',
+      kind: 'service',
+      metadata: { team: 'platform', region: 'eu-west-1' },
+    });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain('metadata {');
+    expect(src).toContain("team 'platform'");
+    expect(src).toContain("region 'eu-west-1'");
+    expect(m.validate()).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -146,6 +184,34 @@ describe('LikeC4Mutator.updateElement', () => {
   it('should throw when FQN does not exist', () => {
     const m = makeMutator();
     expect(() => m.updateElement('ghost', { title: 'x' })).toThrow();
+  });
+
+  it('should update element with tags', () => {
+    const m = makeMutator();
+    m.updateElement('app.api', { tags: ['deprecated'] });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain('#deprecated');
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should update element with links', () => {
+    const m = makeMutator();
+    m.updateElement('app.api', { links: [{ url: 'https://api.example.com', label: 'Docs' }] });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain("link https://api.example.com 'Docs'");
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should update element with metadata', () => {
+    const m = makeMutator();
+    m.updateElement('app.api', { metadata: { owner: 'team-api', version: 'v2' } });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain('metadata {');
+    expect(src).toContain("owner 'team-api'");
+    expect(m.validate()).toHaveLength(0);
   });
 });
 
@@ -210,6 +276,15 @@ describe('LikeC4Mutator.addRelationship', () => {
     const m = makeMutator();
     m.addRelationship('app', 'external');
 
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should add a relationship with a description', () => {
+    const m = makeMutator();
+    m.addRelationship('app', 'external', 'calls', 'Calls the external system');
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain("description 'Calls the external system'");
     expect(m.validate()).toHaveLength(0);
   });
 });

@@ -35,9 +35,15 @@ mutator.addElement('app', {
   title: 'PostgreSQL',
   description: 'Main database',
   technology: 'PostgreSQL 16',
+  tags: ['internal', 'critical'],
+  links: [
+    { url: 'https://docs.example.com/db', label: 'DB Docs' },
+    { url: 'https://github.com/example/db' },
+  ],
+  metadata: { owner: 'platform-team', env: 'production' },
 });
 
-mutator.addRelationship('app', 'app.db', 'reads/writes');
+mutator.addRelationship('app', 'app.db', 'reads/writes', 'Queries the main database');
 
 mutator.addView({
   id: 'appView',
@@ -46,8 +52,13 @@ mutator.addView({
   title: 'App Overview',
 });
 
-// Update
-mutator.updateElement('app.db', { description: 'Updated description' });
+// Update (tags/links/metadata are inserted; title/description/technology replace existing)
+mutator.updateElement('app.db', {
+  description: 'Updated description',
+  tags: ['deprecated'],
+  links: [{ url: 'https://migration.example.com', label: 'Migration Guide' }],
+  metadata: { sla: '99.9%' },
+});
 
 // Remove
 mutator.removeElement('app.db');
@@ -98,13 +109,19 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --output ./out
       "id": "newApi",
       "title": "New API",
       "description": "REST API",
-      "technology": "TypeScript"
+      "technology": "TypeScript",
+      "tags": ["internal", "backend"],
+      "links": [
+        { "url": "https://docs.example.com/api", "label": "API Docs" }
+      ],
+      "metadata": { "owner": "platform", "version": "v2" }
     },
     {
       "op": "addRelationship",
       "source": "app.newApi",
       "target": "app.db",
-      "label": "reads"
+      "label": "reads",
+      "description": "Queries the main database for user data"
     },
     {
       "op": "addView",
@@ -117,7 +134,10 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --output ./out
       "op": "updateElement",
       "fqn": "app.api",
       "description": "Updated REST API",
-      "technology": "Go / Fiber"
+      "technology": "Go / Fiber",
+      "tags": ["deprecated"],
+      "links": [{ "url": "https://migration.example.com", "label": "Migration Guide" }],
+      "metadata": { "team": "backend" }
     },
     {
       "op": "removeElement",
@@ -145,7 +165,7 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --output ./out
 ```bash
 npm install
 npm run build    # tsup → ESM + TypeScript declarations
-npm test         # vitest, 144 tests
+npm test         # vitest, 306 tests
 npm run lint     # tsc --noEmit
 ```
 

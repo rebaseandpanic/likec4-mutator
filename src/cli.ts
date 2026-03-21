@@ -59,6 +59,9 @@ interface AddElementMutation {
   title: string;
   description?: string;
   technology?: string;
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  metadata?: Record<string, string>;
 }
 
 interface AddRelationshipMutation {
@@ -66,6 +69,7 @@ interface AddRelationshipMutation {
   source: string;
   target: string;
   label?: string;
+  description?: string;
 }
 
 interface AddViewMutation {
@@ -82,6 +86,9 @@ interface UpdateElementMutation {
   title?: string;
   description?: string;
   technology?: string;
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  metadata?: Record<string, string>;
 }
 
 interface RemoveElementMutation {
@@ -363,13 +370,16 @@ program
               title: m.title,
               description: m.description,
               technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              metadata: m.metadata,
             });
             applied++;
             break;
           }
           case 'addRelationship': {
             const m = mutation as AddRelationshipMutation;
-            mutator.addRelationship(m.source, m.target, m.label);
+            mutator.addRelationship(m.source, m.target, m.label, m.description);
             applied++;
             break;
           }
@@ -390,6 +400,9 @@ program
               title: m.title,
               description: m.description,
               technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              metadata: m.metadata,
             });
             applied++;
             break;

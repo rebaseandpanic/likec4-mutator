@@ -149,7 +149,14 @@ export class LikeC4Mutator {
    */
   updateElement(
     fqn: string,
-    props: Partial<{ title: string; description: string; technology: string }>,
+    props: Partial<{
+      title: string;
+      description: string;
+      technology: string;
+      tags: string[];
+      links: Array<{ url: string; label?: string }>;
+      metadata: Record<string, string>;
+    }>,
   ): void {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
@@ -182,12 +189,12 @@ export class LikeC4Mutator {
    * @param target - Target element identifier
    * @param label  - Optional relationship label
    */
-  addRelationship(source: string, target: string, label?: string): void {
+  addRelationship(source: string, target: string, label?: string, description?: string): void {
     const filename = this.findFileWithModel();
     if (!filename) throw new Error('No file with a model block found');
 
     const doc = this.documents.get(filename)!;
-    const edit = addRelationshipEdit(doc, source, target, label);
+    const edit = addRelationshipEdit(doc, source, target, label, description);
     this.applyEdit(filename, edit);
   }
 

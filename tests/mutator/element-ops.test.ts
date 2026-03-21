@@ -140,6 +140,88 @@ views {
 
     expect(() => addElementEdit(doc, 'nonexistent', { name: 'x', kind: 'service' })).toThrow();
   });
+
+  it('should add element with tags and verify they appear in source', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edit = addElementEdit(doc, 'app', {
+      name: 'gateway',
+      kind: 'service',
+      title: 'API Gateway',
+      tags: ['internal', 'backend'],
+    });
+
+    const updated = applyEdits(source, [edit]);
+    parseAndVerify(updated);
+    expect(updated).toContain('#internal');
+    expect(updated).toContain('#backend');
+  });
+
+  it('should add element with links and verify they appear in source', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edit = addElementEdit(doc, 'app', {
+      name: 'queue',
+      kind: 'service',
+      links: [
+        { url: 'https://example.com/docs', label: 'Docs' },
+        { url: 'https://example.com/repo' },
+      ],
+    });
+
+    const updated = applyEdits(source, [edit]);
+    parseAndVerify(updated);
+    expect(updated).toContain("link https://example.com/docs 'Docs'");
+    expect(updated).toContain('link https://example.com/repo');
+  });
+
+  it('should add element with metadata and verify block appears in source', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edit = addElementEdit(doc, 'app', {
+      name: 'store',
+      kind: 'service',
+      metadata: { owner: 'platform-team', env: 'prod' },
+    });
+
+    const updated = applyEdits(source, [edit]);
+    parseAndVerify(updated);
+    expect(updated).toContain('metadata {');
+    expect(updated).toContain("owner 'platform-team'");
+    expect(updated).toContain("env 'prod'");
+  });
+
+  it('should add element with all extended fields and produce a valid document', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edit = addElementEdit(doc, 'app', {
+      name: 'full',
+      kind: 'service',
+      title: 'Full Service',
+      description: 'Has everything',
+      technology: 'Node.js',
+      tags: ['internal'],
+      links: [{ url: 'https://full.example.com', label: 'Home' }],
+      metadata: { team: 'alpha' },
+    });
+
+    const updated = applyEdits(source, [edit]);
+    const updatedDoc = parseAndVerify(updated);
+    const query = new C4Query(updatedDoc.ast);
+
+    const el = query.getElement('app.full');
+    expect(el).not.toBeNull();
+    expect(el!.description).toBe('Has everything');
+    expect(el!.technology).toBe('Node.js');
+    expect(updated).toContain('#internal');
+    expect(updated).toContain("link https://full.example.com 'Home'");
+    expect(updated).toContain('metadata {');
+    expect(updated).toContain("team 'alpha'");
+  });
 });
 
 describe('updateElementEdit', () => {
@@ -216,6 +298,64 @@ views {
     const doc = parseAndVerify(source);
 
     expect(() => updateElementEdit(doc, 'ghost', { title: 'x' })).toThrow();
+  });
+
+  it('should insert tags when tags are provided', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edits = updateElementEdit(doc, 'app.api', { tags: ['deprecated', 'backend'] });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+    expect(updated).toContain('#deprecated');
+    expect(updated).toContain('#backend');
+  });
+
+  it('should insert links when links are provided', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edits = updateElementEdit(doc, 'app.api', {
+      links: [{ url: 'https://api.example.com', label: 'API Docs' }],
+    });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+    expect(updated).toContain("link https://api.example.com 'API Docs'");
+  });
+
+  it('should insert metadata block when metadata is provided', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edits = updateElementEdit(doc, 'app.api', {
+      metadata: { team: 'backend', sla: '99.9%' },
+    });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+    expect(updated).toContain('metadata {');
+    expect(updated).toContain("team 'backend'");
+    expect(updated).toContain("sla '99.9%'");
+  });
+
+  it('should insert tags on element with no body block', () => {
+    const source = `specification {
+  element system
+}
+model {
+  ext = system 'External'
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const doc = parseAndVerify(source);
+
+    const edits = updateElementEdit(doc, 'ext', { tags: ['external'] });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+    expect(updated).toContain('#external');
   });
 });
 

@@ -22,6 +22,12 @@ export interface AddElementOpts {
   description?: string;
   /** Optional technology label */
   technology?: string;
+  /** Optional tags — each tag name will be prefixed with `#` in the DSL */
+  tags?: string[];
+  /** Optional hyperlinks */
+  links?: Array<{ url: string; label?: string }>;
+  /** Optional metadata key/value pairs */
+  metadata?: Record<string, string>;
 }
 
 /**
@@ -95,7 +101,14 @@ export function addElementEdit(
 export function updateElementEdit(
   doc: ParsedDocument,
   fqn: string,
-  props: Partial<{ title: string; description: string; technology: string }>,
+  props: Partial<{
+    title: string;
+    description: string;
+    technology: string;
+    tags: string[];
+    links: Array<{ url: string; label?: string }>;
+    metadata: Record<string, string>;
+  }>,
 ): TextEdit[] {
   const { ast, fullText } = doc;
   const index = buildFqnIndex(ast);
@@ -119,6 +132,42 @@ export function updateElementEdit(
     const value = props[key] as string;
     const propEdit = buildBodyPropEdit(node, fullText, key, value);
     if (propEdit) edits.push(propEdit);
+  }
+
+  // Handle tags — insert each tag as `#tagname` right after the opening `{` of
+  // the element body (before any string props), because the LikeC4 grammar
+  // requires tag references to appear before property declarations.
+  if (props.tags !== undefined && props.tags.length > 0) {
+    const tagEdit = buildInsertTagsAfterOpeningBrace(node, fullText, props.tags);
+    if (tagEdit) edits.push(tagEdit);
+  }
+
+  // Handle links — insert each as `link <url> ['label']` before closing brace
+  if (props.links !== undefined && props.links.length > 0) {
+    const linkEdit = buildInsertBodySnippet(node, fullText, (innerIndent) =>
+      props.links!
+        .map((lnk) => {
+          const escaped = lnk.label ? ` '${lnk.label.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'` : '';
+          return `${innerIndent}link ${lnk.url}${escaped}`;
+        })
+        .join('\n') + '\n',
+    );
+    if (linkEdit) edits.push(linkEdit);
+  }
+
+  // Handle metadata — insert a `metadata { key 'value' }` block before closing brace
+  if (props.metadata !== undefined && Object.keys(props.metadata).length > 0) {
+    const metaEdit = buildInsertBodySnippet(node, fullText, (innerIndent) => {
+      const innerInnerIndent = innerIndent + '  ';
+      let block = `${innerIndent}metadata {\n`;
+      for (const [key, value] of Object.entries(props.metadata!)) {
+        const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        block += `${innerInnerIndent}${key} '${escaped}'\n`;
+      }
+      block += `${innerIndent}}\n`;
+      return block;
+    });
+    if (metaEdit) edits.push(metaEdit);
   }
 
   return edits;
@@ -291,6 +340,70 @@ function buildBodyPropEdit(
   const innerIndent = indent + '  ';
   const newText = `${innerIndent}${key} ${newValueText}\n`;
   return { offset: closingBrace, end: closingBrace, newText };
+}
+
+/**
+ * Build a TextEdit that inserts `#tagname` references right after the opening `{`
+ * of an element's body.  Tag references MUST precede property declarations in the
+ * LikeC4 grammar, so we cannot simply append them at the end of the block.
+ *
+ * If the element has no body block yet, one is created with the tags inside.
+ */
+function buildInsertTagsAfterOpeningBrace(
+  node: any,
+  fullText: string,
+  tags: string[],
+): TextEdit | null {
+  const indent = getNodeIndent(node, fullText);
+  const innerIndent = indent + '  ';
+  const snippet = tags.map((t) => `${innerIndent}#${t}`).join('\n') + '\n';
+
+  if (!node.body?.$cstNode) {
+    // No body — create one and put the tags inside it
+    const cst = node.$cstNode;
+    if (!cst) return null;
+    const insertion = ' {\n' + snippet + `${indent}}`;
+    return { offset: cst.end, end: cst.end, newText: insertion };
+  }
+
+  // Body exists — insert the tags right after the opening `{`
+  const bodyCst = node.body.$cstNode;
+  // Find the opening brace offset within the body CST
+  const openingBrace = bodyCst.offset; // the { is the first char of the body CST
+  // Insert right after the `{` character
+  const insertAt = openingBrace + 1;
+  return { offset: insertAt, end: insertAt, newText: '\n' + snippet };
+}
+
+/**
+ * Build a TextEdit that inserts a generated snippet just before the closing `}`
+ * of an element's body.  If the element has no body block yet, one is created.
+ *
+ * The `snippetFn` receives the inner indent string and must return the text to
+ * insert (including a trailing newline).
+ */
+function buildInsertBodySnippet(
+  node: any,
+  fullText: string,
+  snippetFn: (innerIndent: string) => string,
+): TextEdit | null {
+  const indent = getNodeIndent(node, fullText);
+  const innerIndent = indent + '  ';
+
+  if (!node.body?.$cstNode) {
+    // No body block — append one after the element's inline portion
+    const cst = node.$cstNode;
+    if (!cst) return null;
+    const snippet = snippetFn(innerIndent);
+    const insertion = ' {\n' + snippet + `${indent}}`;
+    return { offset: cst.end, end: cst.end, newText: insertion };
+  }
+
+  // Body exists — insert before the closing `}`
+  const bodyCst = node.body.$cstNode;
+  const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+  const snippet = snippetFn(innerIndent);
+  return { offset: closingBrace, end: closingBrace, newText: snippet };
 }
 
 /**

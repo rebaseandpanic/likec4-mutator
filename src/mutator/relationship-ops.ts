@@ -22,6 +22,7 @@ export function addRelationshipEdit(
   source: string,
   target: string,
   label?: string,
+  description?: string,
 ): TextEdit {
   const { ast, fullText } = doc;
 
@@ -34,7 +35,7 @@ export function addRelationshipEdit(
   const closingBrace = findClosingBrace(fullText, modelCst.offset, modelCst.end);
   const indent = '  ';
 
-  const snippet = generateRelationship({ indent, source, target, label });
+  const snippet = generateRelationship({ indent, source, target, label, description });
   const insertAt = insertionPointBeforeBrace(fullText, closingBrace);
   const braceLine = fullText.substring(insertAt, closingBrace + 1);
   const newText = '\n' + snippet + braceLine;

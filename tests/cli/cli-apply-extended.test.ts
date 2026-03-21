@@ -169,4 +169,100 @@ describe('CLI apply extended', () => {
     // removeRelationship: api -> db link gone
     expect(content).not.toContain('api -> db');
   });
+
+  it('should apply addElement with tags, links, metadata via apply command', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
+    const mutationsPath = join(tmpDir, 'mutations.json');
+    writeFileSync(
+      mutationsPath,
+      JSON.stringify({
+        mutations: [
+          {
+            op: 'addElement',
+            parent: 'app',
+            kind: 'service',
+            id: 'enriched',
+            title: 'Enriched Service',
+            tags: ['internal', 'backend'],
+            links: [{ url: 'https://enriched.example.com', label: 'Docs' }],
+            metadata: { owner: 'team-alpha', env: 'staging' },
+          },
+        ],
+      }),
+    );
+
+    const outDir = join(tmpDir, 'output');
+    mkdirSync(outDir);
+    const stdout = runCli(
+      `apply --dir ${fixtureDir} --mutations ${mutationsPath} --output ${outDir}`,
+    );
+
+    expect(stdout).toContain('Applied 1 mutation(s) successfully');
+    const content = readFileSync(join(outDir, 'model.c4'), 'utf-8');
+    expect(content).toContain('#internal');
+    expect(content).toContain('#backend');
+    expect(content).toContain("link https://enriched.example.com 'Docs'");
+    expect(content).toContain('metadata {');
+    expect(content).toContain("owner 'team-alpha'");
+    expect(content).toContain("env 'staging'");
+  });
+
+  it('should apply addRelationship with description via apply command', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
+    const mutationsPath = join(tmpDir, 'mutations.json');
+    writeFileSync(
+      mutationsPath,
+      JSON.stringify({
+        mutations: [
+          {
+            op: 'addRelationship',
+            source: 'app',
+            target: 'app.api',
+            label: 'delegates to',
+            description: 'Routes incoming requests to the API',
+          },
+        ],
+      }),
+    );
+
+    const outDir = join(tmpDir, 'output');
+    mkdirSync(outDir);
+    const stdout = runCli(
+      `apply --dir ${fixtureDir} --mutations ${mutationsPath} --output ${outDir}`,
+    );
+
+    expect(stdout).toContain('Applied 1 mutation(s) successfully');
+    const content = readFileSync(join(outDir, 'model.c4'), 'utf-8');
+    expect(content).toContain("description 'Routes incoming requests to the API'");
+  });
+
+  it('should apply updateElement with tags and metadata via apply command', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
+    const mutationsPath = join(tmpDir, 'mutations.json');
+    writeFileSync(
+      mutationsPath,
+      JSON.stringify({
+        mutations: [
+          {
+            op: 'updateElement',
+            fqn: 'app.db',
+            tags: ['critical'],
+            metadata: { engine: 'PostgreSQL', version: '16' },
+          },
+        ],
+      }),
+    );
+
+    const outDir = join(tmpDir, 'output');
+    mkdirSync(outDir);
+    const stdout = runCli(
+      `apply --dir ${fixtureDir} --mutations ${mutationsPath} --output ${outDir}`,
+    );
+
+    expect(stdout).toContain('Applied 1 mutation(s) successfully');
+    const content = readFileSync(join(outDir, 'model.c4'), 'utf-8');
+    expect(content).toContain('#critical');
+    expect(content).toContain('metadata {');
+    expect(content).toContain("engine 'PostgreSQL'");
+  });
 });
