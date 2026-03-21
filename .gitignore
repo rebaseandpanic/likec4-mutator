@@ -1,6 +1,9 @@
 # Claude Code local settings
 .claude/settings.local.json
 
+# Research experiments (not shipped)
+research/
+
 # Dev container configuration
 .devcontainer/
 
