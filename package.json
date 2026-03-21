@@ -1,6 +1,6 @@
 {
   "name": "likec4-mutator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Programmatic mutation of LikeC4 .c4 files",
   "type": "module",
   "main": "./dist/index.mjs",
