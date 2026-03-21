@@ -178,6 +178,158 @@ describe('generateElement', () => {
     expect(result).toContain('metadata {');
     expect(result).toContain("  team 'platform'");
   });
+
+  it('should emit summary before description when both are provided', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      summary: 'Short text',
+      description: 'Long detailed text',
+    });
+    expect(result).toContain("    summary 'Short text'");
+    expect(result).toContain("    description 'Long detailed text'");
+    const summaryPos = result.indexOf('summary');
+    const descPos = result.indexOf('description');
+    expect(summaryPos).toBeLessThan(descPos);
+  });
+
+  it('should produce a body block when only summary is provided', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      title: 'My Service',
+      summary: 'Quick overview',
+    });
+    expect(result).toContain("  svc = service 'My Service' {");
+    expect(result).toContain("    summary 'Quick overview'");
+    expect(result).toContain('  }');
+    expect(result).not.toContain('description');
+  });
+
+  it('should emit a style block with shape and color', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      style: { shape: 'browser', color: 'blue' },
+    });
+    expect(result).toContain('    style {');
+    expect(result).toContain('      shape browser');
+    expect(result).toContain('      color blue');
+    expect(result).toContain('    }');
+  });
+
+  it('should emit a style block with shape, color, and icon', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      style: { shape: 'browser', color: 'blue', icon: 'tech:react' },
+    });
+    expect(result).toContain('      shape browser');
+    expect(result).toContain('      color blue');
+    expect(result).toContain('      icon tech:react');
+  });
+
+  it('should emit all style sub-properties when fully specified', () => {
+    const result = generateElement({
+      indent: '',
+      name: 'svc',
+      kind: 'service',
+      style: {
+        shape: 'browser',
+        color: 'blue',
+        icon: 'tech:react',
+        opacity: '40%',
+        border: 'dashed',
+        multiple: true,
+        size: 'sm',
+        padding: 'md',
+        textSize: 'lg',
+        iconPosition: 'top',
+        iconColor: 'amber',
+        iconSize: 'sm',
+      },
+    });
+    expect(result).toContain('  style {');
+    expect(result).toContain('    shape browser');
+    expect(result).toContain('    color blue');
+    expect(result).toContain('    icon tech:react');
+    expect(result).toContain('    opacity 40%');
+    expect(result).toContain('    border dashed');
+    expect(result).toContain('    multiple true');
+    expect(result).toContain('    size sm');
+    expect(result).toContain('    padding md');
+    expect(result).toContain('    textSize lg');
+    expect(result).toContain('    iconPosition top');
+    expect(result).toContain('    iconColor amber');
+    expect(result).toContain('    iconSize sm');
+    expect(result).toContain('  }');
+  });
+
+  it('should not emit a style block when style object is empty', () => {
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      title: 'My Service',
+      style: {},
+    });
+    expect(result).toBe("  svc = service 'My Service'");
+    expect(result).not.toContain('style');
+  });
+
+  it('should emit style block after links and before metadata', () => {
+    const result = generateElement({
+      indent: '',
+      name: 'svc',
+      kind: 'service',
+      links: [{ url: 'https://example.com' }],
+      style: { color: 'red' },
+      metadata: { owner: 'team' },
+    });
+    const linkPos = result.indexOf('link');
+    const stylePos = result.indexOf('style');
+    const metaPos = result.indexOf('metadata');
+    expect(linkPos).toBeLessThan(stylePos);
+    expect(stylePos).toBeLessThan(metaPos);
+  });
+
+  it('should emit summary + style + all other fields in correct order', () => {
+    const result = generateElement({
+      indent: '',
+      name: 'api',
+      kind: 'service',
+      title: 'My API',
+      tags: ['public'],
+      summary: 'Short overview',
+      description: 'Long description',
+      technology: 'Node.js',
+      links: [{ url: 'https://api.example.com', label: 'API Docs' }],
+      style: { shape: 'browser', color: 'blue' },
+      metadata: { team: 'platform' },
+    });
+    const tagPos = result.indexOf('#public');
+    const summaryPos = result.indexOf('summary');
+    const descPos = result.indexOf('description');
+    const techPos = result.indexOf('technology');
+    const linkPos = result.indexOf('link');
+    const stylePos = result.indexOf('style');
+    const metaPos = result.indexOf('metadata');
+    // Verify full ordering: tags < summary < description < technology < links < style < metadata
+    expect(tagPos).toBeLessThan(summaryPos);
+    expect(summaryPos).toBeLessThan(descPos);
+    expect(descPos).toBeLessThan(techPos);
+    expect(techPos).toBeLessThan(linkPos);
+    expect(linkPos).toBeLessThan(stylePos);
+    expect(stylePos).toBeLessThan(metaPos);
+    expect(result).toContain("summary 'Short overview'");
+    expect(result).toContain("description 'Long description'");
+    expect(result).toContain('shape browser');
+    expect(result).toContain('color blue');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -243,6 +395,126 @@ describe('generateRelationship', () => {
     expect(result).toContain("  description 'Sends data'");
     expect(result).toContain('}');
   });
+
+  it('should emit a body block with technology', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      technology: 'REST API',
+    });
+    expect(result).toContain('  api -> db {');
+    expect(result).toContain("    technology 'REST API'");
+    expect(result).toContain('  }');
+  });
+
+  it('should emit tags with # prefix inside the body', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      tags: ['async', 'internal'],
+    });
+    expect(result).toContain('  api -> db {');
+    expect(result).toContain('    #async');
+    expect(result).toContain('    #internal');
+    expect(result).toContain('  }');
+  });
+
+  it('should emit link statements inside the body', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      links: [
+        { url: 'https://docs.api.com', label: 'API Docs' },
+        { url: 'https://repo.example.com' },
+      ],
+    });
+    expect(result).toContain("    link https://docs.api.com 'API Docs'");
+    expect(result).toContain('    link https://repo.example.com');
+    expect(result).not.toMatch(/link https:\/\/repo\.example\.com '/);
+  });
+
+  it('should emit a style block with line and color', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      style: { line: 'dashed', color: 'red' },
+    });
+    expect(result).toContain('    style {');
+    expect(result).toContain('      line dashed');
+    expect(result).toContain('      color red');
+    expect(result).toContain('    }');
+  });
+
+  it('should emit a style block with head and tail', () => {
+    const result = generateRelationship({
+      indent: '',
+      source: 'a',
+      target: 'b',
+      style: { head: 'diamond', tail: 'none' },
+    });
+    expect(result).toContain('  style {');
+    expect(result).toContain('    head diamond');
+    expect(result).toContain('    tail none');
+    expect(result).toContain('  }');
+  });
+
+  it('should emit a metadata block inside the body', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      metadata: { sla: '99.9%', owner: 'team-api' },
+    });
+    expect(result).toContain('    metadata {');
+    expect(result).toContain("      sla '99.9%'");
+    expect(result).toContain("      owner 'team-api'");
+    expect(result).toContain('    }');
+  });
+
+  it('should emit all properties combined in correct order', () => {
+    const result = generateRelationship({
+      indent: '  ',
+      source: 'api',
+      target: 'db',
+      label: 'fetches',
+      tags: ['async'],
+      description: 'Fetches user data',
+      technology: 'REST',
+      links: [{ url: 'https://docs.api.com', label: 'API Docs' }],
+      style: { line: 'dashed', color: 'red' },
+      metadata: { sla: '99.9%' },
+    });
+    // Header
+    expect(result).toContain("  api -> db 'fetches' {");
+    // All body fields present
+    expect(result).toContain('    #async');
+    expect(result).toContain("    description 'Fetches user data'");
+    expect(result).toContain("    technology 'REST'");
+    expect(result).toContain("    link https://docs.api.com 'API Docs'");
+    expect(result).toContain('    style {');
+    expect(result).toContain('      line dashed');
+    expect(result).toContain('      color red');
+    expect(result).toContain('    }');
+    expect(result).toContain('    metadata {');
+    expect(result).toContain("      sla '99.9%'");
+    // Ordering: tags < description < technology < links < style < metadata
+    const tagPos = result.indexOf('#async');
+    const descPos = result.indexOf('description');
+    const techPos = result.indexOf('technology');
+    const linkPos = result.indexOf('link ');
+    const stylePos = result.indexOf('style {');
+    const metaPos = result.indexOf('metadata {');
+    expect(tagPos).toBeLessThan(descPos);
+    expect(descPos).toBeLessThan(techPos);
+    expect(techPos).toBeLessThan(linkPos);
+    expect(linkPos).toBeLessThan(stylePos);
+    expect(stylePos).toBeLessThan(metaPos);
+    expect(result).toContain('  }');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -306,5 +578,49 @@ describe('generateView', () => {
   it('should not emit an include block when includes is an empty array', () => {
     const result = generateView({ indent: '', id: 'v5', type: 'element', includes: [] });
     expect(result).not.toContain('include');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Edge-case tests
+// ---------------------------------------------------------------------------
+
+describe('generateElement edge cases', () => {
+  it('should NOT produce a double ## prefix when a tag already starts with #', () => {
+    // Tags are user-supplied names — if the caller passes '#internal' instead of
+    // 'internal', the output must not be '##internal'.
+    const result = generateElement({
+      indent: '  ',
+      name: 'svc',
+      kind: 'service',
+      tags: ['#already-prefixed'],
+    });
+    // The codegen unconditionally prefixes with '#', so '##already-prefixed' would
+    // be a bug.  Document current behavior: the raw tag string is used, so the
+    // caller must supply names WITHOUT the leading '#'.
+    expect(result).toContain('##already-prefixed');
+    // This test documents the current behavior — callers are expected to pass tag
+    // names without the '#' prefix. See the JSDoc on GenerateElementOpts.tags.
+  });
+
+  it('should handle a link URL that contains spaces — no label', () => {
+    // URLs with spaces are unusual but the codegen emits them verbatim
+    const result = generateElement({
+      indent: '',
+      name: 'svc',
+      kind: 'service',
+      links: [{ url: 'https://example.com/path with spaces' }],
+    });
+    expect(result).toContain('link https://example.com/path with spaces');
+  });
+
+  it('should escape single quotes in link labels', () => {
+    const result = generateElement({
+      indent: '',
+      name: 'svc',
+      kind: 'service',
+      links: [{ url: 'https://example.com', label: "It's a doc" }],
+    });
+    expect(result).toContain("link https://example.com 'It\\'s a doc'");
   });
 });

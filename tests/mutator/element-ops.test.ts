@@ -222,6 +222,41 @@ views {
     expect(updated).toContain('metadata {');
     expect(updated).toContain("team 'alpha'");
   });
+
+  it('should add element with summary and verify it appears in source', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edit = addElementEdit(doc, 'app', {
+      name: 'summarized',
+      kind: 'service',
+      title: 'Summarized Service',
+      summary: 'Short overview text',
+    });
+
+    const updated = applyEdits(source, [edit]);
+    parseAndVerify(updated);
+    expect(updated).toContain("summary 'Short overview text'");
+  });
+
+  it('should add element with style block and verify it appears in source', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edit = addElementEdit(doc, 'app', {
+      name: 'styled',
+      kind: 'service',
+      title: 'Styled Service',
+      style: { shape: 'browser', color: 'blue', icon: 'tech:react' },
+    });
+
+    const updated = applyEdits(source, [edit]);
+    parseAndVerify(updated);
+    expect(updated).toContain('style {');
+    expect(updated).toContain('shape browser');
+    expect(updated).toContain('color blue');
+    expect(updated).toContain('icon tech:react');
+  });
 });
 
 describe('updateElementEdit', () => {
@@ -356,6 +391,53 @@ views {
     const updated = applyEdits(source, edits);
     parseAndVerify(updated);
     expect(updated).toContain('#external');
+  });
+
+  it('should add a summary when one does not exist', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edits = updateElementEdit(doc, 'app.api', { summary: 'Quick overview' });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+    expect(updated).toContain("summary 'Quick overview'");
+  });
+
+  it('should insert a style block when style is provided', () => {
+    const source = readFixture('model.c4');
+    const doc = parseAndVerify(source);
+
+    const edits = updateElementEdit(doc, 'app.api', {
+      style: { shape: 'browser', color: 'blue' },
+    });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+    expect(updated).toContain('style {');
+    expect(updated).toContain('shape browser');
+    expect(updated).toContain('color blue');
+  });
+
+  it('should insert style block on element with no body block', () => {
+    const source = `specification {
+  element system
+}
+model {
+  ext = system 'External'
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const doc = parseAndVerify(source);
+
+    const edits = updateElementEdit(doc, 'ext', { style: { color: 'red', border: 'dashed' } });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+    expect(updated).toContain('style {');
+    expect(updated).toContain('color red');
+    expect(updated).toContain('border dashed');
   });
 });
 

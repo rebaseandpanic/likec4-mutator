@@ -2,7 +2,12 @@
 import { Command } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join, relative, extname } from 'node:path';
+import { createRequire } from 'node:module';
 import { LikeC4Mutator } from './mutator/mutator.js';
+import type { ElementStyle } from './mutator/mutator.js';
+
+const _require = createRequire(import.meta.url);
+const pkg = _require('../package.json') as { version: string };
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -57,10 +62,12 @@ interface AddElementMutation {
   kind: string;
   id: string;
   title: string;
+  summary?: string;
   description?: string;
   technology?: string;
   tags?: string[];
   links?: Array<{ url: string; label?: string }>;
+  style?: ElementStyle;
   metadata?: Record<string, string>;
 }
 
@@ -70,6 +77,11 @@ interface AddRelationshipMutation {
   target: string;
   label?: string;
   description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  metadata?: Record<string, string>;
+  style?: { line?: string; color?: string; head?: string; tail?: string };
 }
 
 interface AddViewMutation {
@@ -84,10 +96,12 @@ interface UpdateElementMutation {
   op: 'updateElement';
   fqn: string;
   title?: string;
+  summary?: string;
   description?: string;
   technology?: string;
   tags?: string[];
   links?: Array<{ url: string; label?: string }>;
+  style?: ElementStyle;
   metadata?: Record<string, string>;
 }
 
@@ -114,13 +128,21 @@ interface MutationsFile {
   mutations: Mutation[];
 }
 
+/**
+ * Exhaustive switch helper.  TypeScript will raise a compile-time error if a
+ * new `Mutation` variant is added without a corresponding `case` in the switch.
+ */
+function assertNever(x: never): never {
+  throw new Error(`Unhandled mutation op: ${(x as { op: string }).op}`);
+}
+
 // ---------------------------------------------------------------------------
 // CLI definition
 // ---------------------------------------------------------------------------
 
 const program = new Command()
   .name('likec4-mutator')
-  .version('0.1.0')
+  .version(pkg.version)
   .description('Programmatic mutation of LikeC4 .c4 files');
 
 // ---------------------------------------------------------------------------
@@ -349,9 +371,16 @@ program
       const mutationsRaw = readFileSync(resolve(opts.mutations), 'utf-8');
       const mutationsFile = JSON.parse(mutationsRaw) as MutationsFile;
 
-      if (!Array.isArray(mutationsFile.mutations)) {
+      if (!mutationsFile || !Array.isArray(mutationsFile.mutations)) {
         process.stderr.write('Error: mutations file must contain a "mutations" array\n');
         process.exit(1);
+      }
+
+      for (const m of mutationsFile.mutations) {
+        if (!m || typeof m.op !== 'string') {
+          process.stderr.write('Error: each mutation must have a string "op" field\n');
+          process.exit(1);
+        }
       }
 
       // Load source files and create mutator
@@ -368,10 +397,12 @@ program
               name: m.id,
               kind: m.kind,
               title: m.title,
+              summary: m.summary,
               description: m.description,
               technology: m.technology,
               tags: m.tags,
               links: m.links,
+              style: m.style,
               metadata: m.metadata,
             });
             applied++;
@@ -379,7 +410,14 @@ program
           }
           case 'addRelationship': {
             const m = mutation as AddRelationshipMutation;
-            mutator.addRelationship(m.source, m.target, m.label, m.description);
+            mutator.addRelationship(m.source, m.target, m.label, {
+              description: m.description,
+              technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              metadata: m.metadata,
+              style: m.style,
+            });
             applied++;
             break;
           }
@@ -398,10 +436,12 @@ program
             const m = mutation as UpdateElementMutation;
             mutator.updateElement(m.fqn, {
               title: m.title,
+              summary: m.summary,
               description: m.description,
               technology: m.technology,
               tags: m.tags,
               links: m.links,
+              style: m.style,
               metadata: m.metadata,
             });
             applied++;
@@ -420,8 +460,7 @@ program
             break;
           }
           default: {
-            const op = (mutation as { op: string }).op;
-            process.stderr.write(`Warning: unknown mutation op '${op}', skipping\n`);
+            assertNever(mutation);
           }
         }
       }

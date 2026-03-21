@@ -146,6 +146,23 @@ describe('LikeC4Mutator.addElement', () => {
     expect(src).toContain("region 'eu-west-1'");
     expect(m.validate()).toHaveLength(0);
   });
+
+  it('should add element with style block and produce valid document', () => {
+    const m = makeMutator();
+    m.addElement('app', {
+      name: 'styled',
+      kind: 'service',
+      title: 'Styled Service',
+      style: { shape: 'browser', color: 'blue', icon: 'tech:react' },
+    });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain('style {');
+    expect(src).toContain('shape browser');
+    expect(src).toContain('color blue');
+    expect(src).toContain('icon tech:react');
+    expect(m.validate()).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -211,6 +228,17 @@ describe('LikeC4Mutator.updateElement', () => {
     const src = m.serialize()['model.c4'];
     expect(src).toContain('metadata {');
     expect(src).toContain("owner 'team-api'");
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should update element with style block', () => {
+    const m = makeMutator();
+    m.updateElement('app.api', { style: { shape: 'browser', color: 'blue' } });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain('style {');
+    expect(src).toContain('shape browser');
+    expect(src).toContain('color blue');
     expect(m.validate()).toHaveLength(0);
   });
 });
@@ -281,10 +309,61 @@ describe('LikeC4Mutator.addRelationship', () => {
 
   it('should add a relationship with a description', () => {
     const m = makeMutator();
-    m.addRelationship('app', 'external', 'calls', 'Calls the external system');
+    m.addRelationship('app', 'external', 'calls', { description: 'Calls the external system' });
 
     const src = m.serialize()['model.c4'];
     expect(src).toContain("description 'Calls the external system'");
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should add a relationship with technology and tags via opts object', () => {
+    const m = makeMutator();
+    m.addRelationship('app', 'external', 'calls', {
+      technology: 'REST API',
+      tags: ['async', 'internal'],
+    });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain("technology 'REST API'");
+    expect(src).toContain('#async');
+    expect(src).toContain('#internal');
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should add a relationship with style properties', () => {
+    const m = makeMutator();
+    m.addRelationship('app', 'external', undefined, {
+      style: { line: 'dashed', color: 'red' },
+    });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain('style {');
+    expect(src).toContain('line dashed');
+    expect(src).toContain('color red');
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should add a relationship with full properties', () => {
+    const m = makeMutator();
+    m.addRelationship('app', 'external', 'delegates', {
+      description: 'Routes traffic to external API',
+      technology: 'HTTPS',
+      tags: ['public'],
+      links: [{ url: 'https://external.example.com/api', label: 'API Docs' }],
+      metadata: { sla: '99.9%' },
+      style: { line: 'dashed', head: 'diamond' },
+    });
+
+    const src = m.serialize()['model.c4'];
+    expect(src).toContain("description 'Routes traffic to external API'");
+    expect(src).toContain("technology 'HTTPS'");
+    expect(src).toContain('#public');
+    expect(src).toContain("link https://external.example.com/api 'API Docs'");
+    expect(src).toContain('metadata {');
+    expect(src).toContain("sla '99.9%'");
+    expect(src).toContain('style {');
+    expect(src).toContain('line dashed');
+    expect(src).toContain('head diamond');
     expect(m.validate()).toHaveLength(0);
   });
 });

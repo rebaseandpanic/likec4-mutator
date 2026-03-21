@@ -1,18 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
+const FIXTURE_DIR = resolve(import.meta.dirname, '..', 'fixtures', 'minimal');
 
 function runCli(args: string): string {
   return execSync(`npx tsx src/cli.ts ${args}`, {
-    cwd: '/workspaces/likec4-mutator',
+    cwd: PROJECT_ROOT,
     encoding: 'utf-8',
     timeout: 15000,
   });
 }
 
-const fixtureDir = 'tests/fixtures/minimal';
+const fixtureDir = FIXTURE_DIR;
 
 describe('CLI apply extended', () => {
   it('should apply updateElement mutation via apply command', () => {
@@ -48,7 +51,7 @@ describe('CLI apply extended', () => {
     // Copy fixture to temp dir so we have a fresh copy with the element present
     const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
     const originalContent = readFileSync(
-      '/workspaces/likec4-mutator/tests/fixtures/minimal/model.c4',
+      resolve(FIXTURE_DIR, 'model.c4'),
       'utf-8',
     );
     writeFileSync(join(tmpDir, 'model.c4'), originalContent, 'utf-8');
@@ -82,7 +85,7 @@ describe('CLI apply extended', () => {
     // Copy fixture to temp dir so we have a fresh copy with the relationship present
     const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
     const originalContent = readFileSync(
-      '/workspaces/likec4-mutator/tests/fixtures/minimal/model.c4',
+      resolve(FIXTURE_DIR, 'model.c4'),
       'utf-8',
     );
     writeFileSync(join(tmpDir, 'model.c4'), originalContent, 'utf-8');
@@ -117,7 +120,7 @@ describe('CLI apply extended', () => {
     // Copy fixture to temp dir so we can safely remove the existing relationship
     const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
     const originalContent = readFileSync(
-      '/workspaces/likec4-mutator/tests/fixtures/minimal/model.c4',
+      resolve(FIXTURE_DIR, 'model.c4'),
       'utf-8',
     );
     writeFileSync(join(tmpDir, 'model.c4'), originalContent, 'utf-8');
@@ -264,5 +267,75 @@ describe('CLI apply extended', () => {
     expect(content).toContain('#critical');
     expect(content).toContain('metadata {');
     expect(content).toContain("engine 'PostgreSQL'");
+  });
+
+  it('should apply addElement with style block via apply command', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
+    const mutationsPath = join(tmpDir, 'mutations.json');
+    writeFileSync(
+      mutationsPath,
+      JSON.stringify({
+        mutations: [
+          {
+            op: 'addElement',
+            parent: 'app',
+            kind: 'service',
+            id: 'styledSvc',
+            title: 'Styled Service',
+            style: { shape: 'browser', color: 'blue', icon: 'tech:react' },
+          },
+        ],
+      }),
+    );
+
+    const outDir = join(tmpDir, 'output');
+    mkdirSync(outDir);
+    const stdout = runCli(
+      `apply --dir ${fixtureDir} --mutations ${mutationsPath} --output ${outDir}`,
+    );
+
+    expect(stdout).toContain('Applied 1 mutation(s) successfully');
+    const content = readFileSync(join(outDir, 'model.c4'), 'utf-8');
+    expect(content).toContain('styledSvc');
+    expect(content).toContain('style {');
+    expect(content).toContain('shape browser');
+    expect(content).toContain('color blue');
+    expect(content).toContain('icon tech:react');
+  });
+
+  it('should apply addRelationship with technology, tags, and style via apply command', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
+    const mutationsPath = join(tmpDir, 'mutations.json');
+    writeFileSync(
+      mutationsPath,
+      JSON.stringify({
+        mutations: [
+          {
+            op: 'addRelationship',
+            source: 'app',
+            target: 'app.db',
+            label: 'stores data',
+            technology: 'JDBC',
+            tags: ['internal', 'async'],
+            style: { line: 'dashed', color: 'blue' },
+          },
+        ],
+      }),
+    );
+
+    const outDir = join(tmpDir, 'output');
+    mkdirSync(outDir);
+    const stdout = runCli(
+      `apply --dir ${fixtureDir} --mutations ${mutationsPath} --output ${outDir}`,
+    );
+
+    expect(stdout).toContain('Applied 1 mutation(s) successfully');
+    const content = readFileSync(join(outDir, 'model.c4'), 'utf-8');
+    expect(content).toContain("technology 'JDBC'");
+    expect(content).toContain('#internal');
+    expect(content).toContain('#async');
+    expect(content).toContain('style {');
+    expect(content).toContain('line dashed');
+    expect(content).toContain('color blue');
   });
 });

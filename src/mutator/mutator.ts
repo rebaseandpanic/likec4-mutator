@@ -12,12 +12,15 @@ import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, type TextEdit } from './text-edit.js';
 import { addElementEdit, updateElementEdit, removeElementEdit, type AddElementOpts } from './element-ops.js';
+import type { ElementStyle, RelationshipStyle } from './codegen.js';
 import { addRelationshipEdit, removeRelationshipEdit } from './relationship-ops.js';
 import { addViewEdit, type GenerateViewOpts } from './view-ops.js';
 
 export type { AddElementOpts };
+export type { ElementStyle };
+export type { RelationshipStyle };
 
-export interface AddViewOpts extends Omit<GenerateViewOpts, 'indent'> {}
+export type AddViewOpts = Omit<GenerateViewOpts, 'indent'>;
 
 /**
  * Programmatic read/write access to a set of LikeC4 source files.
@@ -136,7 +139,8 @@ export class LikeC4Mutator {
       );
     }
 
-    const doc = this.documents.get(filename)!;
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = addElementEdit(doc, parentFqn, opts);
     this.applyEdit(filename, edit);
   }
@@ -151,17 +155,20 @@ export class LikeC4Mutator {
     fqn: string,
     props: Partial<{
       title: string;
+      summary: string;
       description: string;
       technology: string;
       tags: string[];
       links: Array<{ url: string; label?: string }>;
+      style: ElementStyle;
       metadata: Record<string, string>;
     }>,
   ): void {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
 
-    const doc = this.documents.get(filename)!;
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edits = updateElementEdit(doc, fqn, props);
     if (edits.length > 0) {
       this.applyEditsToFile(filename, edits);
@@ -177,7 +184,8 @@ export class LikeC4Mutator {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
 
-    const doc = this.documents.get(filename)!;
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = removeElementEdit(doc, fqn);
     this.applyEdit(filename, edit);
   }
@@ -188,13 +196,27 @@ export class LikeC4Mutator {
    * @param source - Source element identifier
    * @param target - Target element identifier
    * @param label  - Optional relationship label
+   * @param opts   - Optional property bag
    */
-  addRelationship(source: string, target: string, label?: string, description?: string): void {
+  addRelationship(
+    source: string,
+    target: string,
+    label?: string,
+    opts?: {
+      description?: string;
+      technology?: string;
+      tags?: string[];
+      links?: Array<{ url: string; label?: string }>;
+      metadata?: Record<string, string>;
+      style?: RelationshipStyle;
+    },
+  ): void {
     const filename = this.findFileWithModel();
     if (!filename) throw new Error('No file with a model block found');
 
-    const doc = this.documents.get(filename)!;
-    const edit = addRelationshipEdit(doc, source, target, label, description);
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+    const edit = addRelationshipEdit(doc, source, target, label, opts);
     this.applyEdit(filename, edit);
   }
 
@@ -208,7 +230,8 @@ export class LikeC4Mutator {
     const filename = this.findFileWithModel();
     if (!filename) throw new Error('No file with a model block found');
 
-    const doc = this.documents.get(filename)!;
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = removeRelationshipEdit(doc, source, target);
     this.applyEdit(filename, edit);
   }
@@ -222,7 +245,8 @@ export class LikeC4Mutator {
     const filename = this.findFileWithViews();
     if (!filename) throw new Error('No file with a views block found');
 
-    const doc = this.documents.get(filename)!;
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = addViewEdit(doc, opts);
     this.applyEdit(filename, edit);
   }
@@ -265,7 +289,8 @@ export class LikeC4Mutator {
   }
 
   private reparse(filename: string, source?: string): void {
-    const text = source ?? this.sources.get(filename)!;
+    const text = source ?? this.sources.get(filename);
+    if (text === undefined) throw new Error(`No source registered for '${filename}'`);
     const doc = this.parser.parse(text);
     this.documents.set(filename, doc);
     this.queries.set(filename, new C4Query(doc.ast));
@@ -278,6 +303,13 @@ export class LikeC4Mutator {
     return null;
   }
 
+  /**
+   * Return the filename of the FIRST file that contains at least one model block.
+   * When multiple files are loaded and each contains a model block, relationships
+   * and root-level elements are always inserted into this first matching file.
+   * Use a single-file setup or pass an explicit target file (future work) when
+   * precise file targeting is required.
+   */
   private findFileWithModel(): string | null {
     for (const [filename, doc] of this.documents) {
       if (doc.ast.models?.length > 0) return filename;
@@ -285,6 +317,13 @@ export class LikeC4Mutator {
     return null;
   }
 
+  /**
+   * Return the filename of the FIRST file that contains at least one views block.
+   * When multiple files are loaded and each contains a views block, new views are
+   * always inserted into this first matching file.
+   * Use a single-file setup or pass an explicit target file (future work) when
+   * precise file targeting is required.
+   */
   private findFileWithViews(): string | null {
     for (const [filename, doc] of this.documents) {
       if (doc.ast.views?.length > 0) return filename;
@@ -297,7 +336,8 @@ export class LikeC4Mutator {
   }
 
   private applyEditsToFile(filename: string, edits: TextEdit[]): void {
-    const current = this.sources.get(filename)!;
+    const current = this.sources.get(filename);
+    if (current === undefined) throw new Error(`No source registered for '${filename}'`);
     const updated = applyEdits(current, edits);
     this.sources.set(filename, updated);
     this.reparse(filename, updated);

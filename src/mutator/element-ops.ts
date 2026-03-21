@@ -9,7 +9,7 @@ import type { ParsedDocument } from '../parser/types.js';
 import { buildFqnIndex } from '../query/fqn.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
-import { generateElement } from './codegen.js';
+import { generateElement, generateStyleBlock, escapeString, type ElementStyle } from './codegen.js';
 
 export interface AddElementOpts {
   /** Local identifier for the new element */
@@ -18,6 +18,8 @@ export interface AddElementOpts {
   kind: string;
   /** Optional inline title */
   title?: string;
+  /** Optional short summary shown on diagrams */
+  summary?: string;
   /** Optional description */
   description?: string;
   /** Optional technology label */
@@ -26,6 +28,8 @@ export interface AddElementOpts {
   tags?: string[];
   /** Optional hyperlinks */
   links?: Array<{ url: string; label?: string }>;
+  /** Optional visual style properties */
+  style?: ElementStyle;
   /** Optional metadata key/value pairs */
   metadata?: Record<string, string>;
 }
@@ -103,10 +107,12 @@ export function updateElementEdit(
   fqn: string,
   props: Partial<{
     title: string;
+    summary: string;
     description: string;
     technology: string;
     tags: string[];
     links: Array<{ url: string; label?: string }>;
+    style: ElementStyle;
     metadata: Record<string, string>;
   }>,
 ): TextEdit[] {
@@ -126,8 +132,8 @@ export function updateElementEdit(
     if (titleEdit) edits.push(titleEdit);
   }
 
-  // Handle body string properties: description / technology
-  for (const key of ['description', 'technology'] as const) {
+  // Handle body string properties: summary / description / technology
+  for (const key of ['summary', 'description', 'technology'] as const) {
     if (props[key] === undefined) continue;
     const value = props[key] as string;
     const propEdit = buildBodyPropEdit(node, fullText, key, value);
@@ -147,12 +153,20 @@ export function updateElementEdit(
     const linkEdit = buildInsertBodySnippet(node, fullText, (innerIndent) =>
       props.links!
         .map((lnk) => {
-          const escaped = lnk.label ? ` '${lnk.label.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'` : '';
+          const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
           return `${innerIndent}link ${lnk.url}${escaped}`;
         })
         .join('\n') + '\n',
     );
     if (linkEdit) edits.push(linkEdit);
+  }
+
+  // Handle style — insert a `style { ... }` block before closing brace
+  if (props.style !== undefined && Object.keys(props.style).length > 0) {
+    const styleEdit = buildInsertBodySnippet(node, fullText, (innerIndent) =>
+      generateStyleBlock(props.style!, innerIndent),
+    );
+    if (styleEdit) edits.push(styleEdit);
   }
 
   // Handle metadata — insert a `metadata { key 'value' }` block before closing brace
@@ -161,8 +175,7 @@ export function updateElementEdit(
       const innerInnerIndent = innerIndent + '  ';
       let block = `${innerIndent}metadata {\n`;
       for (const [key, value] of Object.entries(props.metadata!)) {
-        const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-        block += `${innerInnerIndent}${key} '${escaped}'\n`;
+        block += `${innerInnerIndent}${key} '${escapeString(value)}'\n`;
       }
       block += `${innerIndent}}\n`;
       return block;
@@ -286,29 +299,26 @@ function buildTitleEdit(node: any, fullText: string, newTitle: string): TextEdit
     if (leaf.text === '{') break;
     if (leaf.text.startsWith("'") || leaf.text.startsWith('"')) {
       // Replace this token
-      const escaped = newTitle.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      return { offset: leaf.offset, end: leaf.end, newText: `'${escaped}'` };
+      return { offset: leaf.offset, end: leaf.end, newText: `'${escapeString(newTitle)}'` };
     }
   }
 
   // No existing title — insert after the kind token
   const kindLeaf = leaves[kindIdx];
-  const escaped = newTitle.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  return { offset: kindLeaf.end, end: kindLeaf.end, newText: ` '${escaped}'` };
+  return { offset: kindLeaf.end, end: kindLeaf.end, newText: ` '${escapeString(newTitle)}'` };
 }
 
 /**
- * Build a TextEdit that sets a body string property (description / technology).
+ * Build a TextEdit that sets a body string property (summary / description / technology).
  * Replaces the existing value if present, otherwise appends before the closing `}`.
  */
 function buildBodyPropEdit(
   node: any,
   fullText: string,
-  key: 'description' | 'technology',
+  key: 'summary' | 'description' | 'technology',
   value: string,
 ): TextEdit | null {
-  const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  const newValueText = `'${escaped}'`;
+  const newValueText = `'${escapeString(value)}'`;
 
   // Check if the property already exists in body.props
   const existingProp = node.body?.props?.find((p: any) => p.key === key);
@@ -370,6 +380,9 @@ function buildInsertTagsAfterOpeningBrace(
   const bodyCst = node.body.$cstNode;
   // Find the opening brace offset within the body CST
   const openingBrace = bodyCst.offset; // the { is the first char of the body CST
+  if (fullText[openingBrace] !== '{') {
+    throw new Error('Expected opening brace at body CST offset');
+  }
   // Insert right after the `{` character
   const insertAt = openingBrace + 1;
   return { offset: insertAt, end: insertAt, newText: '\n' + snippet };

@@ -1,19 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
+const FIXTURE_DIR = resolve(import.meta.dirname, '..', 'fixtures', 'minimal');
 
 function runCli(args: string): string {
   return execSync(`npx tsx src/cli.ts ${args}`, {
-    cwd: '/workspaces/likec4-mutator',
+    cwd: PROJECT_ROOT,
     encoding: 'utf-8',
     timeout: 15000,
   });
 }
 
 describe('CLI', () => {
-  const fixtureDir = 'tests/fixtures/minimal';
+  const fixtureDir = FIXTURE_DIR;
 
   it('should validate valid files', () => {
     const output = runCli(`validate --dir ${fixtureDir}`);
@@ -103,7 +106,7 @@ describe('CLI', () => {
   it('should apply batch mutations in-place', () => {
     // Copy the fixture to a temp dir so we can mutate in-place safely
     const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
-    const originalContent = readFileSync('/workspaces/likec4-mutator/tests/fixtures/minimal/model.c4', 'utf-8');
+    const originalContent = readFileSync(resolve(FIXTURE_DIR, 'model.c4'), 'utf-8');
     writeFileSync(join(tmpDir, 'model.c4'), originalContent, 'utf-8');
 
     const mutationsPath = join(tmpDir, 'mutations.json');

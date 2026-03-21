@@ -5,7 +5,7 @@ import type { ParsedDocument } from '../parser/types.js';
 import { buildFqnIndex, resolveFqnRef } from '../query/fqn.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
-import { generateRelationship } from './codegen.js';
+import { generateRelationship, type RelationshipStyle } from './codegen.js';
 
 /**
  * Build a TextEdit that inserts a new relationship at model level,
@@ -22,7 +22,14 @@ export function addRelationshipEdit(
   source: string,
   target: string,
   label?: string,
-  description?: string,
+  opts?: {
+    description?: string;
+    technology?: string;
+    tags?: string[];
+    links?: Array<{ url: string; label?: string }>;
+    metadata?: Record<string, string>;
+    style?: RelationshipStyle;
+  },
 ): TextEdit {
   const { ast, fullText } = doc;
 
@@ -35,7 +42,18 @@ export function addRelationshipEdit(
   const closingBrace = findClosingBrace(fullText, modelCst.offset, modelCst.end);
   const indent = '  ';
 
-  const snippet = generateRelationship({ indent, source, target, label, description });
+  const snippet = generateRelationship({
+    indent,
+    source,
+    target,
+    label,
+    description: opts?.description,
+    technology: opts?.technology,
+    tags: opts?.tags,
+    links: opts?.links,
+    metadata: opts?.metadata,
+    style: opts?.style,
+  });
   const insertAt = insertionPointBeforeBrace(fullText, closingBrace);
   const braceLine = fullText.substring(insertAt, closingBrace + 1);
   const newText = '\n' + snippet + braceLine;
@@ -121,9 +139,7 @@ function collectRelations(elements: any[], parentFqn: string, results: any[]): v
   for (const item of elements) {
     if (item.$type === 'Relation') {
       // Attach parent context for implicit-source relations
-      const enriched = Object.create(item);
-      enriched._parentFqn = parentFqn;
-      results.push(enriched);
+      results.push({ ...item, _parentFqn: parentFqn });
     } else if (item.$type === 'Element') {
       const fqn = parentFqn ? `${parentFqn}.${item.name}` : item.name;
       if (item.body?.elements) {

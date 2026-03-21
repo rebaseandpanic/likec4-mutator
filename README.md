@@ -33,6 +33,7 @@ mutator.addElement('app', {
   name: 'db',
   kind: 'database',
   title: 'PostgreSQL',
+  summary: 'Primary data store',
   description: 'Main database',
   technology: 'PostgreSQL 16',
   tags: ['internal', 'critical'],
@@ -40,10 +41,24 @@ mutator.addElement('app', {
     { url: 'https://docs.example.com/db', label: 'DB Docs' },
     { url: 'https://github.com/example/db' },
   ],
+  style: {
+    shape: 'cylinder',
+    color: 'blue',
+    icon: 'tech:postgresql',
+    opacity: '80%',
+    border: 'dashed',
+  },
   metadata: { owner: 'platform-team', env: 'production' },
 });
 
-mutator.addRelationship('app', 'app.db', 'reads/writes', 'Queries the main database');
+mutator.addRelationship('app', 'app.db', 'reads/writes', {
+  description: 'Queries the main database',
+  technology: 'JDBC',
+  tags: ['internal'],
+  links: [{ url: 'https://docs.example.com/db', label: 'DB Docs' }],
+  metadata: { sla: '99.9%' },
+  style: { line: 'dashed', color: 'red', head: 'diamond', tail: 'none' },
+});
 
 mutator.addView({
   id: 'appView',
@@ -121,7 +136,12 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --output ./out
       "source": "app.newApi",
       "target": "app.db",
       "label": "reads",
-      "description": "Queries the main database for user data"
+      "description": "Queries the main database for user data",
+      "technology": "JDBC",
+      "tags": ["internal"],
+      "links": [{ "url": "https://docs.example.com/db", "label": "DB Docs" }],
+      "metadata": { "sla": "99.9%" },
+      "style": { "line": "dashed", "color": "red", "head": "diamond", "tail": "none" }
     },
     {
       "op": "addView",
@@ -165,7 +185,7 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --output ./out
 ```bash
 npm install
 npm run build    # tsup → ESM + TypeScript declarations
-npm test         # vitest, 306 tests
+npm test         # vitest
 npm run lint     # tsc --noEmit
 ```
 
