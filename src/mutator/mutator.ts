@@ -126,7 +126,7 @@ export class LikeC4Mutator {
    * @param parentFqn - FQN of the parent element, or '' / null for model level
    * @param opts      - Properties for the new element
    */
-  addElement(parentFqn: string | null, opts: AddElementOpts): void {
+  addElement(parentFqn: string | null, opts: AddElementOpts): string {
     const filename = parentFqn
       ? this.findFileContaining(parentFqn)
       : this.findFileWithModel();
@@ -143,6 +143,7 @@ export class LikeC4Mutator {
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = addElementEdit(doc, parentFqn, opts);
     this.applyEdit(filename, edit);
+    return parentFqn ? `${parentFqn}.${opts.name}` : opts.name;
   }
 
   /**
@@ -179,15 +180,36 @@ export class LikeC4Mutator {
    * Remove an element (and its entire body) from the model.
    *
    * @param fqn - FQN of the element to remove
+   * @returns Info about any relationships that were implicitly removed because
+   *          they referenced the deleted element (or one of its descendants).
    */
-  removeElement(fqn: string): void {
+  removeElement(fqn: string): { removedRelationships: Array<{ source: string; target: string; title?: string }> } {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
+
+    // Capture relationships that reference the element (or any descendant) before removal.
+    const allRels = this.getRelationships();
+    const prefix = fqn + '.';
+    const affected = allRels.filter(
+      (r) =>
+        r.sourceFqn === fqn ||
+        r.targetFqn === fqn ||
+        r.sourceFqn.startsWith(prefix) ||
+        r.targetFqn.startsWith(prefix),
+    );
 
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = removeElementEdit(doc, fqn);
     this.applyEdit(filename, edit);
+
+    return {
+      removedRelationships: affected.map((r) => ({
+        source: r.sourceFqn,
+        target: r.targetFqn,
+        title: r.title,
+      })),
+    };
   }
 
   /**

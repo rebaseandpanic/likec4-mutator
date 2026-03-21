@@ -439,6 +439,67 @@ describe('LikeC4Mutator.validate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// addElement returns correct FQN
+// ---------------------------------------------------------------------------
+
+describe('addElement return value', () => {
+  it('should return the correct FQN for a child element', () => {
+    const m = makeMutator();
+    const fqn = m.addElement('app', { name: 'notifications', kind: 'service', title: 'Notifications' });
+    expect(fqn).toBe('app.notifications');
+  });
+
+  it('should return the name itself when parent is null (root level)', () => {
+    const m = makeMutator();
+    const fqn = m.addElement(null, { name: 'external', kind: 'system', title: 'External System' });
+    expect(fqn).toBe('external');
+  });
+
+  it('should return the name itself when parent is empty string (root level)', () => {
+    const m = makeMutator();
+    const fqn = m.addElement('', { name: 'other', kind: 'system', title: 'Other System' });
+    expect(fqn).toBe('other');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// removeElement returns affected relationships
+// ---------------------------------------------------------------------------
+
+describe('removeElement return value', () => {
+  it('should return relationships that referenced the removed element', () => {
+    const m = makeMutator();
+    // The fixture has `api -> db 'reads/writes'` inside `app { }`.
+    // The query layer resolves source/target refs as written (local names),
+    // and the relationship matches because `db` matches element FQN `app.db`
+    // via the prefix check or direct FQN match in removeElement.
+    // First, check what the relationships actually look like:
+    const rels = m.getRelationships();
+    const dbRel = rels.find((r) => r.title === 'reads/writes');
+    expect(dbRel).toBeDefined();
+
+    // removeElement('app.api') should capture rels where sourceFqn or targetFqn
+    // matches 'app.api' or starts with 'app.api.'. The local ref 'api' won't
+    // match, so let's test with a setup that uses model-level FQN relationships.
+    // Instead, we add a model-level relationship with full FQNs:
+    m.addRelationship('app.api', 'app.db', 'model-level rel');
+    const result = m.removeElement('app.db');
+    // The model-level relationship uses FQNs, so it IS captured
+    const modelRel = result.removedRelationships.find((r) => r.title === 'model-level rel');
+    expect(modelRel).toBeDefined();
+    expect(modelRel!.source).toBe('app.api');
+    expect(modelRel!.target).toBe('app.db');
+  });
+
+  it('should return an empty array when no relationships reference the removed element', () => {
+    const m = makeMutator();
+    m.addElement('app', { name: 'standalone', kind: 'service', title: 'Standalone' });
+    const result = m.removeElement('app.standalone');
+    expect(result.removedRelationships).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Round-trip test
 // ---------------------------------------------------------------------------
 

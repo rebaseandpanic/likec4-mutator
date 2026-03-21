@@ -316,7 +316,7 @@ program
       const files = loadDirectory(opts.dir);
       const mutator = LikeC4Mutator.fromFiles(files);
       const parsedTags = opts.tags ? opts.tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
-      mutator.addElement(opts.parent, {
+      const createdFqn = mutator.addElement(opts.parent, {
         name: opts.id,
         kind: opts.kind,
         title: opts.title,
@@ -327,7 +327,7 @@ program
       });
       const outDir = opts.output ?? opts.dir;
       writeOutput(mutator, resolve(outDir));
-      process.stdout.write(`Element '${opts.parent}.${opts.id}' added successfully\n`);
+      process.stdout.write(`Created element '${createdFqn}'\n`);
       process.exit(0);
     } catch (err) {
       process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -428,10 +428,19 @@ program
     try {
       const files = loadDirectory(opts.dir);
       const mutator = LikeC4Mutator.fromFiles(files);
-      mutator.removeElement(opts.fqn);
+      const { removedRelationships } = mutator.removeElement(opts.fqn);
       const outDir = opts.output ?? opts.dir;
       writeOutput(mutator, resolve(outDir));
-      process.stdout.write(`Element '${opts.fqn}' removed successfully\n`);
+      process.stdout.write(`Removed element '${opts.fqn}'\n`);
+      if (removedRelationships.length > 0) {
+        process.stdout.write(
+          `Also removed ${removedRelationships.length} relationship(s):\n`,
+        );
+        for (const r of removedRelationships) {
+          const titlePart = r.title ? ` '${r.title}'` : '';
+          process.stdout.write(`  ${r.source} -> ${r.target}${titlePart}\n`);
+        }
+      }
       process.exit(0);
     } catch (err) {
       process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -551,7 +560,7 @@ program
         switch (mutation.op) {
           case 'addElement': {
             const m = mutation as AddElementMutation;
-            mutator.addElement(m.parent, {
+            const createdFqn = mutator.addElement(m.parent, {
               name: m.id,
               kind: m.kind,
               title: m.title,
@@ -563,6 +572,7 @@ program
               style: m.style,
               metadata: m.metadata,
             });
+            process.stdout.write(`  addElement: created '${createdFqn}'\n`);
             applied++;
             break;
           }
@@ -607,7 +617,12 @@ program
           }
           case 'removeElement': {
             const m = mutation as RemoveElementMutation;
-            mutator.removeElement(m.fqn);
+            const { removedRelationships } = mutator.removeElement(m.fqn);
+            process.stdout.write(`  removeElement: removed '${m.fqn}'`);
+            if (removedRelationships.length > 0) {
+              process.stdout.write(` (${removedRelationships.length} relationship(s) also removed)`);
+            }
+            process.stdout.write('\n');
             applied++;
             break;
           }

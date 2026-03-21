@@ -576,13 +576,23 @@ describe('generateView', () => {
     expect(result).toContain('autoLayout TopBottom');
   });
 
-  it('should not emit an include block when includes is undefined', () => {
+  it('should default to include * for element views when includes is undefined', () => {
     const result = generateView({ indent: '', id: 'v4', type: 'element' });
+    expect(result).toContain('include *');
+  });
+
+  it('should default to include * for element views when includes is an empty array', () => {
+    const result = generateView({ indent: '', id: 'v5', type: 'element', includes: [] });
+    expect(result).toContain('include *');
+  });
+
+  it('should not emit include * for dynamic views when includes is not provided', () => {
+    const result = generateView({ indent: '', id: 'dyn1', type: 'dynamic' });
     expect(result).not.toContain('include');
   });
 
-  it('should not emit an include block when includes is an empty array', () => {
-    const result = generateView({ indent: '', id: 'v5', type: 'element', includes: [] });
+  it('should not emit include * for dynamic views when includes is an empty array', () => {
+    const result = generateView({ indent: '', id: 'dyn2', type: 'dynamic', includes: [] });
     expect(result).not.toContain('include');
   });
 });
@@ -679,10 +689,10 @@ describe('generateView additional edge cases', () => {
     expect(result.startsWith('deployment view deployView {')).toBe(true);
   });
 
-  it('should produce minimal output (only autoLayout) when title and includes are absent', () => {
+  it('should produce element view with include * when title and includes are absent', () => {
     const result = generateView({ indent: '', id: 'bare', type: 'element' });
-    // Only the header, autoLayout, and closing brace — no title or include lines
-    expect(result).toBe('view bare {\n  autoLayout TopBottom\n}');
+    // Element views default to `include *` even when no includes are specified
+    expect(result).toBe('view bare {\n  include *\n  autoLayout TopBottom\n}');
   });
 
   it('should produce a dynamic view with a title inside the body', () => {

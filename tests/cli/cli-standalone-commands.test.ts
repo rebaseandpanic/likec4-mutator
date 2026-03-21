@@ -99,7 +99,7 @@ describe('CLI remove-element', () => {
       `remove-element --dir ${tmpDir} --fqn app.db --output ${outDir}`,
     );
 
-    expect(stdout).toContain('removed successfully');
+    expect(stdout).toContain("Removed element 'app.db'");
     const content = readFileSync(join(outDir, 'model.c4'), 'utf-8');
     expect(content).not.toContain("db = database 'PostgreSQL'");
     // Other elements must remain

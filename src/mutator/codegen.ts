@@ -282,6 +282,11 @@ export function generateView(opts: GenerateViewOpts): string {
   const { indent, id, type, target, title, includes, autoLayout = 'TopBottom' } = opts;
   const innerIndent = indent + '  ';
 
+  // Element views without explicit includes default to `include *` so that the
+  // generated view is never empty — all real LikeC4 element views use this.
+  const effectiveIncludes =
+    includes && includes.length > 0 ? includes : type === 'element' ? ['*'] : undefined;
+
   let header: string;
   if (type === 'element' && target) {
     header = `${indent}view ${id} of ${target}`;
@@ -296,8 +301,8 @@ export function generateView(opts: GenerateViewOpts): string {
   let result = header + ' {\n';
   // Title must be declared inside the body (not inline) per the LikeC4 grammar.
   if (title) result += `${innerIndent}title '${escapeString(title)}'\n`;
-  if (includes) {
-    for (const inc of includes) {
+  if (effectiveIncludes) {
+    for (const inc of effectiveIncludes) {
       result += `${innerIndent}include ${inc}\n`;
     }
   }

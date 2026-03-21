@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1] - 2026-03-21
+- [BUGFIX] addView now adds `include *` by default for element views
+- [FEATURE] addElement returns created FQN (CLI outputs it to stdout)
+- [FEATURE] removeElement returns list of removed relationships (CLI outputs them)
+
 ## [0.2.0] - 2026-03-21
 - [FEATURE] Full element property support: summary, tags, links, metadata, style block (shape/color/icon/opacity/border/multiple/size/padding/textSize/iconPosition/iconColor/iconSize)
 - [FEATURE] Full relationship property support: technology, tags, links, metadata, style (line/color/head/tail)
