@@ -1,6 +1,6 @@
 {
   "name": "likec4-mutator",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Programmatic mutation of LikeC4 .c4 files",
   "type": "module",
   "main": "./dist/index.mjs",
@@ -38,7 +38,15 @@
     "node": ">=20"
   },
   "author": "rebaseandpanic",
-  "keywords": ["likec4", "c4", "architecture", "mutation", "dsl", "langium", "diagram"],
+  "keywords": [
+    "likec4",
+    "c4",
+    "architecture",
+    "mutation",
+    "dsl",
+    "langium",
+    "diagram"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
