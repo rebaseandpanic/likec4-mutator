@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.0] - 2026-03-22
+- [FEATURE] Add GitHub Actions workflow for automated npm publish and GitHub Release on version tag
+- Add author and keywords to package.json for npm discoverability
+
 ## [0.2.1] - 2026-03-21
 - [BUGFIX] addView now adds `include *` by default for element views
 - [FEATURE] addElement returns created FQN (CLI outputs it to stdout)

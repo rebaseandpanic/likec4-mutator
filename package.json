@@ -37,6 +37,8 @@
   "engines": {
     "node": ">=20"
   },
+  "author": "rebaseandpanic",
+  "keywords": ["likec4", "c4", "architecture", "mutation", "dsl", "langium", "diagram"],
   "license": "MIT",
   "repository": {
     "type": "git",
