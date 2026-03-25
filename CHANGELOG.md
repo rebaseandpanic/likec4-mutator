@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1] - 2026-03-25
+- [BUGFIX] Fix updateElement duplicating metadata, links, and style blocks — now replaces existing blocks
+- [BUGFIX] Fix addElement inserting child inside sibling element due to naive backward brace scan
+- [BUGFIX] Add automatic rollback when mutation produces parse errors (Level 1 validation)
+- [FEATURE] Add brace balance check to validate() for structural damage detection (Level 2 validation)
+- Stable sort in applyEdits for deterministic same-offset edit ordering
+
 ## [0.3.0] - 2026-03-22
 - [FEATURE] Add GitHub Actions workflow for automated npm publish and GitHub Release on version tag
 - Add author and keywords to package.json for npm discoverability

@@ -244,6 +244,154 @@ describe('LikeC4Mutator.updateElement', () => {
 });
 
 // ---------------------------------------------------------------------------
+// updateElement — replace semantics for metadata / links / style
+// ---------------------------------------------------------------------------
+
+describe('LikeC4Mutator.updateElement — replace existing blocks', () => {
+  it('should produce a single metadata block when element already has metadata', () => {
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    metadata {
+      owner 'old-team'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': source });
+    m.updateElement('svc', { metadata: { owner: 'new-team' } });
+
+    const src = m.serialize()['model.c4'];
+    const metaCount = (src.match(/metadata \{/g) || []).length;
+    expect(metaCount).toBe(1);
+    expect(src).toContain("owner 'new-team'");
+    expect(src).not.toContain("owner 'old-team'");
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should replace existing links when element already has links', () => {
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    link https://old.example.com 'Old'
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': source });
+    m.updateElement('svc', { links: [{ url: 'https://new.example.com', label: 'New' }] });
+
+    const src = m.serialize()['model.c4'];
+    const linkCount = (src.match(/\blink /g) || []).length;
+    expect(linkCount).toBe(1);
+    expect(src).toContain("link https://new.example.com 'New'");
+    expect(src).not.toContain('https://old.example.com');
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should produce a single style block when element already has style', () => {
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    style {
+      color blue
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': source });
+    m.updateElement('svc', { style: { color: 'red', border: 'dashed' } });
+
+    const src = m.serialize()['model.c4'];
+    const styleCount = (src.match(/style \{/g) || []).length;
+    expect(styleCount).toBe(1);
+    expect(src).toContain('color red');
+    expect(src).not.toContain('color blue');
+    expect(m.validate()).toHaveLength(0);
+  });
+
+  it('full incident chain: update with metadata+links, add element, update sibling — all elements preserved', () => {
+    const source = `specification {
+  element service
+  element database
+}
+model {
+  app = service 'App' {
+    api = service 'API' {
+      metadata {
+        owner 'team-a'
+      }
+      link https://old.example.com 'Old'
+    }
+    db = database 'DB' {
+      description 'Primary store'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': source });
+
+    // 1. Update api — replace metadata and links
+    m.updateElement('app.api', {
+      metadata: { owner: 'team-b', env: 'prod' },
+      links: [{ url: 'https://new.example.com', label: 'New' }],
+    });
+
+    // 2. Add a new sibling to app
+    m.addElement('app', { name: 'cache', kind: 'service', title: 'Cache' });
+
+    // 3. Update db
+    m.updateElement('app.db', { description: 'Updated store' });
+
+    // All elements must still exist
+    expect(m.getElement('app')).not.toBeNull();
+    expect(m.getElement('app.api')).not.toBeNull();
+    expect(m.getElement('app.db')).not.toBeNull();
+    expect(m.getElement('app.cache')).not.toBeNull();
+    expect(m.getElement('app.cache')!.parentFqn).toBe('app');
+
+    // Metadata should have both keys (owner overwritten, env new)
+    const src = m.serialize()['model.c4'];
+    const metaCount = (src.match(/metadata \{/g) || []).length;
+    expect(metaCount).toBe(1);
+    expect(src).toContain("owner 'team-b'");
+    expect(src).toContain("env 'prod'");
+
+    // Only one link
+    const linkCount = (src.match(/\blink /g) || []).length;
+    expect(linkCount).toBe(1);
+    expect(src).toContain("link https://new.example.com 'New'");
+
+    expect(m.validate()).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // removeElement
 // ---------------------------------------------------------------------------
 

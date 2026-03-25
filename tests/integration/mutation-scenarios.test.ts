@@ -422,6 +422,72 @@ describe('Scenario 6: Batch apply JSON mutations', () => {
     expect(reparsed.errors).toHaveLength(0);
   });
 
+  it('full incident reproduction: update(metadata+links) then addElement then update sibling preserves all elements', () => {
+    // This test reproduces the combined Bug 1 + Bug 2 scenario:
+    // 1. update an element that already has metadata and links (Bug 1: must not duplicate)
+    // 2. add a new sibling element (Bug 2: must target the correct closing brace)
+    // 3. update a sibling element
+    // All elements must be reachable afterwards.
+    const source = `specification {
+  element service
+  element database
+}
+model {
+  app = service 'App' {
+    api = service 'API' {
+      technology 'TypeScript'
+      link https://api.example.com 'Docs'
+      metadata {
+        team 'backend'
+      }
+    }
+    db = database 'DB' {
+      technology 'PostgreSQL'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const mutator = LikeC4Mutator.fromFiles({ 'model.c4': source });
+
+    // Step 1: update app.api — replace metadata and links
+    mutator.updateElement('app.api', {
+      metadata: { team: 'platform', env: 'prod' },
+      links: [{ url: 'https://new.api.example.com', label: 'New Docs' }],
+    });
+    expect(mutator.validate()).toHaveLength(0);
+
+    // Step 2: add sibling under app — must land as app.cache, not inside app.db
+    mutator.addElement('app', { name: 'cache', kind: 'service', title: 'Cache' });
+    expect(mutator.validate()).toHaveLength(0);
+
+    // Step 3: update sibling app.db
+    mutator.updateElement('app.db', { technology: 'PostgreSQL 17' });
+    expect(mutator.validate()).toHaveLength(0);
+
+    // All elements must be present
+    expect(mutator.getElement('app')).not.toBeNull();
+    expect(mutator.getElement('app.api')).not.toBeNull();
+    expect(mutator.getElement('app.db')).not.toBeNull();
+    expect(mutator.getElement('app.cache')).not.toBeNull();
+    expect(mutator.getElement('app.cache')!.parentFqn).toBe('app');
+
+    // Serialized output must have exactly one metadata block and one link
+    const serialized = mutator.serialize()['model.c4'];
+    const metaCount = (serialized.match(/metadata \{/g) || []).length;
+    expect(metaCount).toBe(1);
+    const linkCount = (serialized.match(/\blink /g) || []).length;
+    expect(linkCount).toBe(1);
+
+    // Final reparse
+    const reparsed = parser.parse(serialized);
+    expect(reparsed.errors).toHaveLength(0);
+  });
+
   it('should handle batch mutations on multi-file setup', () => {
     const mutator = LikeC4Mutator.fromFiles({
       'spec.c4': readFixture('minimal', 'spec.c4'),
@@ -453,5 +519,59 @@ describe('Scenario 6: Batch apply JSON mutations', () => {
     for (const item of batch) {
       expect(mutator.getElement(`app.${item.name}`)).not.toBeNull();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 7: validate() catches brace imbalance
+// ---------------------------------------------------------------------------
+
+describe('Scenario 7: validate() structural checks', () => {
+  it('should detect brace imbalance injected into source via serialize()', () => {
+    // Craft a source that is syntactically accepted by the parser but has an
+    // extra unclosed brace outside any string literal.  We do this by creating
+    // a mutator from an artificially broken string.
+    //
+    // NOTE: We cannot get there via normal mutation operations because the
+    // applyEditsToFile rollback would prevent a broken edit from being stored.
+    // Instead, we directly pass the broken source to LikeC4Mutator.fromFiles
+    // so that validate() can find it.
+    const brokenSource = `specification {
+  element service
+}
+model {
+  app = service 'My App'
+}
+views {
+  view idx {
+    include *
+  }
+}
+{ // extra unclosed brace appended at the end
+`;
+    // The parser may or may not catch this depending on the grammar, so we
+    // look for at least the brace-balance error from validate().
+    const mutator = LikeC4Mutator.fromFiles({ 'broken.c4': brokenSource });
+    const errors = mutator.validate();
+    // Either parser errors or brace-balance error must appear
+    expect(errors.length).toBeGreaterThan(0);
+    // All errors must be prefixed with the filename
+    for (const err of errors) {
+      expect(err).toMatch(/^broken\.c4/);
+    }
+    // The extra unclosed brace must be flagged by either the parser (which
+    // reports a structural issue) or by checkBraceBalance (which reports
+    // "Brace imbalance").  Both paths produce an error mentioning either
+    // "brace" (from checkBraceBalance) or the unexpected token `{` / `}`.
+    // We accept either — the important thing is that the structural issue
+    // is surfaced and at least one message references the injected character.
+    const hasStructuralError = errors.some((e) => /brace/i.test(e) || /\{/.test(e) || /\}/.test(e));
+    expect(hasStructuralError).toBe(true);
+  });
+
+  it('should return no brace errors for a valid document', () => {
+    const mutator = minimalMutator();
+    const errors = mutator.validate();
+    expect(errors).toHaveLength(0);
   });
 });

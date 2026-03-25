@@ -24,7 +24,12 @@ export interface TextEdit {
  * @returns Updated source string
  */
 export function applyEdits(source: string, edits: TextEdit[]): string {
-  const sorted = [...edits].sort((a, b) => b.offset - a.offset);
+  // Stable sort: sort by descending offset; when offsets are equal, the edit
+  // with the HIGHER original index is sorted first (so it is applied first,
+  // ending up after the lower-index edit in the final string — which preserves
+  // the original relative insertion order in the output text).
+  const indexed = edits.map((e, i) => ({ ...e, _idx: i }));
+  const sorted = indexed.sort((a, b) => b.offset - a.offset || b._idx - a._idx);
   let result = source;
   for (const { offset, end, newText } of sorted) {
     result = result.substring(0, offset) + newText + result.substring(end);

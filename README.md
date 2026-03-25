@@ -349,9 +349,9 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | description | string | yes | yes (replace) | `description 'text'` |
 | technology | string | yes | yes (replace) | `technology 'text'` |
 | tags | string[] | yes | yes (append) | `#tagname` |
-| links | {url, label?}[] | yes | yes (append) | `link url 'label'` |
-| style | ElementStyle | yes | yes (append) | `style { shape ... }` |
-| metadata | Record<string,string> | yes | yes (append) | `metadata { key 'val' }` |
+| links | {url, label?}[] | yes | yes (replace) | `link url 'label'` |
+| style | ElementStyle | yes | yes (replace) | `style { shape ... }` |
+| metadata | Record<string,string> | yes | yes (replace, merge) | `metadata { key 'val' }` |
 
 ### Element style properties
 

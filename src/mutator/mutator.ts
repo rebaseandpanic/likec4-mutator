@@ -279,6 +279,8 @@ export class LikeC4Mutator {
 
   /**
    * Re-parse all files and collect any parser/lexer errors.
+   * Also performs a brace-balance check (skipping string literals) on each file
+   * to catch structural damage that the parser might not report as an error.
    *
    * @returns Array of error message strings (empty = all files parse cleanly)
    */
@@ -286,8 +288,20 @@ export class LikeC4Mutator {
     const errors: string[] = [];
     for (const [filename, source] of this.sources) {
       const doc = this.parser.parse(source);
-      for (const err of doc.errors) {
+      const parseErrors = doc.errors;
+      for (const err of parseErrors) {
         errors.push(`${filename}:${err.line}:${err.column}: ${err.message}`);
+      }
+      // Level 2: brace balance check (skip string literals).
+      // Only emitted when the parser did not already report errors for this file,
+      // because brace imbalance found by the parser would cause parse errors that
+      // already cover the structural problem.  The balance check catches cases of
+      // silent structural damage that the parser accepts but that corrupt the file.
+      if (parseErrors.length === 0) {
+        const balanceError = checkBraceBalance(source);
+        if (balanceError !== null) {
+          errors.push(`${filename}: ${balanceError}`);
+        }
       }
     }
     return errors;
@@ -361,7 +375,95 @@ export class LikeC4Mutator {
     const current = this.sources.get(filename);
     if (current === undefined) throw new Error(`No source registered for '${filename}'`);
     const updated = applyEdits(current, edits);
+    const doc = this.parser.parse(updated);
+    if (doc.errors.length > 0) {
+      // Rollback: do not apply the edits; leave source as it was.
+      const details = doc.errors
+        .map((e) => `  ${filename}:${e.line}:${e.column}: ${e.message}`)
+        .join('\n');
+      throw new Error(`Edit produced parse errors in '${filename}':\n${details}`);
+    }
+    // Secondary structural check: catch brace imbalance that the parser may
+    // accept silently (e.g. extra braces appended outside of any grammar rule).
+    const balanceError = checkBraceBalance(updated);
+    if (balanceError !== null) {
+      throw new Error(`Edit produced structural errors in '${filename}': ${balanceError}`);
+    }
     this.sources.set(filename, updated);
-    this.reparse(filename, updated);
+    this.documents.set(filename, doc);
+    this.queries.set(filename, new C4Query(doc.ast));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Check that `{` and `}` are balanced in `source`, skipping content inside
+ * string literals (single-quoted and double-quoted) and `//` line comments.
+ *
+ * @returns An error message string when braces are unbalanced, or null when they match.
+ */
+function checkBraceBalance(source: string): string | null {
+  let depth = 0;
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "'") {
+      // Skip single-quoted string literal
+      i++;
+      while (i < source.length) {
+        const sc = source[i];
+        if (sc === '\\') {
+          i += 2;
+          continue;
+        }
+        if (sc === "'") {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      // Skip double-quoted string literal
+      i++;
+      while (i < source.length) {
+        const sc = source[i];
+        if (sc === '\\') {
+          i += 2;
+          continue;
+        }
+        if (sc === '"') {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === '/' && source[i + 1] === '/') {
+      // Skip line comment — advance to the end of the line
+      i += 2;
+      while (i < source.length && source[i] !== '\n') {
+        i++;
+      }
+      continue;
+    }
+    if (ch === '{') {
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth < 0) {
+        return `Brace imbalance: unexpected '}' at offset ${i}`;
+      }
+    }
+    i++;
+  }
+  if (depth !== 0) {
+    return `Brace imbalance: ${depth} unclosed '{' brace(s)`;
+  }
+  return null;
 }

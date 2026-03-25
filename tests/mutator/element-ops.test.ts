@@ -441,6 +441,221 @@ views {
   });
 });
 
+describe('updateElementEdit — replace existing blocks', () => {
+  it('should replace existing metadata block (not duplicate it)', () => {
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    metadata {
+      owner 'old-team'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const doc = parseAndVerify(source);
+    const edits = updateElementEdit(doc, 'svc', { metadata: { owner: 'new-team' } });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+
+    // Must have exactly one metadata block
+    const metaCount = (updated.match(/metadata \{/g) || []).length;
+    expect(metaCount).toBe(1);
+    expect(updated).toContain("owner 'new-team'");
+    expect(updated).not.toContain("owner 'old-team'");
+  });
+
+  it('should preserve metadata keys absent from update payload', () => {
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    metadata {
+      owner 'old-team'
+      env 'prod'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const doc = parseAndVerify(source);
+    const edits = updateElementEdit(doc, 'svc', { metadata: { owner: 'new-team' } });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+
+    // Only one metadata block
+    const metaCount = (updated.match(/metadata \{/g) || []).length;
+    expect(metaCount).toBe(1);
+    // New value for owner
+    expect(updated).toContain("owner 'new-team'");
+    // env key preserved since it was not in the new payload
+    expect(updated).toContain("env 'prod'");
+  });
+
+  it('should replace existing links (not duplicate them)', () => {
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    link https://old.example.com 'Old'
+    link https://old2.example.com
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const doc = parseAndVerify(source);
+    const edits = updateElementEdit(doc, 'svc', {
+      links: [{ url: 'https://new.example.com', label: 'New' }],
+    });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+
+    const linkCount = (updated.match(/\blink /g) || []).length;
+    expect(linkCount).toBe(1);
+    expect(updated).toContain("link https://new.example.com 'New'");
+    expect(updated).not.toContain('https://old.example.com');
+  });
+
+  it('should replace existing style block (not duplicate it)', () => {
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    style {
+      color blue
+      shape browser
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const doc = parseAndVerify(source);
+    const edits = updateElementEdit(doc, 'svc', { style: { color: 'red', border: 'dashed' } });
+    const updated = applyEdits(source, edits);
+    parseAndVerify(updated);
+
+    const styleCount = (updated.match(/style \{/g) || []).length;
+    expect(styleCount).toBe(1);
+    expect(updated).toContain('color red');
+    expect(updated).toContain('border dashed');
+    // Old properties should be gone
+    expect(updated).not.toContain('color blue');
+    expect(updated).not.toContain('shape browser');
+  });
+});
+
+describe('updateElementEdit — duplicate metadata blocks (malformed input)', () => {
+  it('should not crash and should produce a parseable result when element has two metadata blocks', () => {
+    // This is a malformed (but conceivable) input where two metadata blocks exist
+    // in the same element body.  The AST find() will return only the FIRST one;
+    // the second is silently left in place but the operation must not throw or
+    // corrupt the file so badly that the parser rejects it.
+    //
+    // In practice the LikeC4 grammar only allows one metadata block per element,
+    // so normal mutations will never produce this state — but we test robustness
+    // against externally-crafted or manually-edited files.
+    const source = `specification {
+  element service
+}
+model {
+  svc = service 'Svc' {
+    metadata {
+      owner 'first-team'
+    }
+    metadata {
+      region 'us-east'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    // The parser may or may not accept two metadata blocks depending on the
+    // grammar — we only require that updateElementEdit does not throw and that
+    // the result is not undefined.
+    const doc = parser.parse(source);
+    // If the parser rejects the malformed input, skip the mutation assertion.
+    if (doc.errors.length > 0) return;
+
+    const edits = updateElementEdit(doc, 'svc', { metadata: { owner: 'new-team' } });
+    const updated = applyEdits(source, edits);
+
+    // The result must be a non-empty string (no crash).
+    expect(typeof updated).toBe('string');
+    expect(updated.length).toBeGreaterThan(0);
+    // The new owner value must appear somewhere in the output.
+    expect(updated).toContain("owner 'new-team'");
+  });
+});
+
+describe('addElementEdit — correct parent brace detection', () => {
+  it('should insert new child after all siblings with body blocks, not inside them', () => {
+    const source = `specification {
+  element service
+  element database
+}
+model {
+  app = service 'App' {
+    api = service 'API' {
+      description 'Backend API'
+    }
+    db = database 'DB' {
+      technology 'PostgreSQL'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}
+`;
+    const doc = parseAndVerify(source);
+    const edit = addElementEdit(doc, 'app', {
+      name: 'cache',
+      kind: 'service',
+      title: 'Cache',
+    });
+    const updated = applyEdits(source, [edit]);
+    const updatedDoc = parseAndVerify(updated);
+    const query = new C4Query(updatedDoc.ast);
+
+    // All three children must exist as direct children of 'app'
+    const cache = query.getElement('app.cache');
+    expect(cache).not.toBeNull();
+    expect(cache!.parentFqn).toBe('app');
+    // Siblings must be intact
+    expect(query.getElement('app.api')).not.toBeNull();
+    expect(query.getElement('app.db')).not.toBeNull();
+    // cache must NOT be nested inside db
+    expect(query.getElement('app.db.cache')).toBeNull();
+  });
+});
+
 describe('removeElementEdit', () => {
   it('should remove a leaf element', () => {
     const source = readFixture('model.c4');
