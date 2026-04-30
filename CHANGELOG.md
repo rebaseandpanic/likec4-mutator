@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.2] - 2026-04-30
+- [BUGFIX] Drop NoMCPServer import — incompatible with @likec4/language-server >=1.55.0 which removed MCP server module
+- Bump @likec4/language-server dependency from ^1.53.0 to ^1.55.0
+
 ## [0.3.1] - 2026-03-25
 - [BUGFIX] Fix updateElement duplicating metadata, links, and style blocks — now replaces existing blocks
 - [BUGFIX] Fix addElement inserting child inside sibling element due to naive backward brace scan

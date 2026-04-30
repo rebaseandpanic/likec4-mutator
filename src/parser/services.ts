@@ -1,4 +1,4 @@
-import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts, NoMCPServer } from '@likec4/language-server/module';
+import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
 
 type LikeC4Services = ReturnType<typeof createLanguageServices>;
 
@@ -9,7 +9,6 @@ export function getServices(): LikeC4Services {
     _services = createLanguageServices({
       ...NoFileSystem,
       ...NoLikeC4ManualLayouts,
-      ...NoMCPServer,
     });
   }
   return _services;
