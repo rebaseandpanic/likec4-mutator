@@ -16,6 +16,13 @@ export interface ElementInfo {
   technology?: string;
   /** Tags declared on the element */
   tags?: string[];
+  /** Hyperlinks declared on the element */
+  links?: Array<{ url: string; label?: string }>;
+  /**
+   * Metadata key/value pairs declared on the element.  Each value is either a
+   * string (for `key 'value'`) or string[] (for `key ['v1', 'v2']`).
+   */
+  metadata?: Record<string, string | string[]>;
   /** FQNs of direct children */
   children: string[];
   /** FQN of the parent element, undefined for root elements */
@@ -39,12 +46,21 @@ export interface RelationshipInfo {
   targetFqn: string;
   /** Optional relationship title */
   title?: string;
+  /** Optional explicit relationship-kind reference (e.g. `app -.calls.-> api`). */
+  kind?: string;
   /** Optional technology label */
   technology?: string;
   /** Optional description */
   description?: string;
   /** Tags declared on the relationship */
   tags?: string[];
+  /** Hyperlinks declared on the relationship */
+  links?: Array<{ url: string; label?: string }>;
+  /**
+   * Metadata key/value pairs declared on the relationship.  Each value is
+   * either a string or string[].
+   */
+  metadata?: Record<string, string | string[]>;
   /** Position in source */
   sourceRange: {
     offset: number;

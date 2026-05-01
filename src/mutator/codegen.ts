@@ -61,8 +61,14 @@ export interface GenerateElementOpts {
   links?: Array<{ url: string; label?: string }>;
   /** Optional visual style properties — emitted as a `style { ... }` block */
   style?: ElementStyle;
-  /** Optional metadata key/value pairs — emitted as a `metadata { ... }` block */
-  metadata?: Record<string, string>;
+  /**
+   * Optional metadata key/value pairs — emitted as a `metadata { ... }` block.
+   *
+   * Each value may be a single string (emitted as `key 'value'`) or an array of
+   * strings (emitted as `key ['v1', 'v2']`).  Empty arrays are not allowed by
+   * the LikeC4 grammar — supplying one will throw at codegen time.
+   */
+  metadata?: Record<string, string | string[]>;
 }
 
 /**
@@ -114,12 +120,7 @@ export function generateElement(opts: GenerateElementOpts): string {
       result += generateStyleBlock(style, innerIndent);
     }
     if (metadata && Object.keys(metadata).length > 0) {
-      result += `${innerIndent}metadata {\n`;
-      const innerInnerIndent = innerIndent + '  ';
-      for (const [key, value] of Object.entries(metadata)) {
-        result += `${innerInnerIndent}${validateMetadataKey(key)} '${escapeString(value)}'\n`;
-      }
-      result += `${innerIndent}}\n`;
+      result += generateMetadataBlock(metadata, innerIndent);
     }
     result += `${indent}}`;
   }
@@ -160,8 +161,14 @@ export interface GenerateRelationshipOpts {
   tags?: string[];
   /** Optional hyperlinks — each becomes a `link <url> ['label']` statement */
   links?: Array<{ url: string; label?: string }>;
-  /** Optional metadata key/value pairs — emitted as a `metadata { ... }` block */
-  metadata?: Record<string, string>;
+  /**
+   * Optional metadata key/value pairs — emitted as a `metadata { ... }` block.
+   *
+   * Each value may be a single string (emitted as `key 'value'`) or an array of
+   * strings (emitted as `key ['v1', 'v2']`).  Empty arrays are not allowed by
+   * the LikeC4 grammar — supplying one will throw at codegen time.
+   */
+  metadata?: Record<string, string | string[]>;
   /** Optional visual style overrides — emitted as a `style { ... }` block */
   style?: RelationshipStyle;
 }
@@ -227,20 +234,11 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
     }
 
     if (style && Object.keys(style).length > 0) {
-      result += `${innerIndent}style {\n`;
-      if (style.line) result += `${innerIndent}  line ${style.line}\n`;
-      if (style.color) result += `${innerIndent}  color ${style.color}\n`;
-      if (style.head) result += `${innerIndent}  head ${style.head}\n`;
-      if (style.tail) result += `${innerIndent}  tail ${style.tail}\n`;
-      result += `${innerIndent}}\n`;
+      result += generateRelationshipStyleBlock(style, innerIndent);
     }
 
     if (metadata && Object.keys(metadata).length > 0) {
-      result += `${innerIndent}metadata {\n`;
-      for (const [key, val] of Object.entries(metadata)) {
-        result += `${innerIndent}  ${validateMetadataKey(key)} '${escapeString(val)}'\n`;
-      }
-      result += `${innerIndent}}\n`;
+      result += generateMetadataBlock(metadata, innerIndent);
     }
 
     result += `${indent}}`;
@@ -341,13 +339,73 @@ function sanitizeUrl(url: string): string {
  *
  * @throws {Error} when the key contains invalid characters
  */
-function validateMetadataKey(key: string): string {
+export function validateMetadataKey(key: string): string {
   if (!/^[\w-]+$/.test(key)) {
     throw new Error(
       `Invalid metadata key '${key}': must contain only alphanumeric, underscore, or hyphen characters`,
     );
   }
   return key;
+}
+
+/**
+ * Format a single metadata value (string or string-array) for emission inside
+ * a `metadata { ... }` block.  Returns just the right-hand-side text — i.e.
+ * everything after the key, but excluding the leading space and trailing
+ * newline.
+ *
+ * - Scalar string: emitted as `'value'` (escaped).
+ * - One-element array: emitted inline as `['value']`.
+ * - Multi-element array: emitted as a multi-line bracket list.
+ * - Empty array: throws.  The LikeC4 grammar does not accept `[]`.
+ *
+ * @param value       - Scalar string or array of strings
+ * @param innerIndent - Indent of the line on which the `key` token sits
+ *                      (used to align the multi-line array form one level deeper).
+ */
+export function formatMetadataValue(value: string | string[], innerIndent: string): string {
+  if (typeof value === 'string') {
+    return `'${escapeString(value)}'`;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `Invalid metadata value: expected string or string[], got ${typeof value}`,
+    );
+  }
+  if (value.length === 0) {
+    throw new Error('empty array not allowed by LikeC4 grammar');
+  }
+  if (value.length === 1) {
+    return `['${escapeString(value[0])}']`;
+  }
+  // Multi-line: each entry on its own line, no trailing comma after the last.
+  const itemIndent = innerIndent + '  ';
+  const items = value.map((v) => `${itemIndent}'${escapeString(v)}'`).join(',\n');
+  return `[\n${items}\n${innerIndent}]`;
+}
+
+/**
+ * Generate a complete `metadata { ... }` block for an element or relation,
+ * including the leading indent and trailing newline.  Empty objects produce
+ * an empty string (no block emitted).
+ *
+ * @param metadata    - Map of key → string | string[]
+ * @param innerIndent - Leading whitespace for the `metadata {` line
+ * @returns Block text (with trailing newline) or '' when metadata is empty
+ */
+export function generateMetadataBlock(
+  metadata: Record<string, string | string[]>,
+  innerIndent: string,
+): string {
+  if (Object.keys(metadata).length === 0) return '';
+  const entryIndent = innerIndent + '  ';
+  let block = `${innerIndent}metadata {\n`;
+  for (const [key, value] of Object.entries(metadata)) {
+    const formatted = formatMetadataValue(value, entryIndent);
+    block += `${entryIndent}${validateMetadataKey(key)} ${formatted}\n`;
+  }
+  block += `${innerIndent}}\n`;
+  return block;
 }
 
 /**
@@ -374,6 +432,27 @@ export function generateStyleBlock(style: ElementStyle, innerIndent: string): st
   if (style.iconPosition) result += `${styleIndent}iconPosition ${style.iconPosition}\n`;
   if (style.iconColor) result += `${styleIndent}iconColor ${style.iconColor}\n`;
   if (style.iconSize) result += `${styleIndent}iconSize ${style.iconSize}\n`;
+  result += `${innerIndent}}\n`;
+  return result;
+}
+
+/**
+ * Generate a `style { ... }` block for a relationship.
+ *
+ * @param style       - Style properties to emit
+ * @param innerIndent - Leading whitespace for the `style {` line
+ * @returns Complete style block string (including trailing newline)
+ */
+export function generateRelationshipStyleBlock(
+  style: RelationshipStyle,
+  innerIndent: string,
+): string {
+  const styleIndent = innerIndent + '  ';
+  let result = `${innerIndent}style {\n`;
+  if (style.line) result += `${styleIndent}line ${style.line}\n`;
+  if (style.color) result += `${styleIndent}color ${style.color}\n`;
+  if (style.head) result += `${styleIndent}head ${style.head}\n`;
+  if (style.tail) result += `${styleIndent}tail ${style.tail}\n`;
   result += `${innerIndent}}\n`;
   return result;
 }

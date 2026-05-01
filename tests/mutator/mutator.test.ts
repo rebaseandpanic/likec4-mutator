@@ -302,7 +302,7 @@ views {
     expect(m.validate()).toHaveLength(0);
   });
 
-  it('should produce a single style block when element already has style', () => {
+  it('should merge style fields per-field (v0.4.0 BREAKING) and preserve untouched ones', () => {
     const source = `specification {
   element service
 }
@@ -310,6 +310,7 @@ model {
   svc = service 'Svc' {
     style {
       color blue
+      shape browser
     }
   }
 }
@@ -325,7 +326,12 @@ views {
     const src = m.serialize()['model.c4'];
     const styleCount = (src.match(/style \{/g) || []).length;
     expect(styleCount).toBe(1);
+    // patched
     expect(src).toContain('color red');
+    expect(src).toContain('border dashed');
+    // preserved
+    expect(src).toContain('shape browser');
+    // old value of patched key gone
     expect(src).not.toContain('color blue');
     expect(m.validate()).toHaveLength(0);
   });

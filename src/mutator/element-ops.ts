@@ -9,33 +9,56 @@ import type { ParsedDocument } from '../parser/types.js';
 import { buildFqnIndex } from '../query/fqn.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
-import { generateElement, generateStyleBlock, escapeString, type ElementStyle } from './codegen.js';
+import {
+  generateElement,
+  generateStyleBlock,
+  generateMetadataBlock,
+  escapeString,
+  type ElementStyle,
+} from './codegen.js';
+import {
+  findClosingBrace,
+  insertionPointBeforeBrace,
+  expandRangeToConsumeSurroundingNewlines,
+  buildInsertBodySnippet,
+  buildReplaceLinksEdit as buildReplaceLinksEditShared,
+  collectLeaves,
+  type BodyOwnerNode,
+} from './cst-helpers.js';
+import {
+  buildReplaceMetadataEditOnNode,
+  type MetadataPatch,
+} from './metadata-ops.js';
 
 /**
  * Minimal structural interface for AST element nodes accessed by the private
- * helpers in this module.  Avoids relying on `any` for the shape used in
- * `buildTitleEdit`, `buildBodyPropEdit`, `buildReplaceLinksEdit`,
- * `buildReplaceStyleEdit`, `buildReplaceMetadataEdit`,
- * `buildInsertTagsAfterOpeningBrace`, and `buildInsertBodySnippet`.
+ * helpers in this module.  Extends {@link BodyOwnerNode} with element-specific
+ * fields (`kind`) and the optional CST `content` array used by
+ * {@link collectLeaves}.
  */
-interface AstElementNode {
-  $cstNode?: { offset: number; end: number; content?: unknown[] };
-  body?: {
-    $cstNode?: { offset: number; end: number };
-    props?: Array<{
-      $type?: string;
-      $cstNode?: { offset: number; end: number };
-      key?: string;
-      name?: string;
-      value?: { $cstNode?: { offset: number; end: number }; text?: string; value?: string };
-      props?: Array<{
-        key?: string;
-        name?: string;
-        value?: { text?: string; value?: string };
-      }>;
-    }>;
+interface AstElementNode extends BodyOwnerNode {
+  $cstNode?: BodyOwnerNode['$cstNode'] & { content?: unknown[] };
+  kind?: {
+    $refText?: string;
+    /** Langium reference CST node — present when the reference resolved or carried any token. */
+    $refNode?: { offset: number; end: number };
   };
-  kind?: { $refText?: string };
+}
+
+/**
+ * Patch payload accepted by {@link updateElementEdit} and
+ * {@link LikeC4Mutator.updateElement}.  Each field is optional — only
+ * specified fields are applied; absent fields are preserved.
+ */
+export interface UpdateElementPatch {
+  title?: string;
+  summary?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  style?: ElementStyle;
+  metadata?: MetadataPatch;
 }
 
 export interface AddElementOpts {
@@ -57,8 +80,11 @@ export interface AddElementOpts {
   links?: Array<{ url: string; label?: string }>;
   /** Optional visual style properties */
   style?: ElementStyle;
-  /** Optional metadata key/value pairs */
-  metadata?: Record<string, string>;
+  /**
+   * Optional metadata key/value pairs.  Each value may be a string or string[].
+   * Empty arrays are not accepted by the LikeC4 grammar.
+   */
+  metadata?: Record<string, string | string[]>;
 }
 
 /**
@@ -132,16 +158,7 @@ export function addElementEdit(
 export function updateElementEdit(
   doc: ParsedDocument,
   fqn: string,
-  props: Partial<{
-    title: string;
-    summary: string;
-    description: string;
-    technology: string;
-    tags: string[];
-    links: Array<{ url: string; label?: string }>;
-    style: ElementStyle;
-    metadata: Record<string, string>;
-  }>,
+  props: UpdateElementPatch,
 ): TextEdit[] {
   const { ast, fullText } = doc;
   const index = buildFqnIndex(ast);
@@ -155,9 +172,32 @@ export function updateElementEdit(
   // inline `name = kind 'title'` syntax.  We need to find its CST position
   // by scanning the element's own CST token stream.
   if (props.title !== undefined) {
-    const titleEdit = buildTitleEdit(node, fullText, props.title);
+    const titleEdit = buildTitleEdit(node, props.title);
     if (titleEdit) edits.push(titleEdit);
   }
+
+  // For body-targeting fields, when the element has no body and the patch
+  // touches multiple body fields, emit ONE combined snippet that creates the
+  // body and includes every field (matches the strategy used in
+  // {@link relationship-ops.updateRelationshipEdit}).  Avoids the latent
+  // multi-edit bug where two body-creation edits could each emit `' { ... } '`
+  // at the same offset and produce two adjacent body blocks.
+  const bodyTargeting =
+    props.summary !== undefined ||
+    props.description !== undefined ||
+    props.technology !== undefined ||
+    props.tags !== undefined ||
+    props.links !== undefined ||
+    (props.style !== undefined && Object.keys(props.style).length > 0) ||
+    (props.metadata !== undefined && Object.keys(props.metadata).length > 0);
+
+  if (bodyTargeting && !node.body?.$cstNode) {
+    const insertEdit = buildCombinedBodyInsertElement(node, fullText, props);
+    if (insertEdit) edits.push(insertEdit);
+    return edits;
+  }
+
+  // Body exists — emit per-field edits.
 
   // Handle body string properties: summary / description / technology
   for (const key of ['summary', 'description', 'technology'] as const) {
@@ -167,11 +207,11 @@ export function updateElementEdit(
     if (propEdit) edits.push(propEdit);
   }
 
-  // Handle tags — insert each tag as `#tagname` right after the opening `{` of
-  // the element body (before any string props), because the LikeC4 grammar
-  // requires tag references to appear before property declarations.
-  if (props.tags !== undefined && props.tags.length > 0) {
-    const tagEdit = buildInsertTagsAfterOpeningBrace(node, fullText, props.tags);
+  // Handle tags — REPLACE semantics (v0.4.0 BREAKING change): every existing
+  // tag in the body is removed, and the supplied set is inserted right after
+  // the opening `{`.  An empty array clears all tags.
+  if (props.tags !== undefined) {
+    const tagEdit = buildReplaceTagsEdit(node, fullText, props.tags);
     if (tagEdit) edits.push(tagEdit);
   }
 
@@ -182,22 +222,81 @@ export function updateElementEdit(
     if (linkEdit) edits.push(linkEdit);
   }
 
-  // Handle style — replace existing `style { ... }` block if present, otherwise insert.
-  // Semantics: updateElement with style = "replace style entirely".
+  // Handle style — MERGE per-field (v0.4.0 BREAKING change): each provided
+  // field overwrites the corresponding existing value; absent fields are
+  // preserved.  An empty patch object is a no-op.
   if (props.style !== undefined && Object.keys(props.style).length > 0) {
     const styleEdit = buildReplaceStyleEdit(node, fullText, props.style);
     if (styleEdit) edits.push(styleEdit);
   }
 
-  // Handle metadata — replace existing `metadata { ... }` block if present (merging
-  // keys: new values overwrite, keys absent from new payload are preserved), otherwise insert.
-  // Semantics: updateElement with metadata = "replace metadata entirely".
+  // Handle metadata — MERGE + null-deletion: each key in the patch upserts
+  // (string / string[]) or deletes (null); keys absent from the patch are
+  // preserved.  An empty patch is a no-op.
   if (props.metadata !== undefined && Object.keys(props.metadata).length > 0) {
     const metaEdit = buildReplaceMetadataEdit(node, fullText, props.metadata);
     if (metaEdit) edits.push(metaEdit);
   }
 
   return edits;
+}
+
+/**
+ * When an element has no body and the patch contains body-targeting fields,
+ * emit ONE combined snippet that creates the body and inserts every patched
+ * field at once.  The order inside the body follows the LikeC4 grammar:
+ * tags first, then string props, links, style, metadata.
+ */
+function buildCombinedBodyInsertElement(
+  node: AstElementNode,
+  fullText: string,
+  patch: UpdateElementPatch,
+): TextEdit | null {
+  const cst = node.$cstNode;
+  if (!cst) return null;
+  const indent = getNodeIndent(node, fullText);
+  const innerIndent = indent + '  ';
+
+  let body = '';
+
+  // Tags must come first per grammar.
+  if (patch.tags && patch.tags.length > 0) {
+    const cleaned = patch.tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
+    body += cleaned.map((t) => `${innerIndent}#${t}\n`).join('');
+  }
+  if (patch.summary !== undefined) {
+    body += `${innerIndent}summary '${escapeString(patch.summary)}'\n`;
+  }
+  if (patch.description !== undefined) {
+    body += `${innerIndent}description '${escapeString(patch.description)}'\n`;
+  }
+  if (patch.technology !== undefined) {
+    body += `${innerIndent}technology '${escapeString(patch.technology)}'\n`;
+  }
+  if (patch.links && patch.links.length > 0) {
+    const sanitizeUrl = (u: string) => u.replace(/[\n\r']/g, '');
+    for (const lnk of patch.links) {
+      const escapedLabel = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
+      body += `${innerIndent}link ${sanitizeUrl(lnk.url)}${escapedLabel}\n`;
+    }
+  }
+  if (patch.style && Object.keys(patch.style).length > 0) {
+    body += generateStyleBlock(patch.style, innerIndent);
+  }
+  if (patch.metadata) {
+    const upserts: Record<string, string | string[]> = {};
+    for (const [k, v] of Object.entries(patch.metadata)) {
+      if (v !== null) upserts[k] = v;
+    }
+    if (Object.keys(upserts).length > 0) {
+      body += generateMetadataBlock(upserts, innerIndent);
+    }
+  }
+
+  if (body === '') return null;
+
+  const insertion = ' {\n' + body + `${indent}}`;
+  return { offset: cst.end, end: cst.end, newText: insertion };
 }
 
 /**
@@ -244,151 +343,30 @@ export function removeElementEdit(doc: ParsedDocument, fqn: string): TextEdit {
 // ---------------------------------------------------------------------------
 
 /**
- * Find the offset of the matching closing `}` for the opening `{` at `startOffset`.
- *
- * Uses a forward brace-counting algorithm starting from the `{` character at
- * `startOffset`.  Braces inside single-quoted string literals are ignored.
- * This guarantees the correct closing brace is found even when the block
- * contains deeply nested child elements.
- *
- * @param fullText    - Full source text
- * @param startOffset - Offset of the opening `{` character
- * @param endExclusive - Exclusive end of the range to scan (used as upper bound)
- * @returns Offset of the matching `}` character
- */
-function findClosingBrace(fullText: string, startOffset: number, endExclusive: number): number {
-  // Find the opening brace at or after startOffset
-  let openIdx = startOffset;
-  while (openIdx < endExclusive && fullText[openIdx] !== '{') {
-    openIdx++;
-  }
-  if (openIdx >= endExclusive) {
-    throw new Error('Could not find opening brace in range');
-  }
-
-  let depth = 0;
-  let i = openIdx;
-  while (i < endExclusive) {
-    const ch = fullText[i];
-    if (ch === "'") {
-      // Skip over a single-quoted string literal
-      i++;
-      while (i < endExclusive) {
-        const sc = fullText[i];
-        if (sc === '\\') {
-          // Guard against overshooting endExclusive on the last character
-          i = Math.min(i + 2, endExclusive);
-          continue;
-        }
-        if (sc === "'") {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      // Skip over a double-quoted string literal
-      i++;
-      while (i < endExclusive) {
-        const sc = fullText[i];
-        if (sc === '\\') {
-          i = Math.min(i + 2, endExclusive);
-          continue;
-        }
-        if (sc === '"') {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '/' && fullText[i + 1] === '/') {
-      // Skip a line comment — advance to the end of the line
-      i += 2;
-      while (i < endExclusive && fullText[i] !== '\n') {
-        i++;
-      }
-      continue;
-    }
-    if (ch === '{') {
-      depth++;
-    } else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return i;
-      }
-    }
-    i++;
-  }
-  throw new Error('Could not find closing brace in range');
-}
-
-/**
- * Find the insertion offset for new content inside a block whose closing `}`
- * is at `closingBraceOffset`.
- *
- * The `}` is typically preceded by `\n<indent>`, e.g. `\n  }`.  To keep the
- * indentation of the closing brace intact after the insertion we insert at the
- * newline that immediately precedes the brace indent, not at the brace itself.
- *
- * For example, given:
- *   ...content\n  }
- *                ^-- we want to insert here (at the \n), not at the }
- *
- * This way the result is:
- *   ...content\n  <new element>\n  }
- */
-function insertionPointBeforeBrace(
-  fullText: string,
-  closingBraceOffset: number,
-): number {
-  // Walk back from the } to find the preceding newline.
-  // Everything between that newline and the } should be whitespace (the indent).
-  let i = closingBraceOffset - 1;
-  while (i >= 0 && (fullText[i] === ' ' || fullText[i] === '\t')) {
-    i--;
-  }
-  // If we stopped at a newline, that newline is the insertion point.
-  if (i >= 0 && fullText[i] === '\n') {
-    return i; // insert at (and including) this newline
-  }
-  // Fallback: insert right before the }
-  return closingBraceOffset;
-}
-
-/**
  * Build a TextEdit that replaces the inline title string of an element.
  * Returns null if no title token can be located.
+ *
+ * Uses the kind reference's CST node directly as an anchor so the lookup is
+ * not confused when `name === kindText` (a legal — if unusual — case in the
+ * grammar).
  */
-function buildTitleEdit(node: AstElementNode, fullText: string, newTitle: string): TextEdit | null {
-  // The element CST contains `name = kind 'title'` as leaf tokens.
-  // We look for a string literal (quoted) leaf that comes after the kind token.
+function buildTitleEdit(node: AstElementNode, newTitle: string): TextEdit | null {
   const cst = node.$cstNode;
   if (!cst) return null;
-
+  const kindCst = node.kind?.$refNode;
+  if (!kindCst) return null;
+  const kindEnd = kindCst.end;
   const leaves = collectLeaves(cst);
-
-  // Find the kind token index
-  const kindText = node.kind?.$refText ?? '';
-  const kindIdx = leaves.findIndex((l) => l.text === kindText);
-  if (kindIdx === -1) return null;
-
-  // Look for the next quoted string leaf after the kind token (and before any {)
-  for (let i = kindIdx + 1; i < leaves.length; i++) {
-    const leaf = leaves[i];
+  // Look for the next quoted string leaf after kindEnd (and before any `{`).
+  for (const leaf of leaves) {
+    if (leaf.offset < kindEnd) continue;
     if (leaf.text === '{') break;
     if (leaf.text.startsWith("'") || leaf.text.startsWith('"')) {
-      // Replace this token
       return { offset: leaf.offset, end: leaf.end, newText: `'${escapeString(newTitle)}'` };
     }
   }
-
-  // No existing title — insert after the kind token
-  const kindLeaf = leaves[kindIdx];
-  return { offset: kindLeaf.end, end: kindLeaf.end, newText: ` '${escapeString(newTitle)}'` };
+  // No existing title — insert right after the kind CST node.
+  return { offset: kindEnd, end: kindEnd, newText: ` '${escapeString(newTitle)}'` };
 }
 
 /**
@@ -406,7 +384,15 @@ function buildBodyPropEdit(
   // Check if the property already exists in body.props
   const existingProp = node.body?.props?.find((p) => p.key === key);
   if (existingProp) {
-    const valueCst = existingProp.value?.$cstNode;
+    const v = existingProp.value as
+      | { $cstNode?: { offset: number; end: number } }
+      | string
+      | number
+      | boolean
+      | null
+      | undefined;
+    const valueCst =
+      v && typeof v === 'object' ? (v as { $cstNode?: { offset: number; end: number } }).$cstNode : undefined;
     if (valueCst) {
       return { offset: valueCst.offset, end: valueCst.end, newText: newValueText };
     }
@@ -436,15 +422,9 @@ function buildBodyPropEdit(
 }
 
 /**
- * Build a TextEdit that replaces all existing `link ...` lines in the element body
- * with a new set of link lines derived from `links`.
- *
- * If the element already has link entries they are all deleted and the new links
- * are inserted in a single edit before the closing `}`.  If no existing links are
- * present the new links are simply inserted (same as the old behaviour).
- *
- * If `links` is an empty array and existing links are present, the existing links
- * are deleted and nothing is inserted.
+ * Element-scoped wrapper around the shared {@link buildReplaceLinksEditShared}
+ * helper.  Computes the parent indent automatically from the element's CST
+ * position.
  */
 function buildReplaceLinksEdit(
   node: AstElementNode,
@@ -452,268 +432,172 @@ function buildReplaceLinksEdit(
   links: Array<{ url: string; label?: string }>,
 ): TextEdit | null {
   const indent = getNodeIndent(node, fullText);
-  const innerIndent = indent + '  ';
-
-  // Collect existing LinkProperty CST nodes from body
-  const existingLinks: Array<{ offset: number; end: number }> = [];
-  if (node.body?.props) {
-    for (const prop of node.body.props) {
-      if (prop.$type === 'LinkProperty' && prop.$cstNode) {
-        existingLinks.push({ offset: prop.$cstNode.offset, end: prop.$cstNode.end });
-      }
-    }
-  }
-
-  if (existingLinks.length === 0) {
-    // No existing links — insert new ones before closing brace (or create body)
-    if (links.length === 0) return null;
-    return buildInsertBodySnippet(node, fullText, (ii) =>
-      links
-        .map((lnk) => {
-          const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-          return `${ii}link ${lnk.url}${escaped}`;
-        })
-        .join('\n') + '\n',
-    );
-  }
-
-  // Existing links found: sort by offset ascending, then delete each one (expanding
-  // to consume the surrounding newline), and insert the new set before the closing `}`.
-  // We produce one replacement edit per existing link (deletes) plus one insert.
-  // However, since we need to return a single TextEdit from this function, we instead
-  // build a replacement that covers the range from the first to last existing link and
-  // puts the new link lines in their place — but only when the links are contiguous.
-  // In practice, LikeC4 link lines are always adjacent, so we can replace the range.
-
-  // Sort ascending
-  existingLinks.sort((a, b) => a.offset - b.offset);
-
-  // Expand each link's range to consume its preceding newline + indent so we do not
-  // leave blank lines.  Merge the expanded ranges into one contiguous replacement.
-  let mergedStart = existingLinks[0].offset;
-  let mergedEnd = existingLinks[existingLinks.length - 1].end;
-
-  // Walk back from the first link to consume the leading newline
-  let i = mergedStart - 1;
-  while (i >= 0 && (fullText[i] === ' ' || fullText[i] === '\t')) i--;
-  if (i >= 0 && fullText[i] === '\n') {
-    mergedStart = i; // include the \n
-  }
-
-  // Consume trailing newline after the last link
-  if (fullText[mergedEnd] === '\n') {
-    mergedEnd += 1;
-  }
-
-  // Generate replacement text
-  let newText: string;
-  if (links.length === 0) {
-    newText = '';
-  } else {
-    newText =
-      '\n' +
-      links
-        .map((lnk) => {
-          const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-          return `${innerIndent}link ${lnk.url}${escaped}`;
-        })
-        .join('\n') +
-      '\n';
-  }
-
-  return { offset: mergedStart, end: mergedEnd, newText };
+  return buildReplaceLinksEditShared(node, fullText, indent, links);
 }
 
 /**
- * Build a TextEdit that replaces an existing `style { ... }` block entirely, or
- * inserts a new one if none exists.
+ * Build a TextEdit that merges per-field updates into an existing
+ * `style { ... }` block, or inserts a fresh block if none exists.
  *
- * Merge semantics: the new `style` object completely replaces the old block.
+ * Merge semantics: each style key in `patch` overwrites the corresponding
+ * existing value; keys absent from `patch` are preserved with their original
+ * value.  The block is fully regenerated from the merged map (so reordering
+ * or stylistic differences from the original CST text are not preserved —
+ * only the surviving key/value pairs).
  */
 function buildReplaceStyleEdit(
   node: AstElementNode,
   fullText: string,
-  style: ElementStyle,
+  patch: ElementStyle,
 ): TextEdit | null {
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';
 
-  // Find existing ElementStyleProperty CST node
   const existingStyle = node.body?.props?.find((p) => p.$type === 'ElementStyleProperty');
   if (!existingStyle?.$cstNode) {
-    // No existing style — insert before closing brace
-    return buildInsertBodySnippet(node, fullText, (ii) => generateStyleBlock(style, ii));
+    return buildInsertBodySnippet(node, fullText, indent, (ii) =>
+      generateStyleBlock(patch, ii),
+    );
   }
 
-  // Replace the existing block
+  const existing = readElementStyleProps(existingStyle, fullText);
+  const merged: ElementStyle = { ...existing };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) continue;
+    (merged as Record<string, unknown>)[k] = v;
+  }
+
   const cst = existingStyle.$cstNode;
-  // Expand to consume the leading newline + indent
-  let start = cst.offset;
-  let end = cst.end;
-  let j = start - 1;
-  while (j >= 0 && (fullText[j] === ' ' || fullText[j] === '\t')) j--;
-  if (j >= 0 && fullText[j] === '\n') {
-    start = j;
-  }
-  if (fullText[end] === '\n') end += 1;
-
-  const newText = '\n' + generateStyleBlock(style, innerIndent);
-  return { offset: start, end, newText };
+  const { offset, end } = expandRangeToConsumeSurroundingNewlines(fullText, cst.offset, cst.end);
+  const newText = '\n' + generateStyleBlock(merged, innerIndent);
+  return { offset, end, newText };
 }
 
 /**
- * Build a TextEdit that replaces an existing `metadata { ... }` block entirely,
- * merging keys (new values overwrite, keys absent from new payload are preserved),
- * or inserts a new block if none exists.
+ * Read existing element-style key/value pairs from a parsed
+ * `ElementStyleProperty` AST node.  When the AST `value` field is undefined
+ * (which happens for keyword-typed values such as `color blue`) the value is
+ * recovered by parsing the raw CST text of the property.
+ */
+function readElementStyleProps(
+  styleProp: NonNullable<NonNullable<AstElementNode['body']>['props']>[number],
+  fullText: string,
+): ElementStyle {
+  const out: Record<string, unknown> = {};
+  for (const rawSp of styleProp.props ?? []) {
+    const sp = rawSp as {
+      key?: string;
+      name?: string;
+      value?: unknown;
+      $cstNode?: { offset: number; end: number };
+    };
+    const key = sp.key ?? sp.name;
+    if (!key) continue;
+    let value: unknown;
+    const rawValue = sp.value;
+    if (rawValue && typeof rawValue === 'object') {
+      const obj = rawValue as { text?: unknown; value?: unknown };
+      value = obj.text ?? obj.value;
+    } else if (rawValue !== undefined && rawValue !== null) {
+      value = rawValue;
+    }
+    if (value === undefined || value === null) {
+      // Recover from CST text: "<key> <value>"
+      const cst = sp.$cstNode;
+      if (cst) {
+        const text = fullText.substring(cst.offset, cst.end).trim();
+        const space = text.indexOf(' ');
+        if (space !== -1) value = text.substring(space + 1).trim();
+      }
+    }
+    if (value !== undefined && value !== null) {
+      out[key] = value;
+    }
+  }
+  return out as ElementStyle;
+}
+
+/**
+ * Element-scoped wrapper around the shared metadata-edit helper.  Computes the
+ * parent indent automatically from the element's CST position.
  */
 function buildReplaceMetadataEdit(
   node: AstElementNode,
   fullText: string,
-  metadata: Record<string, string>,
+  patch: MetadataPatch,
 ): TextEdit | null {
   const indent = getNodeIndent(node, fullText);
-  const innerIndent = indent + '  ';
-  const innerInnerIndent = innerIndent + '  ';
-
-  // Find existing MetadataBody CST node
-  const existingMeta = node.body?.props?.find((p) => p.$type === 'MetadataBody');
-  if (!existingMeta?.$cstNode) {
-    // No existing metadata block — insert before closing brace
-    return buildInsertBodySnippet(node, fullText, (ii) => {
-      const iii = ii + '  ';
-      let block = `${ii}metadata {\n`;
-      for (const [key, value] of Object.entries(metadata)) {
-        block += `${iii}${key} '${escapeString(value)}'\n`;
-      }
-      block += `${ii}}\n`;
-      return block;
-    });
-  }
-
-  // Parse existing key/value pairs from the AST node.
-  // MetadataAttribute nodes have .key (string) and .value (MarkdownOrString with .text field).
-  const existingPairs: Record<string, string> = {};
-  if (existingMeta.props) {
-    for (const mp of existingMeta.props) {
-      const key = mp.key ?? mp.name;
-      // MarkdownOrString node: actual string is in .text
-      const val = mp.value?.text ?? mp.value?.value ?? mp.value;
-      if (key && typeof val === 'string') {
-        existingPairs[key] = val;
-      } else if (key) {
-        // The key exists in the AST but its value could not be extracted as a
-        // string (e.g. the AST shape changed or the node is malformed).
-        // Log a warning so callers can diagnose issues rather than silently
-        // dropping the entry.
-        console.warn(
-          `[likec4-mutator] buildReplaceMetadataEdit: could not extract string value for metadata key '${key}' — entry will be omitted from the merged block`,
-        );
-      }
-    }
-  }
-
-  // Merge: existing keys that are NOT in the new payload are preserved
-  const merged: Record<string, string> = { ...existingPairs, ...metadata };
-
-  // Replace the existing block
-  const cst = existingMeta.$cstNode;
-  let start = cst.offset;
-  let end = cst.end;
-  let j = start - 1;
-  while (j >= 0 && (fullText[j] === ' ' || fullText[j] === '\t')) j--;
-  if (j >= 0 && fullText[j] === '\n') {
-    start = j;
-  }
-  if (fullText[end] === '\n') end += 1;
-
-  let block = `\n${innerIndent}metadata {\n`;
-  for (const [key, value] of Object.entries(merged)) {
-    block += `${innerInnerIndent}${key} '${escapeString(value)}'\n`;
-  }
-  block += `${innerIndent}}\n`;
-
-  return { offset: start, end, newText: block };
+  return buildReplaceMetadataEditOnNode(node, fullText, indent, patch);
 }
 
 /**
- * Build a TextEdit that inserts `#tagname` references right after the opening `{`
- * of an element's body.  Tag references MUST precede property declarations in the
- * LikeC4 grammar, so we cannot simply append them at the end of the block.
+ * Build a TextEdit implementing REPLACE semantics for the body's tag block:
  *
- * If the element has no body block yet, one is created with the tags inside.
+ * - `tags === []` and an existing tag block is present → delete the block.
+ * - `tags === []` and no existing block → no-op.
+ * - `tags.length > 0` and no existing block → insert `#tag` lines right after
+ *   the opening `{` (tags must precede property declarations per the grammar).
+ * - `tags.length > 0` and an existing block → replace the existing block in-place.
+ *
+ * If the element has no body at all, one is created with the tags inside.
  */
-function buildInsertTagsAfterOpeningBrace(
+function buildReplaceTagsEdit(
   node: AstElementNode,
   fullText: string,
   tags: string[],
 ): TextEdit | null {
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';
-  const snippet = tags.map((t) => `${innerIndent}#${t}`).join('\n') + '\n';
 
-  if (!node.body?.$cstNode) {
-    // No body — create one and put the tags inside it
-    const cst = node.$cstNode;
-    if (!cst) return null;
-    const insertion = ' {\n' + snippet + `${indent}}`;
-    return { offset: cst.end, end: cst.end, newText: insertion };
-  }
+  // Read AST.  body.tags is a single Tags node (when present) covering all
+  // tag references.  body is exposed via the structural shape used by other
+  // helpers — we widen via a narrow cast for the tags field which is not part
+  // of AstElementNode.
+  const body = node.body as
+    | (NonNullable<AstElementNode['body']> & {
+        tags?: { $cstNode?: { offset: number; end: number } };
+      })
+    | undefined;
+  const existingTagsCst = body?.tags?.$cstNode;
 
-  // Body exists — insert the tags right after the opening `{`
-  const bodyCst = node.body.$cstNode;
-  // Find the opening brace offset within the body CST
-  const openingBrace = bodyCst.offset; // the { is the first char of the body CST
-  if (fullText[openingBrace] !== '{') {
-    throw new Error('Expected opening brace at body CST offset');
-  }
-  // Insert right after the `{` character
-  const insertAt = openingBrace + 1;
-  return { offset: insertAt, end: insertAt, newText: '\n' + snippet };
-}
+  // Build the replacement snippet (without leading newline — that is added by
+  // the splice context where appropriate).
+  const cleaned = tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
+  const tagLines = cleaned.map((t) => `${innerIndent}#${t}`).join('\n');
 
-/**
- * Build a TextEdit that inserts a generated snippet just before the closing `}`
- * of an element's body.  If the element has no body block yet, one is created.
- *
- * The `snippetFn` receives the inner indent string and must return the text to
- * insert (including a trailing newline).
- */
-function buildInsertBodySnippet(
-  node: AstElementNode,
-  fullText: string,
-  snippetFn: (innerIndent: string) => string,
-): TextEdit | null {
-  const indent = getNodeIndent(node, fullText);
-  const innerIndent = indent + '  ';
-
-  if (!node.body?.$cstNode) {
-    // No body block — append one after the element's inline portion
-    const cst = node.$cstNode;
-    if (!cst) return null;
-    const snippet = snippetFn(innerIndent);
-    const insertion = ' {\n' + snippet + `${indent}}`;
-    return { offset: cst.end, end: cst.end, newText: insertion };
-  }
-
-  // Body exists — insert before the closing `}`
-  const bodyCst = node.body.$cstNode;
-  const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
-  const snippet = snippetFn(innerIndent);
-  return { offset: closingBrace, end: closingBrace, newText: snippet };
-}
-
-/**
- * Collect all leaf CST nodes in document order from a composite node.
- */
-function collectLeaves(node: any): Array<{ offset: number; end: number; text: string }> {
-  const result: Array<{ offset: number; end: number; text: string }> = [];
-  function walk(n: any) {
-    if (n.content) {
-      for (const child of n.content) walk(child);
-    } else {
-      result.push({ offset: n.offset, end: n.end, text: n.text as string });
+  // Case 1: no existing tag block.
+  if (!existingTagsCst) {
+    if (tags.length === 0) return null;
+    // No body — wrap the tag lines into a fresh body block.
+    if (!node.body?.$cstNode) {
+      const cst = node.$cstNode;
+      if (!cst) return null;
+      const insertion = ' {\n' + tagLines + '\n' + `${indent}}`;
+      return { offset: cst.end, end: cst.end, newText: insertion };
     }
+    // Body exists — insert right after the opening `{` so the tags stay
+    // before any property declarations (grammar requirement).
+    const bodyCst = node.body.$cstNode;
+    const openingBrace = bodyCst.offset;
+    if (fullText[openingBrace] !== '{') {
+      const kindText = node.kind?.$refText;
+      const ctx = kindText ? ` (element kind=${kindText})` : '';
+      throw new Error(`Expected opening brace at body CST offset${ctx}`);
+    }
+    const insertAt = openingBrace + 1;
+    return { offset: insertAt, end: insertAt, newText: '\n' + tagLines + '\n' };
   }
-  walk(node);
-  return result;
+
+  // Case 2: existing tag block — expand its range to consume surrounding
+  // newlines, then replace.
+  const { offset, end } = expandRangeToConsumeSurroundingNewlines(
+    fullText,
+    existingTagsCst.offset,
+    existingTagsCst.end,
+  );
+  if (tags.length === 0) {
+    return { offset, end, newText: '' };
+  }
+  return { offset, end, newText: '\n' + tagLines + '\n' };
 }
+

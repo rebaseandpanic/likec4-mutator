@@ -1,0 +1,29 @@
+specification {
+  element service
+  element database
+}
+model {
+  app = service 'Source App' {
+    metadata {
+      single 'plain'
+      owners ['alice', 'bob']
+      keywords [
+        'first',
+        'second',
+        'third'
+      ]
+    }
+  }
+  store = database 'Store'
+  app -> store 'reads' {
+    metadata {
+      aliases ['primary', 'fallback']
+      scalar 'one-value'
+    }
+  }
+}
+views {
+  view idx {
+    include *
+  }
+}

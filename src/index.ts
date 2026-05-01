@@ -6,8 +6,16 @@ export type { ElementInfo, RelationshipInfo, SpecificationInfo } from './query/t
 
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';
-export type { AddElementOpts, AddViewOpts } from './mutator/mutator.js';
+export type {
+  AddElementOpts,
+  AddViewOpts,
+  RemoveElementResult,
+  UpdateElementPatch,
+  UpdateRelationshipMatcher,
+  UpdateRelationshipPatch,
+} from './mutator/mutator.js';
 export type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
+export type { MetadataMap, MetadataPatch } from './mutator/metadata-ops.js';
 
 // Codegen helpers — useful for consumers that want to preview generated text
 export { generateElement, generateRelationship, generateView } from './mutator/codegen.js';

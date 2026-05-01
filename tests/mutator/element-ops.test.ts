@@ -532,7 +532,7 @@ views {
     expect(updated).not.toContain('https://old.example.com');
   });
 
-  it('should replace existing style block (not duplicate it)', () => {
+  it('should merge style fields per-field (v0.4.0 BREAKING) — preserves untouched keys', () => {
     const source = `specification {
   element service
 }
@@ -557,11 +557,13 @@ views {
 
     const styleCount = (updated.match(/style \{/g) || []).length;
     expect(styleCount).toBe(1);
+    // patched fields took effect
     expect(updated).toContain('color red');
     expect(updated).toContain('border dashed');
-    // Old properties should be gone
+    // unpatched field preserved
+    expect(updated).toContain('shape browser');
+    // old patched value gone
     expect(updated).not.toContain('color blue');
-    expect(updated).not.toContain('shape browser');
   });
 });
 
@@ -594,13 +596,11 @@ views {
   }
 }
 `;
-    // The parser may or may not accept two metadata blocks depending on the
-    // grammar — we only require that updateElementEdit does not throw and that
-    // the result is not undefined.
     const doc = parser.parse(source);
-    // If the parser rejects the malformed input, skip the mutation assertion.
-    if (doc.errors.length > 0) return;
 
+    // updateElementEdit must not throw for this malformed input regardless of
+    // whether the parser reports errors — the only requirement is that the
+    // operation does not crash and produces a string that contains the patch.
     const edits = updateElementEdit(doc, 'svc', { metadata: { owner: 'new-team' } });
     const updated = applyEdits(source, edits);
 

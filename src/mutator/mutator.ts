@@ -11,16 +11,40 @@ import { C4Query } from '../query/query.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, type TextEdit } from './text-edit.js';
-import { addElementEdit, updateElementEdit, removeElementEdit, type AddElementOpts } from './element-ops.js';
+import {
+  addElementEdit,
+  updateElementEdit,
+  removeElementEdit,
+  type AddElementOpts,
+  type UpdateElementPatch,
+} from './element-ops.js';
 import type { ElementStyle, RelationshipStyle } from './codegen.js';
-import { addRelationshipEdit, removeRelationshipEdit } from './relationship-ops.js';
+import {
+  addRelationshipEdit,
+  removeRelationshipEdit,
+  updateRelationshipEdit,
+  matchRelations,
+  formatNotFoundError,
+  type UpdateRelationshipMatcher,
+  type UpdateRelationshipPatch,
+} from './relationship-ops.js';
 import { addViewEdit, type GenerateViewOpts } from './view-ops.js';
 
-export type { AddElementOpts };
+export type { AddElementOpts, UpdateElementPatch };
 export type { ElementStyle };
 export type { RelationshipStyle };
+export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
 
 export type AddViewOpts = Omit<GenerateViewOpts, 'indent'>;
+
+/**
+ * Result of {@link LikeC4Mutator.removeElement}.  Lists every relationship
+ * that was implicitly removed because it referenced the deleted element or
+ * one of its descendants.
+ */
+export interface RemoveElementResult {
+  removedRelationships: Array<{ source: string; target: string; title?: string }>;
+}
 
 /**
  * Programmatic read/write access to a set of LikeC4 source files.
@@ -149,22 +173,23 @@ export class LikeC4Mutator {
   /**
    * Update properties on an existing element.
    *
+   * Semantics summary (v0.4.0):
+   *  - `title`, `summary`, `description`, `technology`: REPLACE.
+   *  - `tags`: REPLACE (BREAKING vs. v0.3 — used to APPEND).  Empty array
+   *    clears all existing tags.
+   *  - `links`: REPLACE.  Empty array clears all existing links.
+   *  - `style`: MERGE per-field (BREAKING vs. v0.3 — used to fully REPLACE
+   *    the existing block).  Pass a complete style object to reproduce the
+   *    old replace-all behaviour.
+   *  - `metadata`: MERGE with `null`-deletion.  Map a key to `null` to delete
+   *    it; map to a string or string[] to upsert.  Keys absent from the
+   *    patch are preserved verbatim (including their original array
+   *    formatting).
+   *
    * @param fqn   - FQN of the element to update
    * @param props - Properties to change (undefined = keep existing)
    */
-  updateElement(
-    fqn: string,
-    props: Partial<{
-      title: string;
-      summary: string;
-      description: string;
-      technology: string;
-      tags: string[];
-      links: Array<{ url: string; label?: string }>;
-      style: ElementStyle;
-      metadata: Record<string, string>;
-    }>,
-  ): void {
+  updateElement(fqn: string, props: UpdateElementPatch): void {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
 
@@ -183,7 +208,7 @@ export class LikeC4Mutator {
    * @returns Info about any relationships that were implicitly removed because
    *          they referenced the deleted element (or one of its descendants).
    */
-  removeElement(fqn: string): { removedRelationships: Array<{ source: string; target: string; title?: string }> } {
+  removeElement(fqn: string): RemoveElementResult {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
 
@@ -229,7 +254,7 @@ export class LikeC4Mutator {
       technology?: string;
       tags?: string[];
       links?: Array<{ url: string; label?: string }>;
-      metadata?: Record<string, string>;
+      metadata?: Record<string, string | string[]>;
       style?: RelationshipStyle;
     },
   ): void {
@@ -240,6 +265,56 @@ export class LikeC4Mutator {
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = addRelationshipEdit(doc, source, target, label, opts);
     this.applyEdit(filename, edit);
+  }
+
+  /**
+   * Update fields on an existing relationship.
+   *
+   * Disambiguation: when more than one relation matches `matcher.source` /
+   * `matcher.target`, supply `matcher.matchKind` (e.g. `'calls'`) and/or
+   * `matcher.matchTitle` to select exactly one.  Throws when zero relations
+   * match or when more than one still matches after disambiguation.
+   *
+   * Patch semantics:
+   *  - `label`, `description`, `technology`: REPLACE.
+   *  - `tags`: REPLACE.  Empty array clears all existing tags.
+   *  - `links`: REPLACE.  Empty array clears all existing links.
+   *  - `metadata`: MERGE with `null`-deletion (same as `updateElement`).
+   *  - `style`: MERGE per-field; absent fields are preserved.
+   *
+   * Multi-file behaviour: every loaded document is scanned and every match
+   * across files is collected.  Throws on cross-file ambiguity.
+   *
+   * @param matcher - Source/target plus optional matchKind/matchTitle disambiguators
+   * @param patch   - Update payload (at least one field must be specified)
+   */
+  updateRelationship(matcher: UpdateRelationshipMatcher, patch: UpdateRelationshipPatch): void {
+    // First locate the file (or files) where matches live.  Each file is
+    // scanned with the shared `matchRelations` helper (the same one
+    // updateRelationshipEdit uses internally).
+    const matches: Array<{ filename: string }> = [];
+    for (const [filename, doc] of this.documents) {
+      const fileMatches = matchRelations(doc.ast, matcher).length;
+      for (let i = 0; i < fileMatches; i++) matches.push({ filename });
+    }
+    if (matches.length === 0) {
+      throw new Error(formatNotFoundError(matcher));
+    }
+    if (matches.length > 1) {
+      const fileList = [...new Set(matches.map((m) => m.filename))].join(', ');
+      throw new Error(
+        `Multiple relationships match (${matches.length} found across files: ${fileList}). ` +
+          `Specify matchKind and/or matchTitle to disambiguate.`,
+      );
+    }
+
+    const { filename } = matches[0];
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+    const edits = updateRelationshipEdit(doc, matcher, patch);
+    if (edits.length > 0) {
+      this.applyEditsToFile(filename, edits);
+    }
   }
 
   /**

@@ -50,7 +50,11 @@ mutator.addElement('app', {
     opacity: '80%',
     border: 'dashed',
   },
-  metadata: { owner: 'platform-team', env: 'production' },
+  metadata: {
+    owner: 'platform-team',
+    env: 'production',
+    keywords: ['internal', 'critical'], // array values are supported
+  },
 });
 
 // Add relationship (all properties)
@@ -74,15 +78,33 @@ mutator.addView({
 
 // Update element (only specified fields are changed)
 mutator.updateElement('app.db', {
-  title: 'Updated Title',             // replaces existing
-  summary: 'Updated summary',         // replaces existing
-  description: 'Updated description', // replaces existing
-  technology: 'PostgreSQL 17',        // replaces existing
-  tags: ['deprecated'],               // inserted (appended)
-  links: [{ url: 'https://new.link' }], // inserted (appended)
-  metadata: { team: 'backend' },      // inserted (appended)
-  style: { color: 'red' },            // inserted (appended)
+  title: 'Updated Title',             // REPLACE
+  summary: 'Updated summary',         // REPLACE
+  description: 'Updated description', // REPLACE
+  technology: 'PostgreSQL 17',        // REPLACE
+  tags: ['deprecated'],               // REPLACE (v0.4.0 BREAKING — was append). Empty [] clears all tags.
+  links: [{ url: 'https://new.link' }], // REPLACE.  Empty [] clears all links.
+  metadata: {                         // MERGE + null-deletion
+    team: 'backend',                  //   upsert (string)
+    keywords: ['core', 'critical'],   //   upsert (array)
+    deprecated: null,                 //   delete the key
+  },
+  style: { color: 'red' },            // MERGE per-field (v0.4.0 BREAKING — was full replace)
 });
+
+// Update an existing relationship
+mutator.updateRelationship(
+  { source: 'app', target: 'app.db' },
+  {
+    label: 'persists',
+    description: 'Reads and writes user data',
+    technology: 'JDBC',
+    tags: ['internal'],                                  // REPLACE
+    links: [{ url: 'https://docs.example.com/db' }],     // REPLACE
+    metadata: { sla: '99.9%', owner: null },             // MERGE + null-delete
+    style: { line: 'dashed', color: 'red' },             // MERGE per-field
+  },
+);
 
 // Remove
 mutator.removeElement('app.db');
@@ -239,14 +261,23 @@ Adds a new element inside a parent. All fields except `op`, `parent`, `kind`, `i
   },
   "metadata": {
     "owner": "platform-team",
-    "version": "v2"
+    "version": "v2",
+    "keywords": ["internal", "critical"]
   }
 }
 ```
 
 #### updateElement
 
-Updates properties of an existing element. Only specified fields are changed. `title`, `summary`, `description`, `technology` replace existing values. `tags`, `links`, `metadata`, `style` are appended.
+Updates properties of an existing element.  Only specified fields are changed.
+
+| Field | Semantics |
+| --- | --- |
+| `title`, `summary`, `description`, `technology` | REPLACE |
+| `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags. |
+| `links` | REPLACE.  `[]` clears all links. |
+| `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting). |
+| `style` | MERGE per-field (v0.4.0 BREAKING — was full replace).  Pass a complete style object to reproduce the old replace-all behaviour. |
 
 ```json
 {
@@ -257,8 +288,40 @@ Updates properties of an existing element. Only specified fields are changed. `t
   "technology": "Go / Fiber",
   "tags": ["deprecated"],
   "links": [{ "url": "https://migration.example.com", "label": "Migration Guide" }],
-  "metadata": { "team": "backend" },
+  "metadata": {
+    "team": "backend",
+    "keywords": ["internal", "critical"],
+    "deprecatedKey": null
+  },
   "style": { "color": "red", "border": "dashed" }
+}
+```
+
+#### updateRelationship
+
+Updates fields on an existing relationship.  Required: `op`, `source`, `target`, plus at least one update field.  When more than one relation matches `source`/`target`, supply `matchKind` and/or `matchTitle` to disambiguate.
+
+| Field | Semantics |
+| --- | --- |
+| `label`, `description`, `technology` | REPLACE |
+| `tags` | REPLACE.  `[]` clears all tags. |
+| `links` | REPLACE.  `[]` clears all links. |
+| `metadata` | MERGE with `null`-deletion (same as `updateElement`). |
+| `style` | MERGE per-field. |
+
+```json
+{
+  "op": "updateRelationship",
+  "source": "app.api",
+  "target": "app.db",
+  "matchTitle": "reads/writes",
+  "label": "persists",
+  "description": "Reads and writes user data",
+  "technology": "JDBC",
+  "tags": ["internal"],
+  "links": [{ "url": "https://docs.example.com/db" }],
+  "metadata": { "sla": "99.9%", "deprecatedOwner": null },
+  "style": { "line": "dashed", "color": "red" }
 }
 ```
 
@@ -287,7 +350,7 @@ Adds a relationship between two elements. All fields except `op`, `source`, `tar
   "technology": "JDBC",
   "tags": ["internal"],
   "links": [{ "url": "https://docs.example.com/db", "label": "DB Docs" }],
-  "metadata": { "sla": "99.9%" },
+  "metadata": { "sla": "99.9%", "owners": ["platform", "data"] },
   "style": {
     "line": "dashed",
     "color": "red",
@@ -331,6 +394,7 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
     { "op": "addElement", "parent": "app", "kind": "service", "id": "gateway", "title": "API Gateway", "description": "Routes requests", "technology": "nginx" },
     { "op": "addRelationship", "source": "app.gateway", "target": "app.api", "label": "proxies" },
     { "op": "updateElement", "fqn": "app.api", "technology": "Go / Fiber" },
+    { "op": "updateRelationship", "source": "app.gateway", "target": "app.api", "matchTitle": "proxies", "metadata": { "sla": "99.9%" } },
     { "op": "addView", "id": "gatewayView", "type": "element", "target": "app.gateway", "title": "Gateway" },
     { "op": "removeRelationship", "source": "app.api", "target": "app.legacy" },
     { "op": "removeElement", "fqn": "app.legacy" }
@@ -348,10 +412,10 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | summary | string | yes | yes (replace) | `summary 'text'` |
 | description | string | yes | yes (replace) | `description 'text'` |
 | technology | string | yes | yes (replace) | `technology 'text'` |
-| tags | string[] | yes | yes (append) | `#tagname` |
+| tags | string[] | yes | yes (replace) | `#tagname` |
 | links | {url, label?}[] | yes | yes (replace) | `link url 'label'` |
-| style | ElementStyle | yes | yes (replace) | `style { shape ... }` |
-| metadata | Record<string,string> | yes | yes (replace, merge) | `metadata { key 'val' }` |
+| style | ElementStyle | yes | yes (merge per-field) | `style { shape ... }` |
+| metadata | `Record<string, string \| string[]>` | yes | yes (merge, `null` deletes a key) | `metadata { key 'val' }` or `metadata { key ['v1', 'v2'] }` |
 
 ### Element style properties
 
@@ -372,15 +436,15 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 
 ### Relationship properties
 
-| Property | Type | addRelationship | DSL syntax |
-|----------|------|:---------------:|------------|
-| label | string | yes | `-> target 'label'` |
-| description | string | yes | `description 'text'` |
-| technology | string | yes | `technology 'text'` |
-| tags | string[] | yes | `#tagname` |
-| links | {url, label?}[] | yes | `link url 'label'` |
-| metadata | Record<string,string> | yes | `metadata { key 'val' }` |
-| style | RelationshipStyle | yes | `style { line ... }` |
+| Property | Type | addRelationship | updateRelationship | DSL syntax |
+|----------|------|:---------------:|:------------------:|------------|
+| label | string | yes | yes (replace) | `-> target 'label'` |
+| description | string | yes | yes (replace) | `description 'text'` |
+| technology | string | yes | yes (replace) | `technology 'text'` |
+| tags | string[] | yes | yes (replace) | `#tagname` |
+| links | {url, label?}[] | yes | yes (replace) | `link url 'label'` |
+| metadata | `Record<string, string \| string[]>` | yes | yes (merge, `null` deletes a key) | `metadata { key 'val' }` or `metadata { key ['v1', 'v2'] }` |
+| style | RelationshipStyle | yes | yes (merge per-field) | `style { line ... }` |
 
 ### Relationship style properties
 

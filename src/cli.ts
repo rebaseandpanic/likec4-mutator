@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { resolve, join, relative, extname } from 'node:path';
+import { resolve, join, relative, extname, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
 import { LikeC4Mutator } from './mutator/mutator.js';
-import type { ElementStyle } from './mutator/mutator.js';
+import type { ElementStyle, RelationshipStyle } from './mutator/mutator.js';
+import type { MetadataPatch } from './mutator/metadata-ops.js';
 
 const _require = createRequire(import.meta.url);
 const pkg = _require('../package.json') as { version: string };
@@ -56,7 +57,9 @@ function writeOutput(mutator: LikeC4Mutator, outputDir: string) {
   for (const [filename, content] of Object.entries(files)) {
     const outPath = resolve(absOutputDir, filename);
     // Prevent path traversal: ensure resolved output path stays within the output directory.
-    if (!outPath.startsWith(absOutputDir + '/') && outPath !== absOutputDir) {
+    // Use path.relative for cross-platform safety (POSIX `/` vs Windows `\`).
+    const rel = relative(absOutputDir, outPath);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
       throw new Error(`Path traversal detected: '${filename}' resolves outside output directory`);
     }
     mkdirSync(resolve(outPath, '..'), { recursive: true });
@@ -80,7 +83,7 @@ interface AddElementMutation {
   tags?: string[];
   links?: Array<{ url: string; label?: string }>;
   style?: ElementStyle;
-  metadata?: Record<string, string>;
+  metadata?: Record<string, string | string[]>;
 }
 
 interface AddRelationshipMutation {
@@ -92,8 +95,8 @@ interface AddRelationshipMutation {
   technology?: string;
   tags?: string[];
   links?: Array<{ url: string; label?: string }>;
-  metadata?: Record<string, string>;
-  style?: { line?: string; color?: string; head?: string; tail?: string };
+  metadata?: Record<string, string | string[]>;
+  style?: RelationshipStyle;
 }
 
 interface AddViewMutation {
@@ -114,7 +117,22 @@ interface UpdateElementMutation {
   tags?: string[];
   links?: Array<{ url: string; label?: string }>;
   style?: ElementStyle;
-  metadata?: Record<string, string>;
+  metadata?: MetadataPatch;
+}
+
+interface UpdateRelationshipMutation {
+  op: 'updateRelationship';
+  source: string;
+  target: string;
+  matchKind?: string;
+  matchTitle?: string;
+  label?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  metadata?: MetadataPatch;
+  style?: RelationshipStyle;
 }
 
 interface RemoveElementMutation {
@@ -133,6 +151,7 @@ type Mutation =
   | AddRelationshipMutation
   | AddViewMutation
   | UpdateElementMutation
+  | UpdateRelationshipMutation
   | RemoveElementMutation
   | RemoveRelationshipMutation;
 
@@ -538,6 +557,27 @@ program
               process.exit(1);
             }
             break;
+          case 'updateRelationship': {
+            if (!m.source || !m.target) {
+              process.stderr.write('Error: updateRelationship requires source, target\n');
+              process.exit(1);
+            }
+            const hasUpdate =
+              m.label !== undefined ||
+              m.description !== undefined ||
+              m.technology !== undefined ||
+              m.tags !== undefined ||
+              m.links !== undefined ||
+              m.metadata !== undefined ||
+              m.style !== undefined;
+            if (!hasUpdate) {
+              process.stderr.write(
+                'Error: updateRelationship requires at least one of label, description, technology, tags, links, metadata, style\n',
+              );
+              process.exit(1);
+            }
+            break;
+          }
           case 'addView':
             if (!m.id || !m.type) {
               process.stderr.write('Error: addView requires id, type\n');
@@ -559,7 +599,7 @@ program
       for (const mutation of mutationsFile.mutations) {
         switch (mutation.op) {
           case 'addElement': {
-            const m = mutation as AddElementMutation;
+            const m = mutation;
             const createdFqn = mutator.addElement(m.parent, {
               name: m.id,
               kind: m.kind,
@@ -577,7 +617,7 @@ program
             break;
           }
           case 'addRelationship': {
-            const m = mutation as AddRelationshipMutation;
+            const m = mutation;
             mutator.addRelationship(m.source, m.target, m.label, {
               description: m.description,
               technology: m.technology,
@@ -590,7 +630,7 @@ program
             break;
           }
           case 'addView': {
-            const m = mutation as AddViewMutation;
+            const m = mutation;
             mutator.addView({
               id: m.id,
               type: m.type,
@@ -601,7 +641,7 @@ program
             break;
           }
           case 'updateElement': {
-            const m = mutation as UpdateElementMutation;
+            const m = mutation;
             mutator.updateElement(m.fqn, {
               title: m.title,
               summary: m.summary,
@@ -616,7 +656,7 @@ program
             break;
           }
           case 'removeElement': {
-            const m = mutation as RemoveElementMutation;
+            const m = mutation;
             const { removedRelationships } = mutator.removeElement(m.fqn);
             process.stdout.write(`  removeElement: removed '${m.fqn}'`);
             if (removedRelationships.length > 0) {
@@ -627,8 +667,30 @@ program
             break;
           }
           case 'removeRelationship': {
-            const m = mutation as RemoveRelationshipMutation;
+            const m = mutation;
             mutator.removeRelationship(m.source, m.target);
+            applied++;
+            break;
+          }
+          case 'updateRelationship': {
+            const m = mutation;
+            mutator.updateRelationship(
+              {
+                source: m.source,
+                target: m.target,
+                matchKind: m.matchKind,
+                matchTitle: m.matchTitle,
+              },
+              {
+                label: m.label,
+                description: m.description,
+                technology: m.technology,
+                tags: m.tags,
+                links: m.links,
+                metadata: m.metadata,
+                style: m.style,
+              },
+            );
             applied++;
             break;
           }
