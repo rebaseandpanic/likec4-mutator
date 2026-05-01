@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1] - 2026-05-01
+
+### Bugfix
+- Pin `bundle-require` and `esbuild` as direct dependencies. Upstream
+  `@likec4/config` declares them as optional peer dependencies, so a clean
+  `npm install likec4-mutator` did not pull them and the first runtime call
+  failed with `ERR_MODULE_NOT_FOUND: Cannot find package 'bundle-require'`.
+
 ## [0.4.0] - 2026-05-01
 
 ### Breaking changes
