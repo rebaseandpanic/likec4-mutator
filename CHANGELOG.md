@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.2] - 2026-05-03
+
+### Bugfix
+- `updateElement` and `updateRelationship` no longer produce parse errors when adding a property block (`metadata`, `links`, `style`) or a property line (`summary`, `description`, `technology`) for the first time on a body that already contains child elements. Previously the new content was spliced in before the body's closing `}`, which placed it AFTER existing children — the LikeC4 grammar requires `(properties* tags*) children*` ordering, so this produced `Expecting token of type '}' but found …`. The insertion point now lands before the first child whenever children are present.
+- `updateElement.metadata` / `updateRelationship.metadata` with a `null` patch that deletes every remaining key no longer squashes the previous and following lines together. `expandRangeToConsumeSurroundingNewlines` previously ate both surrounding newlines on plain deletion; the deletion path now preserves the trailing newline so adjacent body content keeps its own line.
+
+### Internal
+- New shared helper `findInsertOffsetBeforeChildren` (`src/mutator/cst-helpers.ts`) implements the "insert before first child, fall back to before closing brace" routing used by both fixes.
+- `expandRangeToConsumeSurroundingNewlines` accepts an optional `{ consumeTrailingNewline?: boolean }` (default `true` — backward compatible).
+
 ## [0.4.1] - 2026-05-01
 
 ### Bugfix

@@ -174,10 +174,19 @@ export function buildReplaceMetadataEditOnNode(
   const existing = readMetadataBlock(existingMeta);
   const merged = mergeMetadata(existing, patch);
 
-  // Sub-case: merged is empty → delete the entire block.
+  // Sub-case: merged is empty → delete the entire block.  Pass
+  // `consumeTrailingNewline: false` so the trailing `\n` after the block stays
+  // intact — otherwise both surrounding newlines collapse and adjacent body
+  // content (e.g. `description 'd'` on the previous line, the body's closing
+  // `}` on the following line) ends up squashed onto a single line.
   const cst = existingMeta.$cstNode!;
   if (Object.keys(merged).length === 0) {
-    const { offset, end } = expandRangeToConsumeSurroundingNewlines(fullText, cst.offset, cst.end);
+    const { offset, end } = expandRangeToConsumeSurroundingNewlines(
+      fullText,
+      cst.offset,
+      cst.end,
+      { consumeTrailingNewline: false },
+    );
     return { offset, end, newText: '' };
   }
 

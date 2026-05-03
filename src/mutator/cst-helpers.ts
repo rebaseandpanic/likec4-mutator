@@ -100,14 +100,22 @@ export function insertionPointBeforeBrace(fullText: string, closingBraceOffset: 
 
 /**
  * Expand a `[offset, end)` range to consume the leading newline + indent
- * preceding `offset` and the trailing newline at `end`, so that deletion
- * does not leave behind an empty line.  Returns the expanded `[offset, end)`.
+ * preceding `offset` and (optionally) the trailing newline at `end`, so that
+ * deletion does not leave behind an empty line.
+ *
+ * When the call is part of a REPLACEMENT whose new text already brings its
+ * own leading and trailing newlines, both surrounding newlines should be
+ * consumed (default).  For pure DELETIONS (newText = '') consuming both
+ * newlines collapses the previous and next lines together — pass
+ * `consumeTrailingNewline: false` to keep the trailing `\n` intact.
  */
 export function expandRangeToConsumeSurroundingNewlines(
   fullText: string,
   offset: number,
   end: number,
+  options?: { consumeTrailingNewline?: boolean },
 ): { offset: number; end: number } {
+  const consumeTrailing = options?.consumeTrailingNewline ?? true;
   let newOffset = offset;
   let newEnd = end;
   let j = newOffset - 1;
@@ -115,7 +123,7 @@ export function expandRangeToConsumeSurroundingNewlines(
   if (j >= 0 && fullText[j] === '\n') {
     newOffset = j;
   }
-  if (fullText[newEnd] === '\n') {
+  if (consumeTrailing && fullText[newEnd] === '\n') {
     newEnd += 1;
   }
   return { offset: newOffset, end: newEnd };
@@ -178,7 +186,46 @@ export interface BodyOwnerNode {
       value?: unknown;
       props?: Array<unknown>;
     }>;
+    /** Child elements (Element/Relation nodes) declared inside the body. */
+    elements?: Array<{ $cstNode?: { offset: number; end: number } }>;
   };
+}
+
+/**
+ * Compute the offset at which a new property line/block should be spliced into
+ * an existing body so that it lands BEFORE any child elements.  The LikeC4
+ * grammar requires `(properties* tags*) children*` ordering — inserting
+ * properties after children produces a parse error.
+ *
+ * If the body has no children (or none with a CST node), returns `closingBrace`
+ * — the original insertion point, which is correct in that case.
+ *
+ * Otherwise locates the earliest child by CST offset, walks back over leading
+ * whitespace, and returns the offset of the line-start `\n` (so the caller can
+ * splice text whose final character is `\n`, ending up on its own line above
+ * the child with the child's indent intact).  When the child is on the same
+ * line as the opening brace (no preceding `\n`), falls back to `closingBrace`.
+ */
+export function findInsertOffsetBeforeChildren(
+  node: BodyOwnerNode,
+  fullText: string,
+  closingBrace: number,
+): number {
+  const children = node.body?.elements;
+  if (!children || children.length === 0) return closingBrace;
+
+  let firstOffset = Infinity;
+  for (const child of children) {
+    const off = child.$cstNode?.offset;
+    if (typeof off === 'number' && off < firstOffset) firstOffset = off;
+  }
+  if (!Number.isFinite(firstOffset)) return closingBrace;
+  if (firstOffset >= closingBrace) return closingBrace;
+
+  let i = firstOffset;
+  while (i > 0 && (fullText[i - 1] === ' ' || fullText[i - 1] === '\t')) i--;
+  if (i > 0 && fullText[i - 1] === '\n') return i;
+  return closingBrace;
 }
 
 /**
@@ -207,8 +254,9 @@ export function buildInsertBodySnippet(
 
   const bodyCst = node.body.$cstNode;
   const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+  const insertAt = findInsertOffsetBeforeChildren(node, fullText, closingBrace);
   const snippet = snippetFn(innerIndent);
-  return { offset: closingBrace, end: closingBrace, newText: snippet };
+  return { offset: insertAt, end: insertAt, newText: snippet };
 }
 
 /**
