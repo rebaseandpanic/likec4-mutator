@@ -226,7 +226,7 @@ likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db -
 
 ### apply
 
-Apply a batch of mutations from a JSON file. This is the most powerful command — supports all 6 operations with all properties.
+Apply a batch of mutations from a JSON file. This is the most powerful command — supports all 7 operations with all properties.
 
 ```bash
 # Write to a separate output directory
