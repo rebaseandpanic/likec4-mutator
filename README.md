@@ -218,7 +218,7 @@ likec4-mutator remove-element --dir ./c4 --fqn app.api --output ./out
 
 ### remove-relationship
 
-Remove a relationship matched by exact source and target identifiers.
+Remove a relationship matched by source and target FQN (searched across all files).
 
 ```bash
 likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db --output ./out
@@ -378,7 +378,7 @@ Adds a relationship between two elements. All fields except `op`, `source`, `tar
 
 #### removeRelationship
 
-Removes a relationship between two elements (matched by exact source and target FQN).
+Removes a relationship between two elements (matched by absolute source and target FQN, across all files; the reference text as written is accepted as a fallback).
 
 ```json
 {
