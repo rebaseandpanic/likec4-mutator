@@ -158,3 +158,33 @@ describe('replacing links keeps properties declared between them', () => {
     expect(m.getElement('a')?.links).toEqual([{ url: './new.md' }]);
   });
 });
+
+// ===========================================================================
+// Updating the title changes the effective title
+// ===========================================================================
+
+describe('updateElement title changes the title declared in the body', () => {
+  it.each([
+    { name: 'body title only', model: "model {\n  a = service {\n    title 'Existing'\n  }\n}\n" },
+    {
+      name: 'inline and body title',
+      model: "model {\n  a = service 'Existing' {\n    title 'Existing'\n  }\n}\n",
+    },
+    { name: 'body title on the brace line', model: "model { a = service { title 'Existing' } }\n" },
+  ])('$name', ({ model }) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + model });
+    m.updateElement('a', { title: 'Changed' });
+    expect(m.validate()).toEqual([]);
+    expect(m.getElement('a')?.title).toBe('Changed');
+    expect(m.serialize()['m.c4']).not.toContain('Existing');
+  });
+
+  it('does not add a second, inline title when the title lives in the body', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'm.c4': SPEC + "model {\n  a = service {\n    title 'Existing'\n  }\n}\n",
+    });
+    m.updateElement('a', { title: 'Changed' });
+    expect(lines(m)).toContain('a = service {');
+    expect(lines(m)).toContain("title 'Changed'");
+  });
+});

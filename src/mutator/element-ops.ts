@@ -170,12 +170,13 @@ export function updateElementEdit(
   const node = entry.node;
   const edits: TextEdit[] = [];
 
-  // Handle title update — title lives as the first positional prop in the
-  // inline `name = kind 'title'` syntax.  We need to find its CST position
-  // by scanning the element's own CST token stream.
+  // Handle title update.  A title can be declared inline
+  // (`name = kind 'title'`) and/or as a `title '...'` body property.  Every
+  // existing declaration is rewritten so the effective title is the new one
+  // whichever declaration takes precedence; a new inline title is only added
+  // when no declaration exists at all.
   if (props.title !== undefined) {
-    const titleEdit = buildTitleEdit(node, props.title);
-    if (titleEdit) edits.push(titleEdit);
+    edits.push(...buildTitleEdits(node, props.title));
   }
 
   // For body-targeting fields, when the element has no body and the patch
@@ -327,30 +328,52 @@ export function removeElementEdit(doc: ParsedDocument, fqn: string): TextEdit {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a TextEdit that replaces the inline title string of an element.
- * Returns null if no title token can be located.
+ * Build the TextEdits that set the title of an element.
  *
- * Uses the kind reference's CST node directly as an anchor so the lookup is
- * not confused when `name === kindText` (a legal — if unusual — case in the
- * grammar).
+ * - The inline title string (`name = kind 'title'`) is replaced when present.
+ * - The value of a `title '...'` body property is replaced when present.
+ * - When neither exists, an inline title is inserted right after the kind.
+ *
+ * Uses the kind reference's CST node directly as an anchor so the inline
+ * lookup is not confused when `name === kindText` (a legal — if unusual —
+ * case in the grammar).
  */
-function buildTitleEdit(node: AstElementNode, newTitle: string): TextEdit | null {
-  const cst = node.$cstNode;
-  if (!cst) return null;
+function buildTitleEdits(node: AstElementNode, newTitle: string): TextEdit[] {
+  const newText = `'${escapeString(newTitle)}'`;
+  const edits: TextEdit[] = [];
+
   const kindCst = node.kind?.$refNode;
-  if (!kindCst) return null;
-  const kindEnd = kindCst.end;
-  const leaves = collectLeaves(cst);
-  // Look for the next quoted string leaf after kindEnd (and before any `{`).
-  for (const leaf of leaves) {
-    if (leaf.offset < kindEnd) continue;
-    if (leaf.text === '{') break;
-    if (leaf.text.startsWith("'") || leaf.text.startsWith('"')) {
-      return { offset: leaf.offset, end: leaf.end, newText: `'${escapeString(newTitle)}'` };
+  let inlineInsertAt: number | null = null;
+  if (node.$cstNode && kindCst) {
+    const kindEnd = kindCst.end;
+    inlineInsertAt = kindEnd;
+    // Look for the next quoted string leaf after kindEnd (and before any `{`).
+    for (const leaf of collectLeaves(node.$cstNode)) {
+      if (leaf.offset < kindEnd) continue;
+      if (leaf.text === '{') break;
+      if (leaf.text.startsWith("'") || leaf.text.startsWith('"')) {
+        edits.push({ offset: leaf.offset, end: leaf.end, newText });
+        inlineInsertAt = null;
+        break;
+      }
     }
   }
-  // No existing title — insert right after the kind CST node.
-  return { offset: kindEnd, end: kindEnd, newText: ` '${escapeString(newTitle)}'` };
+
+  const bodyTitle = node.body?.props?.find(
+    (p) => p.$type === 'ElementStringProperty' && p.key === 'title',
+  );
+  const bodyValue = bodyTitle?.value;
+  const bodyValueCst =
+    bodyValue && typeof bodyValue === 'object'
+      ? (bodyValue as { $cstNode?: { offset: number; end: number } }).$cstNode
+      : undefined;
+  if (bodyValueCst) {
+    edits.push({ offset: bodyValueCst.offset, end: bodyValueCst.end, newText });
+  } else if (inlineInsertAt !== null) {
+    // No existing title anywhere — insert an inline one after the kind.
+    edits.push({ offset: inlineInsertAt, end: inlineInsertAt, newText: ` ${newText}` });
+  }
+  return edits;
 }
 
 /**
