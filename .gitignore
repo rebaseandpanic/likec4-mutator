@@ -384,3 +384,6 @@ dist/
 CLAUDE.md
 CLAUDE_*.md
 DEPENDENCY_UPDATE_PLAN.md
+
+# Local code review reports
+docs/coderev/
