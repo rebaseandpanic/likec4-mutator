@@ -8,6 +8,7 @@
  */
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
+import { WorkspaceIndex } from '../query/workspace-index.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, type TextEdit } from './text-edit.js';
@@ -23,7 +24,7 @@ import {
   addRelationshipEdit,
   removeRelationshipEdit,
   updateRelationshipEdit,
-  matchRelations,
+  findMatchingRelations,
   formatNotFoundError,
   type UpdateRelationshipMatcher,
   type UpdateRelationshipPatch,
@@ -61,12 +62,15 @@ export class LikeC4Mutator {
   private documents: Map<string, ParsedDocument>;
   /** filename -> latest C4Query */
   private queries: Map<string, C4Query>;
+  /** Element index over all documents, used to resolve relationship endpoints */
+  private workspace: WorkspaceIndex;
 
   constructor(files: Record<string, string>) {
     this.parser = new C4Parser();
     this.sources = new Map(Object.entries(files));
     this.documents = new Map();
     this.queries = new Map();
+    this.workspace = new WorkspaceIndex([]);
     this.parseAll();
   }
 
@@ -289,29 +293,32 @@ export class LikeC4Mutator {
    * @param patch   - Update payload (at least one field must be specified)
    */
   updateRelationship(matcher: UpdateRelationshipMatcher, patch: UpdateRelationshipPatch): void {
-    // First locate the file (or files) where matches live.  Each file is
-    // scanned with the shared `matchRelations` helper (the same one
-    // updateRelationshipEdit uses internally).
-    const matches: Array<{ filename: string }> = [];
+    // Locate the file (or files) where matches live.  Matches by absolute FQN
+    // take precedence over matches by reference text as written, across all
+    // files — the same precedence updateRelationshipEdit applies per file.
+    const byFqn: string[] = [];
+    const byText: string[] = [];
     for (const [filename, doc] of this.documents) {
-      const fileMatches = matchRelations(doc.ast, matcher).length;
-      for (let i = 0; i < fileMatches; i++) matches.push({ filename });
+      const found = findMatchingRelations(doc.ast, matcher, this.workspace);
+      for (let i = 0; i < found.byFqn.length; i++) byFqn.push(filename);
+      for (let i = 0; i < found.byText.length; i++) byText.push(filename);
     }
+    const matches = byFqn.length > 0 ? byFqn : byText;
     if (matches.length === 0) {
       throw new Error(formatNotFoundError(matcher));
     }
     if (matches.length > 1) {
-      const fileList = [...new Set(matches.map((m) => m.filename))].join(', ');
+      const fileList = [...new Set(matches)].join(', ');
       throw new Error(
         `Multiple relationships match (${matches.length} found across files: ${fileList}). ` +
           `Specify matchKind and/or matchTitle to disambiguate.`,
       );
     }
 
-    const { filename } = matches[0];
+    const filename = matches[0];
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    const edits = updateRelationshipEdit(doc, matcher, patch);
+    const edits = updateRelationshipEdit(doc, matcher, patch, this.workspace);
     if (edits.length > 0) {
       this.applyEditsToFile(filename, edits);
     }
@@ -320,8 +327,12 @@ export class LikeC4Mutator {
   /**
    * Remove a relationship matching the given source and target identifiers.
    *
-   * @param source - Source FQN or local name
-   * @param target - Target FQN or local name
+   * Endpoints are compared as absolute FQNs (`app.api` matches `api` written
+   * inside `app { ... }`).  When no relationship matches by FQN, the reference
+   * text as written in the source is compared instead.
+   *
+   * @param source - Source FQN (or reference text as written)
+   * @param target - Target FQN (or reference text as written)
    */
   removeRelationship(source: string, target: string): void {
     const filename = this.findFileWithModel();
@@ -329,7 +340,7 @@ export class LikeC4Mutator {
 
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    const edit = removeRelationshipEdit(doc, source, target);
+    const edit = removeRelationshipEdit(doc, source, target, this.workspace);
     this.applyEdit(filename, edit);
   }
 
@@ -395,16 +406,23 @@ export class LikeC4Mutator {
 
   private parseAll(): void {
     for (const [filename, source] of this.sources) {
-      this.reparse(filename, source);
+      this.documents.set(filename, this.parser.parse(source));
     }
+    this.rebuildQueries();
   }
 
-  private reparse(filename: string, source?: string): void {
-    const text = source ?? this.sources.get(filename);
-    if (text === undefined) throw new Error(`No source registered for '${filename}'`);
-    const doc = this.parser.parse(text);
-    this.documents.set(filename, doc);
-    this.queries.set(filename, new C4Query(doc.ast));
+  /**
+   * Rebuild the workspace index and every per-file query.  A change in one
+   * file can change how references in other files resolve, so all queries
+   * are rebuilt together.
+   */
+  private rebuildQueries(): void {
+    const docs = [...this.documents.values()];
+    this.workspace = new WorkspaceIndex(docs.map((d) => d.ast));
+    this.queries = new Map();
+    for (const [filename, doc] of this.documents) {
+      this.queries.set(filename, new C4Query(doc.ast, this.workspace));
+    }
   }
 
   private findFileContaining(fqn: string): string | null {
@@ -466,7 +484,7 @@ export class LikeC4Mutator {
     }
     this.sources.set(filename, updated);
     this.documents.set(filename, doc);
-    this.queries.set(filename, new C4Query(doc.ast));
+    this.rebuildQueries();
   }
 }
 

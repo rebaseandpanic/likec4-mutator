@@ -35,14 +35,12 @@ describe('LikeC4Mutator.removeRelationship', () => {
   it('should remove an existing relationship so it is no longer queryable', () => {
     const m = makeMutator();
 
-    // The fixture has api -> db nested inside app — the source FQN as stored
-    // by the parser is the $refText of the FqnRef, which is 'api' (not 'app.api').
-    // The target is 'db' (not 'app.db').
+    // The fixture has `api -> db` nested inside app; it is addressed here by
+    // the reference text as written and reported as app.api -> app.db.
+    expect(m.getRelationships({ sourceFqn: 'app.api', targetFqn: 'app.db' })).toHaveLength(1);
     m.removeRelationship('api', 'db');
 
-    const rels = m.getRelationships();
-    const removed = rels.find((r) => r.sourceFqn === 'api' && r.targetFqn === 'db');
-    expect(removed).toBeUndefined();
+    expect(m.getRelationships({ sourceFqn: 'app.api', targetFqn: 'app.db' })).toHaveLength(0);
   });
 
   it('should throw for a non-existent relationship', () => {
@@ -184,17 +182,15 @@ views {
 `;
     const doc = parseAndVerify(source);
 
-    // Remove the api -> db relationship.  Both elements have one, so after the
-    // edit exactly one should remain (the first match is consumed).
-    const edit = removeRelationshipEdit(doc, 'api', 'db');
+    // Both systems contain `api -> db`; addressing app's by FQN must remove
+    // exactly that one and leave backup's in place.
+    const edit = removeRelationshipEdit(doc, 'app.api', 'app.db');
     const updated = applyEdits(source, [edit]);
     const updatedDoc = parseAndVerify(updated);
     const query = new C4Query(updatedDoc.ast);
 
-    const rels = query.getRelationships();
-    // One of the two 'api -> db' relationships has been removed; one survives
-    const remaining = rels.filter((r) => r.sourceFqn === 'api' && r.targetFqn === 'db');
-    expect(remaining).toHaveLength(1);
+    const rels = query.getRelationships().map((r) => [r.sourceFqn, r.targetFqn, r.title]);
+    expect(rels).toEqual([['backup.api', 'backup.db', 'internal']]);
   });
 
   it('should throw when the relationship does not exist', () => {

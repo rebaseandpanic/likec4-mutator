@@ -1,6 +1,7 @@
 export { C4Parser } from './parser/parser.js';
 export { C4Query } from './query/query.js';
 export { buildFqnIndex, resolveFqnRef } from './query/fqn.js';
+export { WorkspaceIndex } from './query/workspace-index.js';
 export type { ParsedDocument, ParseError } from './parser/types.js';
 export type { ElementInfo, RelationshipInfo, SpecificationInfo } from './query/types.js';
 

@@ -127,11 +127,11 @@ describe('C4Query', () => {
     });
 
     it('should resolve relationship source FQN from implicit context', () => {
-      // api -> db is nested inside app body — source should be resolved as 'api' (FqnRef.$refText)
+      // api -> db is nested inside app body — LikeC4 links `api` to the sibling app.api
       const rels = query.getRelationships();
       const rel = rels.find((r) => r.targetFqn.includes('db'));
       expect(rel).toBeDefined();
-      expect(rel!.sourceFqn).toBe('api');
+      expect(rel!.sourceFqn).toBe('app.api');
     });
 
     it('should get specification element kinds', () => {

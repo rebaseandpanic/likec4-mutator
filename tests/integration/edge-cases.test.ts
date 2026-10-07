@@ -639,15 +639,13 @@ describe('getRelationships filtering', () => {
   });
 
   it('should filter relationships by source FQN', () => {
-    // NOTE: The relationship `api -> db` written inside `app { }` is stored
-    // with sourceFqn 'api' (the literal reference text), NOT 'app.api'.
-    // resolveFqnRef returns the textual form from the source, not the absolute FQN.
-    // This is documented v0.1 behaviour.
+    // The relationship `api -> db` written inside `app { }` is reported with
+    // the absolute FQN LikeC4 links it to: 'app.api'.
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MINIMAL_FULL });
-    const rels = mutator.getRelationships({ sourceFqn: 'api' });
+    const rels = mutator.getRelationships({ sourceFqn: 'app.api' });
     expect(rels.length).toBeGreaterThan(0);
     for (const r of rels) {
-      expect(r.sourceFqn).toBe('api');
+      expect(r.sourceFqn).toBe('app.api');
     }
   });
 

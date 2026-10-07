@@ -623,19 +623,12 @@ describe('addElement return value', () => {
 describe('removeElement return value', () => {
   it('should return relationships that referenced the removed element', () => {
     const m = makeMutator();
-    // The fixture has `api -> db 'reads/writes'` inside `app { }`.
-    // The query layer resolves source/target refs as written (local names),
-    // and the relationship matches because `db` matches element FQN `app.db`
-    // via the prefix check or direct FQN match in removeElement.
-    // First, check what the relationships actually look like:
+    // The fixture has `api -> db 'reads/writes'` inside `app { }`; add a
+    // model-level relationship written with full FQNs as well.
     const rels = m.getRelationships();
     const dbRel = rels.find((r) => r.title === 'reads/writes');
     expect(dbRel).toBeDefined();
 
-    // removeElement('app.api') should capture rels where sourceFqn or targetFqn
-    // matches 'app.api' or starts with 'app.api.'. The local ref 'api' won't
-    // match, so let's test with a setup that uses model-level FQN relationships.
-    // Instead, we add a model-level relationship with full FQNs:
     m.addRelationship('app.api', 'app.db', 'model-level rel');
     const result = m.removeElement('app.db');
     // The model-level relationship uses FQNs, so it IS captured
