@@ -223,3 +223,18 @@ describe('C4Query', () => {
     });
   });
 });
+
+// LikeC4 (language-server `parseElement`) takes the inline title when one is
+// written and falls back to a body `title` only when there is none.
+describe('element title precedence', () => {
+  const parse = (model: string) =>
+    new C4Query(new C4Parser().parse(`specification { element service }\nmodel {\n${model}\n}\n`).ast);
+
+  it.each([
+    { name: 'inline and body title', model: "  a = service 'Inline' {\n    title 'Body'\n  }", title: 'Inline' },
+    { name: 'body title only', model: "  a = service {\n    title 'Body'\n  }", title: 'Body' },
+    { name: 'inline title only', model: "  a = service 'Inline'", title: 'Inline' },
+  ])('$name', ({ model, title }) => {
+    expect(parse(model).getElement('a')?.title).toBe(title);
+  });
+});

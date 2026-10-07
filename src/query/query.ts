@@ -173,8 +173,9 @@ export class C4Query {
       }
     }
 
-    // Positional props: first string is the title (e.g. `app = system 'My App'`)
-    if (!title && Array.isArray(node.props) && node.props.length > 0) {
+    // Positional props: first string is the inline title (e.g. `app = system 'My App'`).
+    // LikeC4 prefers it over a body `title`, which is only a fallback.
+    if (Array.isArray(node.props) && node.props.length > 0) {
       const first = node.props[0];
       if (typeof first === 'string') {
         title = first;
