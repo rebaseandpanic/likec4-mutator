@@ -238,7 +238,7 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --in-place
 
 ### Batch mutations format
 
-The JSON file contains a `mutations` array. Each mutation has an `op` field and operation-specific parameters.
+The JSON file contains a `mutations` array. Each mutation has an `op` field and operation-specific parameters. Fields not listed for an op below (including inside `style` and `links` entries), and top-level keys other than `mutations`, are rejected before any `.c4` file is touched, so a misspelled field such as `tag` fails the command instead of being silently ignored.
 
 The whole file is validated before any mutation is applied: a missing required field or a value of the wrong type (e.g. `"tags": "internal"` instead of `["internal"]`) aborts with exit code 1 and an error naming its location, e.g. `mutations[2].links[0].url`. Nothing is written in that case.
 
