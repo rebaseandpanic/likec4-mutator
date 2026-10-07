@@ -10,6 +10,7 @@ import {
   generateRelationshipStyleBlock,
   generateMetadataBlock,
   escapeString,
+  formatTag,
   type RelationshipStyle,
 } from './codegen.js';
 import {
@@ -448,8 +449,7 @@ function buildRelationReplaceTagsEdit(
   tags: string[],
 ): TextEdit | null {
   const innerIndent = indent + '  ';
-  const cleaned = tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
-  const tagLines = cleaned.map((t) => `${innerIndent}#${t}`).join('\n');
+  const tagLines = tags.map((t) => `${innerIndent}${formatTag(t)}`).join('\n');
 
   const existingTagsCst = rel.body?.tags?.$cstNode;
 
@@ -575,8 +575,7 @@ function buildCombinedBodyInsert(
   let body = '';
   // Tags first (grammar requires tags before string props).
   if (patch.tags && patch.tags.length > 0) {
-    const cleaned = patch.tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
-    body += cleaned.map((t) => `${innerIndent}#${t}\n`).join('');
+    body += patch.tags.map((t) => `${innerIndent}${formatTag(t)}\n`).join('');
   }
   if (patch.description !== undefined) {
     body += `${innerIndent}description '${escapeString(patch.description)}'\n`;

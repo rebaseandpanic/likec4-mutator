@@ -97,11 +97,9 @@ export function generateElement(opts: GenerateElementOpts): string {
   if (hasBody) {
     result += ' {\n';
     // Tags come first, each on its own line with a # prefix.
-    // Strip any leading '#' the caller may have included to avoid '##tag'.
     if (tags && tags.length > 0) {
       for (const tag of tags) {
-        const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
-        result += `${innerIndent}#${cleanTag}\n`;
+        result += `${innerIndent}${formatTag(tag)}\n`;
       }
     }
     if (summary) result += `${innerIndent}summary '${escapeString(summary)}'\n`;
@@ -215,8 +213,7 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
 
     if (tags) {
       for (const tag of tags) {
-        const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
-        result += `${innerIndent}#${cleanTag}\n`;
+        result += `${innerIndent}${formatTag(tag)}\n`;
       }
     }
 
@@ -322,6 +319,29 @@ export function generateView(opts: GenerateViewOpts): string {
  */
 export function escapeString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, ' ').replace(/\t/g, ' ');
+}
+
+/**
+ * LikeC4 `IdTerminal` — the token a tag name must form (`TagRef: '#' Id`).
+ * Grammar keywords accepted by `Id` (e.g. `element`) match it too.
+ */
+const TAG_NAME = /^(?:[a-zA-Z]|_+[a-zA-Z0-9])[-\w]*$/;
+
+/**
+ * Format a tag reference as `#name`.  One leading `#` supplied by the caller is
+ * stripped (so both `'ok'` and `'#ok'` produce `#ok`).
+ *
+ * @throws {Error} when the name is not a valid LikeC4 identifier — it would
+ *   otherwise not be a single token and its tail would become part of the model
+ */
+export function formatTag(tag: string): string {
+  const name = tag.startsWith('#') ? tag.slice(1) : tag;
+  if (!TAG_NAME.test(name)) {
+    throw new Error(
+      `Invalid tag ${JSON.stringify(tag)}: a tag name must start with a letter (or underscores followed by a letter or digit) and contain only letters, digits, '_' or '-'`,
+    );
+  }
+  return `#${name}`;
 }
 
 /**
