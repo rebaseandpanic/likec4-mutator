@@ -4,7 +4,7 @@
  * operate on offsets, raw text, and minimal AST shapes.
  */
 import type { TextEdit } from './text-edit.js';
-import { escapeString } from './codegen.js';
+import { escapeString, formatLinkUrl } from './codegen.js';
 
 /**
  * Minimal shape of a Langium CST node: composite nodes carry `content`,
@@ -314,10 +314,9 @@ export function buildReplaceLinksEdit(
   indent: string,
   links: Array<{ url: string; label?: string }>,
 ): TextEdit[] {
-  const sanitizeUrl = (url: string) => url.replace(/[\n\r']/g, '');
   const linkText = (lnk: { url: string; label?: string }) => {
     const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-    return `link ${sanitizeUrl(lnk.url)}${escaped}`;
+    return `link ${formatLinkUrl(lnk.url)}${escaped}`;
   };
 
   // Collect existing LinkProperty CST nodes in document order.

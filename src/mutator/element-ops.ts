@@ -14,6 +14,8 @@ import {
   generateStyleBlock,
   generateMetadataBlock,
   escapeString,
+  formatLinkUrl,
+  formatTag,
   type ElementStyle,
 } from './codegen.js';
 import {
@@ -29,6 +31,7 @@ import {
 } from './cst-helpers.js';
 import {
   buildReplaceMetadataEditOnNode,
+  collectMetadataUpserts,
   type MetadataPatch,
 } from './metadata-ops.js';
 
@@ -259,8 +262,7 @@ function buildCombinedBodyInsertElement(
 
   // Tags must come first per grammar.
   if (patch.tags && patch.tags.length > 0) {
-    const cleaned = patch.tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
-    body += cleaned.map((t) => `${innerIndent}#${t}\n`).join('');
+    body += patch.tags.map((t) => `${innerIndent}${formatTag(t)}\n`).join('');
   }
   if (patch.summary !== undefined) {
     body += `${innerIndent}summary '${escapeString(patch.summary)}'\n`;
@@ -272,20 +274,16 @@ function buildCombinedBodyInsertElement(
     body += `${innerIndent}technology '${escapeString(patch.technology)}'\n`;
   }
   if (patch.links && patch.links.length > 0) {
-    const sanitizeUrl = (u: string) => u.replace(/[\n\r']/g, '');
     for (const lnk of patch.links) {
       const escapedLabel = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-      body += `${innerIndent}link ${sanitizeUrl(lnk.url)}${escapedLabel}\n`;
+      body += `${innerIndent}link ${formatLinkUrl(lnk.url)}${escapedLabel}\n`;
     }
   }
   if (patch.style && Object.keys(patch.style).length > 0) {
     body += generateStyleBlock(patch.style, innerIndent);
   }
   if (patch.metadata) {
-    const upserts: Record<string, string | string[]> = {};
-    for (const [k, v] of Object.entries(patch.metadata)) {
-      if (v !== null) upserts[k] = v;
-    }
+    const upserts = collectMetadataUpserts(patch.metadata);
     if (Object.keys(upserts).length > 0) {
       body += generateMetadataBlock(upserts, innerIndent);
     }
@@ -566,8 +564,7 @@ function buildReplaceTagsEdit(
 
   // Build the replacement snippet (without leading newline — that is added by
   // the splice context where appropriate).
-  const cleaned = tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
-  const tagLines = cleaned.map((t) => `${innerIndent}#${t}`).join('\n');
+  const tagLines = tags.map((t) => `${innerIndent}${formatTag(t)}`).join('\n');
 
   // Case 1: no existing tag block.
   if (!existingTagsCst) {

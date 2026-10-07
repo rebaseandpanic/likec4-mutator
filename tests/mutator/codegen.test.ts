@@ -617,15 +617,17 @@ describe('generateElement edge cases', () => {
     expect(result).not.toContain('##already-prefixed');
   });
 
-  it('should handle a link URL that contains spaces — no label', () => {
-    // URLs with spaces are unusual but the codegen emits them verbatim
-    const result = generateElement({
-      indent: '',
-      name: 'svc',
-      kind: 'service',
-      links: [{ url: 'https://example.com/path with spaces' }],
-    });
-    expect(result).toContain('link https://example.com/path with spaces');
+  it('should reject a link URL that contains spaces — no label', () => {
+    // The link URL is an unquoted token: everything after the space would be
+    // parsed as further model content, so the URL must be rejected.
+    expect(() =>
+      generateElement({
+        indent: '',
+        name: 'svc',
+        kind: 'service',
+        links: [{ url: 'https://example.com/path with spaces' }],
+      }),
+    ).toThrow();
   });
 
   it('should escape single quotes in link labels', () => {

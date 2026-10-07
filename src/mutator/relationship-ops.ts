@@ -11,6 +11,8 @@ import {
   generateRelationshipStyleBlock,
   generateMetadataBlock,
   escapeString,
+  formatLinkUrl,
+  formatTag,
   type RelationshipStyle,
 } from './codegen.js';
 import {
@@ -25,6 +27,7 @@ import {
 } from './cst-helpers.js';
 import {
   buildReplaceMetadataEditOnNode,
+  collectMetadataUpserts,
   type MetadataPatch,
 } from './metadata-ops.js';
 
@@ -471,8 +474,7 @@ function buildRelationReplaceTagsEdit(
   tags: string[],
 ): TextEdit | null {
   const innerIndent = indent + '  ';
-  const cleaned = tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
-  const tagLines = cleaned.map((t) => `${innerIndent}#${t}`).join('\n');
+  const tagLines = tags.map((t) => `${innerIndent}${formatTag(t)}`).join('\n');
 
   const existingTagsCst = rel.body?.tags?.$cstNode;
 
@@ -603,8 +605,7 @@ function buildCombinedBodyInsert(
   let body = '';
   // Tags first (grammar requires tags before string props).
   if (patch.tags && patch.tags.length > 0) {
-    const cleaned = patch.tags.map((t) => (t.startsWith('#') ? t.slice(1) : t));
-    body += cleaned.map((t) => `${innerIndent}#${t}\n`).join('');
+    body += patch.tags.map((t) => `${innerIndent}${formatTag(t)}\n`).join('');
   }
   if (patch.description !== undefined) {
     body += `${innerIndent}description '${escapeString(patch.description)}'\n`;
@@ -613,20 +614,16 @@ function buildCombinedBodyInsert(
     body += `${innerIndent}technology '${escapeString(patch.technology)}'\n`;
   }
   if (patch.links && patch.links.length > 0) {
-    const sanitizeUrl = (u: string) => u.replace(/[\n\r']/g, '');
     for (const lnk of patch.links) {
       const escapedLabel = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-      body += `${innerIndent}link ${sanitizeUrl(lnk.url)}${escapedLabel}\n`;
+      body += `${innerIndent}link ${formatLinkUrl(lnk.url)}${escapedLabel}\n`;
     }
   }
   if (patch.style && Object.keys(patch.style).length > 0) {
     body += generateRelationshipStyleBlock(patch.style, innerIndent);
   }
   if (patch.metadata) {
-    const upserts: Record<string, string | string[]> = {};
-    for (const [k, v] of Object.entries(patch.metadata)) {
-      if (v !== null) upserts[k] = v;
-    }
+    const upserts = collectMetadataUpserts(patch.metadata);
     if (Object.keys(upserts).length > 0) {
       body += generateMetadataBlock(upserts, innerIndent);
     }

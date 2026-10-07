@@ -4,8 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSy
 import { resolve, join, relative, extname, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
 import { LikeC4Mutator } from './mutator/mutator.js';
-import type { ElementStyle, RelationshipStyle } from './mutator/mutator.js';
-import type { MetadataPatch } from './mutator/metadata-ops.js';
+import { parseMutationsFile } from './mutations-file.js';
 
 const _require = createRequire(import.meta.url);
 const pkg = _require('../package.json') as { version: string };
@@ -67,102 +66,6 @@ function writeOutput(mutator: LikeC4Mutator, outputDir: string) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Mutation operation types for the `apply` command
-// ---------------------------------------------------------------------------
-
-interface AddElementMutation {
-  op: 'addElement';
-  parent: string;
-  kind: string;
-  id: string;
-  title: string;
-  summary?: string;
-  description?: string;
-  technology?: string;
-  tags?: string[];
-  links?: Array<{ url: string; label?: string }>;
-  style?: ElementStyle;
-  metadata?: Record<string, string | string[]>;
-}
-
-interface AddRelationshipMutation {
-  op: 'addRelationship';
-  source: string;
-  target: string;
-  label?: string;
-  description?: string;
-  technology?: string;
-  tags?: string[];
-  links?: Array<{ url: string; label?: string }>;
-  metadata?: Record<string, string | string[]>;
-  style?: RelationshipStyle;
-}
-
-interface AddViewMutation {
-  op: 'addView';
-  id: string;
-  type: 'element' | 'dynamic' | 'deployment';
-  target?: string;
-  title?: string;
-}
-
-interface UpdateElementMutation {
-  op: 'updateElement';
-  fqn: string;
-  title?: string;
-  summary?: string;
-  description?: string;
-  technology?: string;
-  tags?: string[];
-  links?: Array<{ url: string; label?: string }>;
-  style?: ElementStyle;
-  metadata?: MetadataPatch;
-}
-
-interface UpdateRelationshipMutation {
-  op: 'updateRelationship';
-  source: string;
-  target: string;
-  matchKind?: string;
-  matchTitle?: string;
-  label?: string;
-  description?: string;
-  technology?: string;
-  tags?: string[];
-  links?: Array<{ url: string; label?: string }>;
-  metadata?: MetadataPatch;
-  style?: RelationshipStyle;
-}
-
-interface RemoveElementMutation {
-  op: 'removeElement';
-  fqn: string;
-}
-
-interface RemoveRelationshipMutation {
-  op: 'removeRelationship';
-  source: string;
-  target: string;
-}
-
-type Mutation =
-  | AddElementMutation
-  | AddRelationshipMutation
-  | AddViewMutation
-  | UpdateElementMutation
-  | UpdateRelationshipMutation
-  | RemoveElementMutation
-  | RemoveRelationshipMutation;
-
-interface MutationsFile {
-  mutations: Mutation[];
-}
-
-/**
- * Exhaustive switch helper.  TypeScript will raise a compile-time error if a
- * new `Mutation` variant is added without a corresponding `case` in the switch.
- */
 function assertNever(x: never): never {
   throw new Error(`Unhandled mutation op: ${(x as { op: string }).op}`);
 }
@@ -513,82 +416,8 @@ program
     try {
       // Load and parse mutations file
       const mutationsRaw = readFileSync(resolve(opts.mutations), 'utf-8');
-      const mutationsFile = JSON.parse(mutationsRaw) as MutationsFile;
-
-      if (!mutationsFile || !Array.isArray(mutationsFile.mutations)) {
-        process.stderr.write('Error: mutations file must contain a "mutations" array\n');
-        process.exit(1);
-      }
-
-      for (const m of mutationsFile.mutations) {
-        if (!m || typeof m.op !== 'string') {
-          process.stderr.write('Error: each mutation must have a string "op" field\n');
-          process.exit(1);
-        }
-        // Validate required fields per op before attempting to apply any mutations.
-        switch (m.op) {
-          case 'addElement':
-            if (!m.parent || !m.kind || !m.id || !m.title) {
-              process.stderr.write('Error: addElement requires parent, kind, id, title\n');
-              process.exit(1);
-            }
-            break;
-          case 'updateElement':
-            if (!m.fqn) {
-              process.stderr.write('Error: updateElement requires fqn\n');
-              process.exit(1);
-            }
-            break;
-          case 'removeElement':
-            if (!m.fqn) {
-              process.stderr.write('Error: removeElement requires fqn\n');
-              process.exit(1);
-            }
-            break;
-          case 'addRelationship':
-            if (!m.source || !m.target) {
-              process.stderr.write('Error: addRelationship requires source, target\n');
-              process.exit(1);
-            }
-            break;
-          case 'removeRelationship':
-            if (!m.source || !m.target) {
-              process.stderr.write('Error: removeRelationship requires source, target\n');
-              process.exit(1);
-            }
-            break;
-          case 'updateRelationship': {
-            if (!m.source || !m.target) {
-              process.stderr.write('Error: updateRelationship requires source, target\n');
-              process.exit(1);
-            }
-            const hasUpdate =
-              m.label !== undefined ||
-              m.description !== undefined ||
-              m.technology !== undefined ||
-              m.tags !== undefined ||
-              m.links !== undefined ||
-              m.metadata !== undefined ||
-              m.style !== undefined;
-            if (!hasUpdate) {
-              process.stderr.write(
-                'Error: updateRelationship requires at least one of label, description, technology, tags, links, metadata, style\n',
-              );
-              process.exit(1);
-            }
-            break;
-          }
-          case 'addView':
-            if (!m.id || !m.type) {
-              process.stderr.write('Error: addView requires id, type\n');
-              process.exit(1);
-            }
-            break;
-          default:
-            process.stderr.write(`Error: unknown mutation op '${(m as { op: string }).op}'\n`);
-            process.exit(1);
-        }
-      }
+      // Validate the whole file before touching any .c4 source.
+      const mutationsFile = parseMutationsFile(JSON.parse(mutationsRaw));
 
       // Load source files and create mutator
       const files = loadDirectory(opts.dir);

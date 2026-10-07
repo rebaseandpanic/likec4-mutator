@@ -240,6 +240,8 @@ likec4-mutator apply --dir ./c4 --mutations mutations.json --in-place
 
 The JSON file contains a `mutations` array. Each mutation has an `op` field and operation-specific parameters.
 
+The whole file is validated before any mutation is applied: a missing required field or a value of the wrong type (e.g. `"tags": "internal"` instead of `["internal"]`) aborts with exit code 1 and an error naming its location, e.g. `mutations[2].links[0].url`. Nothing is written in that case.
+
 #### addElement
 
 Adds a new element inside a parent. All fields except `op`, `parent`, `kind`, `id`, `title` are optional.

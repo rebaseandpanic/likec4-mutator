@@ -97,11 +97,9 @@ export function generateElement(opts: GenerateElementOpts): string {
   if (hasBody) {
     result += ' {\n';
     // Tags come first, each on its own line with a # prefix.
-    // Strip any leading '#' the caller may have included to avoid '##tag'.
     if (tags && tags.length > 0) {
       for (const tag of tags) {
-        const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
-        result += `${innerIndent}#${cleanTag}\n`;
+        result += `${innerIndent}${formatTag(tag)}\n`;
       }
     }
     if (summary) result += `${innerIndent}summary '${escapeString(summary)}'\n`;
@@ -110,9 +108,9 @@ export function generateElement(opts: GenerateElementOpts): string {
     if (links && links.length > 0) {
       for (const lnk of links) {
         if (lnk.label) {
-          result += `${innerIndent}link ${sanitizeUrl(lnk.url)} '${escapeString(lnk.label)}'\n`;
+          result += `${innerIndent}link ${formatLinkUrl(lnk.url)} '${escapeString(lnk.label)}'\n`;
         } else {
-          result += `${innerIndent}link ${sanitizeUrl(lnk.url)}\n`;
+          result += `${innerIndent}link ${formatLinkUrl(lnk.url)}\n`;
         }
       }
     }
@@ -215,8 +213,7 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
 
     if (tags) {
       for (const tag of tags) {
-        const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
-        result += `${innerIndent}#${cleanTag}\n`;
+        result += `${innerIndent}${formatTag(tag)}\n`;
       }
     }
 
@@ -226,9 +223,9 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
     if (links) {
       for (const link of links) {
         if (link.label) {
-          result += `${innerIndent}link ${sanitizeUrl(link.url)} '${escapeString(link.label)}'\n`;
+          result += `${innerIndent}link ${formatLinkUrl(link.url)} '${escapeString(link.label)}'\n`;
         } else {
-          result += `${innerIndent}link ${sanitizeUrl(link.url)}\n`;
+          result += `${innerIndent}link ${formatLinkUrl(link.url)}\n`;
         }
       }
     }
@@ -325,12 +322,54 @@ export function escapeString(s: string): string {
 }
 
 /**
- * Strip characters that would break DSL syntax from a URL string.
- * Single quotes and newlines are removed since they cannot appear inside
- * an unquoted URL token in the LikeC4 grammar.
+ * LikeC4 `IdTerminal` — the token a tag name must form (`TagRef: '#' Id`).
+ * Grammar keywords accepted by `Id` (e.g. `element`) match it too.
  */
-function sanitizeUrl(url: string): string {
-  return url.replace(/[\n\r']/g, '');
+const TAG_NAME = /^(?:[a-zA-Z]|_+[a-zA-Z0-9])[-\w]*$/;
+
+/**
+ * Format a tag reference as `#name`.  One leading `#` supplied by the caller is
+ * stripped (so both `'ok'` and `'#ok'` produce `#ok`).
+ *
+ * @throws {Error} when the name is not a valid LikeC4 identifier — it would
+ *   otherwise not be a single token and its tail would become part of the model
+ */
+export function formatTag(tag: string): string {
+  const name = tag.startsWith('#') ? tag.slice(1) : tag;
+  if (!TAG_NAME.test(name)) {
+    throw new Error(
+      `Invalid tag ${JSON.stringify(tag)}: a tag name must start with a letter (or underscores followed by a letter or digit) and contain only letters, digits, '_' or '-'`,
+    );
+  }
+  return `#${name}`;
+}
+
+/**
+ * The LikeC4 `Uri` rule: a link URL is emitted unquoted and must form exactly
+ * one of these terminal tokens.
+ */
+const LINK_URI_TERMINALS = [
+  /^\w+:\/{2}\S+$/, // URI_WITH_SCHEMA  e.g. https://host/path, ssh://host
+  /^\.{0,2}\/[^/]\S+$/, // URI_RELATIVE  e.g. ../src/index.ts, /docs/readme.md
+  /^@[a-zA-Z0-9_-]*\/\S+$/, // URI_ALIAS   e.g. @alias/path
+];
+
+/**
+ * Validate a link URL for emission as an unquoted `link` token and return it
+ * unchanged.
+ *
+ * @throws {Error} when the URL contains whitespace or does not match one of
+ *   the LikeC4 URI forms (`scheme://…`, `/…`, `./…`, `../…`, `@alias/…`) —
+ *   it would otherwise not be a single token and its tail would become part
+ *   of the model
+ */
+export function formatLinkUrl(url: string): string {
+  if (/\s/.test(url) || !LINK_URI_TERMINALS.some((re) => re.test(url))) {
+    throw new Error(
+      `Invalid link URL ${JSON.stringify(url)}: expected 'scheme://…', a relative path ('/…', './…', '../…') or '@alias/…' without whitespace`,
+    );
+  }
+  return url;
 }
 
 /**
