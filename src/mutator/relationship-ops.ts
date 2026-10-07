@@ -14,9 +14,10 @@ import {
   type RelationshipStyle,
 } from './codegen.js';
 import {
-  findClosingBrace,
+  findClosingBraceOffset,
   insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
+  buildRemovalEdit,
   buildInsertBodySnippet,
   buildReplaceLinksEdit,
   collectLeaves,
@@ -58,8 +59,7 @@ export function addRelationshipEdit(
     throw new Error('No model block found in document');
   }
 
-  const modelCst = model.$cstNode;
-  const closingBrace = findClosingBrace(fullText, modelCst.offset, modelCst.end);
+  const closingBrace = findClosingBraceOffset(model.$cstNode);
   const indent = '  ';
 
   const snippet = generateRelationship({
@@ -122,21 +122,8 @@ export function removeRelationNodeEdit(fullText: string, node: unknown): TextEdi
   const cst = (node as RelationAstNode).$cstNode;
   if (!cst) throw new Error('Relationship has no CST node');
 
-  // Expand range to include leading newline + indent and trailing newline
-  let offset = cst.offset;
-  let end = cst.end;
-
-  const prevNewline = fullText.lastIndexOf('\n', offset - 1);
-  if (prevNewline !== -1) {
-    const between = fullText.substring(prevNewline + 1, offset);
-    if (/^\s*$/.test(between)) {
-      offset = prevNewline;
-    }
-  }
-
-  if (fullText[end] === '\n') end += 1;
-
-  return { offset, end, newText: '' };
+  const { offset, end, newText } = buildRemovalEdit(fullText, cst.offset, cst.end);
+  return { offset, end, newText };
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +266,7 @@ export function updateRelationshipEdit(
     if (e) edits.push(e);
   }
   if (patch.links !== undefined) {
-    const e = buildReplaceLinksEdit(rel as BodyOwnerNode, fullText, indent, patch.links);
-    if (e) edits.push(e);
+    edits.push(...buildReplaceLinksEdit(rel as BodyOwnerNode, fullText, indent, patch.links));
   }
   if (patch.metadata !== undefined && Object.keys(patch.metadata).length > 0) {
     const e = buildReplaceMetadataEditOnNode(
@@ -466,8 +452,7 @@ function buildRelationStringPropEdit(
     );
   }
   const innerIndent = indent + '  ';
-  const bodyCst = rel.body.$cstNode;
-  const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+  const closingBrace = findClosingBraceOffset(rel.body.$cstNode);
   return {
     offset: closingBrace,
     end: closingBrace,
@@ -509,14 +494,19 @@ function buildRelationReplaceTagsEdit(
     return { offset: openingBrace + 1, end: openingBrace + 1, newText: '\n' + tagLines + '\n' };
   }
 
+  if (tags.length === 0) {
+    const { offset, end, newText } = buildRemovalEdit(
+      fullText,
+      existingTagsCst.offset,
+      existingTagsCst.end,
+    );
+    return { offset, end, newText };
+  }
   const { offset, end } = expandRangeToConsumeSurroundingNewlines(
     fullText,
     existingTagsCst.offset,
     existingTagsCst.end,
   );
-  if (tags.length === 0) {
-    return { offset, end, newText: '' };
-  }
   return { offset, end, newText: '\n' + tagLines + '\n' };
 }
 

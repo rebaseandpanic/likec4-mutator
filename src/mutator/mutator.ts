@@ -31,6 +31,7 @@ import {
   type UpdateRelationshipPatch,
 } from './relationship-ops.js';
 import { addViewEdit, type GenerateViewOpts } from './view-ops.js';
+import { checkBraceBalance } from './brace-balance.js';
 
 export type { AddElementOpts, UpdateElementPatch };
 export type { ElementStyle };
@@ -587,71 +588,3 @@ function isWithin(
   return inner.offset >= outer.offset && inner.end <= outer.end;
 }
 
-/**
- * Check that `{` and `}` are balanced in `source`, skipping content inside
- * string literals (single-quoted and double-quoted) and `//` line comments.
- *
- * @returns An error message string when braces are unbalanced, or null when they match.
- */
-function checkBraceBalance(source: string): string | null {
-  let depth = 0;
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === "'") {
-      // Skip single-quoted string literal
-      i++;
-      while (i < source.length) {
-        const sc = source[i];
-        if (sc === '\\') {
-          i += 2;
-          continue;
-        }
-        if (sc === "'") {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      // Skip double-quoted string literal
-      i++;
-      while (i < source.length) {
-        const sc = source[i];
-        if (sc === '\\') {
-          i += 2;
-          continue;
-        }
-        if (sc === '"') {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '/' && source[i + 1] === '/') {
-      // Skip line comment — advance to the end of the line
-      i += 2;
-      while (i < source.length && source[i] !== '\n') {
-        i++;
-      }
-      continue;
-    }
-    if (ch === '{') {
-      depth++;
-    } else if (ch === '}') {
-      depth--;
-      if (depth < 0) {
-        return `Brace imbalance: unexpected '}' at offset ${i}`;
-      }
-    }
-    i++;
-  }
-  if (depth !== 0) {
-    return `Brace imbalance: ${depth} unclosed '{' brace(s)`;
-  }
-  return null;
-}

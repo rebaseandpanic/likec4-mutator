@@ -5,6 +5,7 @@ import type { ParsedDocument } from '../parser/types.js';
 import type { TextEdit } from './text-edit.js';
 import type { GenerateViewOpts } from './codegen.js';
 import { generateView } from './codegen.js';
+import { findClosingBraceOffset, insertionPointBeforeBrace } from './cst-helpers.js';
 
 export type { GenerateViewOpts };
 
@@ -24,8 +25,7 @@ export function addViewEdit(doc: ParsedDocument, opts: Omit<GenerateViewOpts, 'i
     throw new Error('No views block found in document');
   }
 
-  const viewsCst = views.$cstNode;
-  const closingBrace = findClosingBrace(fullText, viewsCst.offset, viewsCst.end);
+  const closingBrace = findClosingBraceOffset(views.$cstNode);
   const indent = '  ';
 
   const snippet = generateView({ indent, ...opts });
@@ -34,24 +34,4 @@ export function addViewEdit(doc: ParsedDocument, opts: Omit<GenerateViewOpts, 'i
   const newText = '\n' + snippet + braceLine;
 
   return { offset: insertAt, end: closingBrace + 1, newText };
-}
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
-function findClosingBrace(fullText: string, _start: number, endExclusive: number): number {
-  for (let i = endExclusive - 1; i >= _start; i--) {
-    if (fullText[i] === '}') return i;
-  }
-  throw new Error('Could not find closing brace in views block');
-}
-
-function insertionPointBeforeBrace(fullText: string, closingBraceOffset: number): number {
-  let i = closingBraceOffset - 1;
-  while (i >= 0 && (fullText[i] === ' ' || fullText[i] === '\t')) {
-    i--;
-  }
-  if (i >= 0 && fullText[i] === '\n') return i;
-  return closingBraceOffset;
 }

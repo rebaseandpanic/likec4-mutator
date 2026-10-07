@@ -17,11 +17,12 @@ import {
   type ElementStyle,
 } from './codegen.js';
 import {
-  findClosingBrace,
-  findInsertOffsetBeforeChildren,
+  findClosingBraceOffset,
+  buildInsertBeforeChildrenEdit,
   insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
+  buildRemovalEdit,
   buildReplaceLinksEdit as buildReplaceLinksEditShared,
   collectLeaves,
   type BodyOwnerNode,
@@ -119,10 +120,7 @@ export function addElementEdit(
     if (!parentNode.body?.$cstNode) {
       throw new Error(`Parent element '${parentFqn}' has no body`);
     }
-    const bodyCst = parentNode.body.$cstNode;
-    // The closing } is the last non-whitespace character of the body block.
-    // bodyCst.end points one past the }, so bodyCst.end - 1 is the }.
-    closingBraceOffset = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+    closingBraceOffset = findClosingBraceOffset(parentNode.body.$cstNode);
     // Inner indent = parent element indent + one level
     innerIndent = getNodeIndent(parentNode, fullText) + '  ';
   } else {
@@ -131,8 +129,7 @@ export function addElementEdit(
     if (!model?.$cstNode) {
       throw new Error('No model block found in document');
     }
-    const modelCst = model.$cstNode;
-    closingBraceOffset = findClosingBrace(fullText, modelCst.offset, modelCst.end);
+    closingBraceOffset = findClosingBraceOffset(model.$cstNode);
     innerIndent = '  ';
   }
 
@@ -169,12 +166,13 @@ export function updateElementEdit(
   const node = entry.node;
   const edits: TextEdit[] = [];
 
-  // Handle title update — title lives as the first positional prop in the
-  // inline `name = kind 'title'` syntax.  We need to find its CST position
-  // by scanning the element's own CST token stream.
+  // Handle title update.  A title can be declared inline
+  // (`name = kind 'title'`) and/or as a `title '...'` body property.  Every
+  // existing declaration is rewritten so the effective title is the new one
+  // whichever declaration takes precedence; a new inline title is only added
+  // when no declaration exists at all.
   if (props.title !== undefined) {
-    const titleEdit = buildTitleEdit(node, props.title);
-    if (titleEdit) edits.push(titleEdit);
+    edits.push(...buildTitleEdits(node, props.title));
   }
 
   // For body-targeting fields, when the element has no body and the patch
@@ -219,8 +217,7 @@ export function updateElementEdit(
   // Handle links — replace ALL existing link lines, or insert if none exist.
   // Semantics: updateElement with links = "replace links entirely".
   if (props.links !== undefined) {
-    const linkEdit = buildReplaceLinksEdit(node, fullText, props.links);
-    if (linkEdit) edits.push(linkEdit);
+    edits.push(...buildReplaceLinksEdit(node, fullText, props.links));
   }
 
   // Handle style — MERGE per-field (v0.4.0 BREAKING change): each provided
@@ -301,7 +298,9 @@ function buildCombinedBodyInsertElement(
 }
 
 /**
- * Build a TextEdit that removes an element and the newline(s) surrounding it.
+ * Build a TextEdit that removes an element.  When the element occupies its
+ * lines alone those lines are deleted; otherwise only the element text is cut
+ * out.  Neighbouring lines are never joined (see {@link buildRemovalEdit}).
  *
  * @param doc - Parsed document
  * @param fqn - FQN of the element to remove
@@ -316,27 +315,8 @@ export function removeElementEdit(doc: ParsedDocument, fqn: string): TextEdit {
   const cst = entry.node.$cstNode;
   if (!cst) throw new Error(`Element '${fqn}' has no CST node`);
 
-  // Expand the deletion range to consume the preceding newline (and any
-  // trailing whitespace on the same line) so we do not leave blank lines.
-  let offset = cst.offset;
-  let end = cst.end;
-
-  // Walk back past indentation on the same line to include the leading newline
-  const prevNewline = fullText.lastIndexOf('\n', offset - 1);
-  if (prevNewline !== -1) {
-    // Check that everything between prevNewline+1 and offset is whitespace
-    const between = fullText.substring(prevNewline + 1, offset);
-    if (/^\s*$/.test(between)) {
-      offset = prevNewline; // include the \n before the indent
-    }
-  }
-
-  // Also consume trailing newline after the element
-  if (fullText[end] === '\n') {
-    end += 1;
-  }
-
-  return { offset, end, newText: '' };
+  const { offset, end, newText } = buildRemovalEdit(fullText, cst.offset, cst.end);
+  return { offset, end, newText };
 }
 
 // ---------------------------------------------------------------------------
@@ -344,30 +324,52 @@ export function removeElementEdit(doc: ParsedDocument, fqn: string): TextEdit {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a TextEdit that replaces the inline title string of an element.
- * Returns null if no title token can be located.
+ * Build the TextEdits that set the title of an element.
  *
- * Uses the kind reference's CST node directly as an anchor so the lookup is
- * not confused when `name === kindText` (a legal — if unusual — case in the
- * grammar).
+ * - The inline title string (`name = kind 'title'`) is replaced when present.
+ * - The value of a `title '...'` body property is replaced when present.
+ * - When neither exists, an inline title is inserted right after the kind.
+ *
+ * Uses the kind reference's CST node directly as an anchor so the inline
+ * lookup is not confused when `name === kindText` (a legal — if unusual —
+ * case in the grammar).
  */
-function buildTitleEdit(node: AstElementNode, newTitle: string): TextEdit | null {
-  const cst = node.$cstNode;
-  if (!cst) return null;
+function buildTitleEdits(node: AstElementNode, newTitle: string): TextEdit[] {
+  const newText = `'${escapeString(newTitle)}'`;
+  const edits: TextEdit[] = [];
+
   const kindCst = node.kind?.$refNode;
-  if (!kindCst) return null;
-  const kindEnd = kindCst.end;
-  const leaves = collectLeaves(cst);
-  // Look for the next quoted string leaf after kindEnd (and before any `{`).
-  for (const leaf of leaves) {
-    if (leaf.offset < kindEnd) continue;
-    if (leaf.text === '{') break;
-    if (leaf.text.startsWith("'") || leaf.text.startsWith('"')) {
-      return { offset: leaf.offset, end: leaf.end, newText: `'${escapeString(newTitle)}'` };
+  let inlineInsertAt: number | null = null;
+  if (node.$cstNode && kindCst) {
+    const kindEnd = kindCst.end;
+    inlineInsertAt = kindEnd;
+    // Look for the next quoted string leaf after kindEnd (and before any `{`).
+    for (const leaf of collectLeaves(node.$cstNode)) {
+      if (leaf.offset < kindEnd) continue;
+      if (leaf.text === '{') break;
+      if (leaf.text.startsWith("'") || leaf.text.startsWith('"')) {
+        edits.push({ offset: leaf.offset, end: leaf.end, newText });
+        inlineInsertAt = null;
+        break;
+      }
     }
   }
-  // No existing title — insert right after the kind CST node.
-  return { offset: kindEnd, end: kindEnd, newText: ` '${escapeString(newTitle)}'` };
+
+  const bodyTitle = node.body?.props?.find(
+    (p) => p.$type === 'ElementStringProperty' && p.key === 'title',
+  );
+  const bodyValue = bodyTitle?.value;
+  const bodyValueCst =
+    bodyValue && typeof bodyValue === 'object'
+      ? (bodyValue as { $cstNode?: { offset: number; end: number } }).$cstNode
+      : undefined;
+  if (bodyValueCst) {
+    edits.push({ offset: bodyValueCst.offset, end: bodyValueCst.end, newText });
+  } else if (inlineInsertAt !== null) {
+    // No existing title anywhere — insert an inline one after the kind.
+    edits.push({ offset: inlineInsertAt, end: inlineInsertAt, newText: ` ${newText}` });
+  }
+  return edits;
 }
 
 /**
@@ -416,13 +418,11 @@ function buildBodyPropEdit(
   // Body exists but property is missing — insert before the closing `}`
   // (or, when the body has child elements, before the first child, to keep
   // the LikeC4 grammar `(properties* tags*) children*` ordering valid).
-  const bodyCst = node.body.$cstNode;
-  const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
-  const insertAt = findInsertOffsetBeforeChildren(node, fullText, closingBrace);
+  const closingBrace = findClosingBraceOffset(node.body.$cstNode);
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';
-  const newText = `${innerIndent}${key} ${newValueText}\n`;
-  return { offset: insertAt, end: insertAt, newText };
+  const snippet = `${innerIndent}${key} ${newValueText}\n`;
+  return buildInsertBeforeChildrenEdit(node, fullText, closingBrace, snippet);
 }
 
 /**
@@ -434,7 +434,7 @@ function buildReplaceLinksEdit(
   node: AstElementNode,
   fullText: string,
   links: Array<{ url: string; label?: string }>,
-): TextEdit | null {
+): TextEdit[] {
   const indent = getNodeIndent(node, fullText);
   return buildReplaceLinksEditShared(node, fullText, indent, links);
 }
@@ -592,16 +592,21 @@ function buildReplaceTagsEdit(
     return { offset: insertAt, end: insertAt, newText: '\n' + tagLines + '\n' };
   }
 
-  // Case 2: existing tag block — expand its range to consume surrounding
-  // newlines, then replace.
+  // Case 2: existing tag block.  Clearing deletes it without joining the
+  // neighbouring lines; replacing swaps it for the new tag lines.
+  if (tags.length === 0) {
+    const { offset, end, newText } = buildRemovalEdit(
+      fullText,
+      existingTagsCst.offset,
+      existingTagsCst.end,
+    );
+    return { offset, end, newText };
+  }
   const { offset, end } = expandRangeToConsumeSurroundingNewlines(
     fullText,
     existingTagsCst.offset,
     existingTagsCst.end,
   );
-  if (tags.length === 0) {
-    return { offset, end, newText: '' };
-  }
   return { offset, end, newText: '\n' + tagLines + '\n' };
 }
 
