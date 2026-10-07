@@ -63,6 +63,46 @@ describe('LikeC4Mutator.removeRelationship', () => {
 
     expect(m.validate()).toHaveLength(0);
   });
+
+  it('should remove a relationship declared in a file other than the first model file', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'one.c4': 'specification { element service }\nmodel { a = service }',
+      'two.c4': 'model { b = service\n a -> b }',
+    });
+
+    m.removeRelationship('a', 'b');
+
+    expect(m.getRelationships()).toEqual([]);
+    expect(m.serialize()['two.c4']).not.toContain('a -> b');
+    expect(m.validate()).toEqual([]);
+  });
+
+  it('should prefer an absolute-FQN match in a later file over a reference-text match in an earlier one', () => {
+    // one.c4 has `api -> db` inside sys (sys.api -> sys.db); its reference
+    // text is 'api' -> 'db'.  two.c4 has root-level `api -> db`, whose FQNs
+    // are exactly 'api' -> 'db' — that one must be removed.
+    const m = LikeC4Mutator.fromFiles({
+      'one.c4': `specification { element service }
+model {
+  sys = service {
+    api = service
+    db = service
+    api -> db 'nested'
+  }
+}
+`,
+      'two.c4': `model {
+  api = service
+  db = service
+  api -> db 'root'
+}
+`,
+    });
+
+    m.removeRelationship('api', 'db');
+
+    expect(m.getRelationships().map((r) => r.title)).toEqual(['nested']);
+  });
 });
 
 // ---------------------------------------------------------------------------

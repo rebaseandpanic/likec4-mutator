@@ -314,17 +314,7 @@ export class LikeC4Mutator {
    * @param patch   - Update payload (at least one field must be specified)
    */
   updateRelationship(matcher: UpdateRelationshipMatcher, patch: UpdateRelationshipPatch): void {
-    // Locate the file (or files) where matches live.  Matches by absolute FQN
-    // take precedence over matches by reference text as written, across all
-    // files — the same precedence updateRelationshipEdit applies per file.
-    const byFqn: string[] = [];
-    const byText: string[] = [];
-    for (const [filename, doc] of this.documents) {
-      const found = findMatchingRelations(doc.ast, matcher, this.workspace);
-      for (let i = 0; i < found.byFqn.length; i++) byFqn.push(filename);
-      for (let i = 0; i < found.byText.length; i++) byText.push(filename);
-    }
-    const matches = byFqn.length > 0 ? byFqn : byText;
+    const matches = this.locateRelations(matcher);
     if (matches.length === 0) {
       throw new Error(formatNotFoundError(matcher));
     }
@@ -350,14 +340,16 @@ export class LikeC4Mutator {
    *
    * Endpoints are compared as absolute FQNs (`app.api` matches `api` written
    * inside `app { ... }`).  When no relationship matches by FQN, the reference
-   * text as written in the source is compared instead.
+   * text as written in the source is compared instead.  Every loaded file is
+   * searched; when several relationships match, the first one in file order
+   * is removed.
    *
    * @param source - Source FQN (or reference text as written)
    * @param target - Target FQN (or reference text as written)
    */
   removeRelationship(source: string, target: string): void {
-    const filename = this.findFileWithModel();
-    if (!filename) throw new Error('No file with a model block found');
+    const [filename] = this.locateRelations({ source, target });
+    if (!filename) throw new Error(`Relationship '${source} -> ${target}' not found`);
 
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
@@ -444,6 +436,24 @@ export class LikeC4Mutator {
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));
     }
+  }
+
+  /**
+   * Filenames of the relations matching `matcher`, one entry per match, in
+   * file order.  Matches by absolute FQN in any file take precedence over
+   * matches by reference text as written — the same precedence the per-file
+   * edit builders apply, so the file chosen here holds the relation they
+   * select.
+   */
+  private locateRelations(matcher: UpdateRelationshipMatcher): string[] {
+    const byFqn: string[] = [];
+    const byText: string[] = [];
+    for (const [filename, doc] of this.documents) {
+      const found = findMatchingRelations(doc.ast, matcher, this.workspace);
+      for (let i = 0; i < found.byFqn.length; i++) byFqn.push(filename);
+      for (let i = 0; i < found.byText.length; i++) byText.push(filename);
+    }
+    return byFqn.length > 0 ? byFqn : byText;
   }
 
   /** Source range of an element in `filename`, or null when not found there. */
