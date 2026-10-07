@@ -258,8 +258,7 @@ export function updateRelationshipEdit(
     if (e) edits.push(e);
   }
   if (patch.links !== undefined) {
-    const e = buildReplaceLinksEdit(rel as BodyOwnerNode, fullText, indent, patch.links);
-    if (e) edits.push(e);
+    edits.push(...buildReplaceLinksEdit(rel as BodyOwnerNode, fullText, indent, patch.links));
   }
   if (patch.metadata !== undefined && Object.keys(patch.metadata).length > 0) {
     const e = buildReplaceMetadataEditOnNode(

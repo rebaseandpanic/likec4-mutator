@@ -98,3 +98,63 @@ describe('removal keeps neighbouring lines intact', () => {
     check(m);
   });
 });
+
+// ===========================================================================
+// Replacing links keeps properties declared between them
+// ===========================================================================
+
+describe('replacing links keeps properties declared between them', () => {
+  const MODEL =
+    'model {\n' +
+    '  a = service {\n' +
+    '    link https://one.example\n' +
+    "    description 'keep element'\n" +
+    "    technology 'tech' // keep comment\n" +
+    '    link https://two.example\n' +
+    '  }\n' +
+    '  b = service\n' +
+    '  a -> b {\n' +
+    '    link https://one.example\n' +
+    "    description 'keep relation'\n" +
+    '    link https://two.example\n' +
+    '  }\n' +
+    '}\n';
+
+  it.each([
+    { name: 'new set', links: [{ url: 'https://new.example', label: 'New' }] },
+    { name: 'empty set', links: [] },
+  ])('updateElement with a $name of links', ({ links }) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + MODEL });
+    m.updateElement('a', { links });
+    expect(m.validate()).toEqual([]);
+    const el = m.getElement('a');
+    expect(el?.description).toBe('keep element');
+    expect(el?.technology).toBe('tech');
+    expect(el?.links ?? []).toEqual(links);
+    expect(lines(m)).toContain("technology 'tech' // keep comment");
+  });
+
+  it.each([
+    { name: 'new set', links: [{ url: 'https://new.example' }] },
+    { name: 'empty set', links: [] },
+  ])('updateRelationship with a $name of links', ({ links }) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + MODEL });
+    m.updateRelationship({ source: 'a', target: 'b' }, { links });
+    expect(m.validate()).toEqual([]);
+    const [rel] = m.getRelationships({ sourceFqn: 'a' });
+    expect(rel.description).toBe('keep relation');
+    expect(rel.links ?? []).toEqual(links);
+  });
+
+  it('replaces links declared inline on the same line as other properties', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'm.c4':
+        SPEC +
+        "model {\n  a = service { link ./one.md description 'keep' link ./two.md }\n}\n",
+    });
+    m.updateElement('a', { links: [{ url: './new.md' }] });
+    expect(m.validate()).toEqual([]);
+    expect(m.getElement('a')?.description).toBe('keep');
+    expect(m.getElement('a')?.links).toEqual([{ url: './new.md' }]);
+  });
+});

@@ -220,8 +220,7 @@ export function updateElementEdit(
   // Handle links — replace ALL existing link lines, or insert if none exist.
   // Semantics: updateElement with links = "replace links entirely".
   if (props.links !== undefined) {
-    const linkEdit = buildReplaceLinksEdit(node, fullText, props.links);
-    if (linkEdit) edits.push(linkEdit);
+    edits.push(...buildReplaceLinksEdit(node, fullText, props.links));
   }
 
   // Handle style — MERGE per-field (v0.4.0 BREAKING change): each provided
@@ -418,7 +417,7 @@ function buildReplaceLinksEdit(
   node: AstElementNode,
   fullText: string,
   links: Array<{ url: string; label?: string }>,
-): TextEdit | null {
+): TextEdit[] {
   const indent = getNodeIndent(node, fullText);
   return buildReplaceLinksEditShared(node, fullText, indent, links);
 }

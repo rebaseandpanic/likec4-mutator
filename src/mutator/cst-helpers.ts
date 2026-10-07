@@ -324,11 +324,15 @@ export function buildInsertBodySnippet(
 }
 
 /**
- * Build a TextEdit that replaces all existing `link <url> [label]` lines with
- * a new set of link lines.  When `links` is an empty array all existing link
- * lines are removed.  When there are no existing links and `links` is non-empty
- * the snippet is inserted before the closing `}` (creating a body block when
- * absent).
+ * Build the TextEdits that replace all existing `link <url> [label]`
+ * properties with a new set of links.  When `links` is an empty array all
+ * existing links are removed.  When there are no existing links and `links`
+ * is non-empty the new links are inserted into the body (before any child
+ * elements), creating a body block when absent.
+ *
+ * Each existing link is edited individually: the first one is replaced by
+ * the new links and every other one is deleted.  Anything declared between
+ * two links (other properties, comments) is left untouched.
  *
  * Used by both element-ops and relationship-ops (the LinkProperty AST shape is
  * the same for both element and relation bodies).
@@ -338,18 +342,14 @@ export function buildReplaceLinksEdit(
   fullText: string,
   indent: string,
   links: Array<{ url: string; label?: string }>,
-): TextEdit | null {
-  const innerIndent = indent + '  ';
+): TextEdit[] {
   const sanitizeUrl = (url: string) => url.replace(/[\n\r']/g, '');
-  const newSnippetLines = links
-    .map((lnk) => {
-      const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-      return `${innerIndent}link ${sanitizeUrl(lnk.url)}${escaped}`;
-    })
-    .join('\n');
-  const replacement = links.length === 0 ? '' : '\n' + newSnippetLines + '\n';
+  const linkText = (lnk: { url: string; label?: string }) => {
+    const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
+    return `link ${sanitizeUrl(lnk.url)}${escaped}`;
+  };
 
-  // Collect existing LinkProperty CST nodes.
+  // Collect existing LinkProperty CST nodes in document order.
   const existing: Array<{ offset: number; end: number }> = [];
   for (const prop of node.body?.props ?? []) {
     if (prop.$type === 'LinkProperty' && prop.$cstNode) {
@@ -358,23 +358,35 @@ export function buildReplaceLinksEdit(
   }
 
   if (existing.length === 0) {
-    if (links.length === 0) return null;
-    return buildInsertBodySnippet(node, fullText, indent, (ii) =>
-      links
-        .map((lnk) => {
-          const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-          return `${ii}link ${sanitizeUrl(lnk.url)}${escaped}`;
-        })
-        .join('\n') + '\n',
+    if (links.length === 0) return [];
+    const insert = buildInsertBodySnippet(node, fullText, indent, (ii) =>
+      links.map((lnk) => `${ii}${linkText(lnk)}\n`).join(''),
     );
+    return insert ? [insert] : [];
   }
 
   existing.sort((a, b) => a.offset - b.offset);
-  let start = existing[0].offset;
-  let end = existing[existing.length - 1].end;
-  ({ offset: start, end } = expandRangeToConsumeSurroundingNewlines(fullText, start, end));
+  const removals = existing.map((link) => buildRemovalEdit(fullText, link.offset, link.end));
+  const edits: TextEdit[] = removals.map(({ offset, end, newText }) => ({ offset, end, newText }));
 
-  return { offset: start, end, newText: replacement };
+  if (links.length > 0) {
+    const first = existing[0];
+    const removal = removals[0];
+    if (removal.wholeLines) {
+      // The first link sat on its own line: put the new links on their own
+      // lines in its place, with the same indentation.
+      const lineIndent = /^[ \t]*/.exec(fullText.substring(removal.offset, first.offset))?.[0] ?? '';
+      edits[0] = {
+        offset: removal.offset,
+        end: removal.end,
+        newText: links.map((lnk) => `${lineIndent}${linkText(lnk)}\n`).join(''),
+      };
+    } else {
+      // The first link shared a line with other code: replace it in place.
+      edits[0] = { offset: first.offset, end: first.end, newText: links.map(linkText).join(' ') };
+    }
+  }
+  return edits;
 }
 
 // ---------------------------------------------------------------------------
