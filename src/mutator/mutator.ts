@@ -138,20 +138,32 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Return the specification summary from the first file that has one.
+   * Return the specification of the whole project: the specification blocks
+   * of every file merged, as LikeC4 does.  Names are listed in order of first
+   * declaration (file order, then source order); a name declared more than
+   * once — a duplicate LikeC4 reports — is listed once.
+   *
+   * Returns null when no file declares any element kind, tag or relationship
+   * kind.
    */
   getSpecification(): SpecificationInfo | null {
+    const elementKinds = new Set<string>();
+    const tags = new Set<string>();
+    const relationshipKinds = new Set<string>();
     for (const query of this.queries.values()) {
       const spec = query.getSpecification();
-      if (
-        spec.elementKinds.length > 0 ||
-        spec.tags.length > 0 ||
-        spec.relationshipKinds.length > 0
-      ) {
-        return spec;
-      }
+      for (const kind of spec.elementKinds) elementKinds.add(kind);
+      for (const tag of spec.tags) tags.add(tag);
+      for (const kind of spec.relationshipKinds) relationshipKinds.add(kind);
     }
-    return null;
+    if (elementKinds.size === 0 && tags.size === 0 && relationshipKinds.size === 0) {
+      return null;
+    }
+    return {
+      elementKinds: [...elementKinds],
+      tags: [...tags],
+      relationshipKinds: [...relationshipKinds],
+    };
   }
 
   // ---------------------------------------------------------------------------

@@ -360,3 +360,60 @@ describe('Multi-file reparse round-trip', () => {
     expect(viewsDoc.errors).toHaveLength(0);
   });
 });
+
+describe('Multi-file: getSpecification', () => {
+  // LikeC4 merges the specification blocks of every document of a project
+  // into one name-keyed specification; a name declared twice is a duplicate
+  // (reported by LikeC4) and appears once in the merged view.
+  it('merges the specification blocks of every file', () => {
+    const mutator = LikeC4Mutator.fromFiles({
+      'kinds.c4': `specification {
+  element system
+  element service
+  relationship calls
+}
+`,
+      'more.c4': `specification {
+  element database
+  tag deprecated
+  relationship async
+}
+`,
+      'tags.c4': `specification {
+  tag internal
+}
+model {
+  app = system 'App'
+}
+`,
+    });
+
+    expect(mutator.getSpecification()).toEqual({
+      elementKinds: ['system', 'service', 'database'],
+      tags: ['deprecated', 'internal'],
+      relationshipKinds: ['calls', 'async'],
+    });
+  });
+
+  it('lists a name declared in several files once', () => {
+    const mutator = LikeC4Mutator.fromFiles({
+      'a.c4': `specification {
+  element service
+  tag internal
+}
+`,
+      'b.c4': `specification {
+  element service
+  element queue
+  tag internal
+}
+`,
+    });
+
+    expect(mutator.getSpecification()).toEqual({
+      elementKinds: ['service', 'queue'],
+      tags: ['internal'],
+      relationshipKinds: [],
+    });
+  });
+});
