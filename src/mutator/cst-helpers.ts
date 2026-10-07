@@ -100,14 +100,13 @@ export function insertionPointBeforeBrace(fullText: string, closingBraceOffset: 
 
 /**
  * Expand a `[offset, end)` range to consume the leading newline + indent
- * preceding `offset` and (optionally) the trailing newline at `end`, so that
- * deletion does not leave behind an empty line.
+ * preceding `offset` and (optionally) the trailing newline at `end`.
  *
- * When the call is part of a REPLACEMENT whose new text already brings its
- * own leading and trailing newlines, both surrounding newlines should be
- * consumed (default).  For pure DELETIONS (newText = '') consuming both
- * newlines collapses the previous and next lines together — pass
- * `consumeTrailingNewline: false` to keep the trailing `\n` intact.
+ * Intended for REPLACEMENTS whose new text brings its own leading and
+ * trailing newlines (default: both surrounding newlines are consumed).  Do
+ * not use it for pure deletions — consuming both newlines joins the previous
+ * and the next line, and a `//` comment ending the previous line would then
+ * swallow the next line.  Use {@link buildRemovalEdit} for deletions.
  */
 export function expandRangeToConsumeSurroundingNewlines(
   fullText: string,
@@ -127,6 +126,71 @@ export function expandRangeToConsumeSurroundingNewlines(
     newEnd += 1;
   }
   return { offset: newOffset, end: newEnd };
+}
+
+/** Result of {@link buildRemovalEdit}. */
+export interface RemovalEdit extends TextEdit {
+  /**
+   * True when the removed construct occupied its lines alone and the edit
+   * deletes those whole lines (`offset` is a line start, `end` is just past
+   * the terminating newline).  False when the construct shared a line with
+   * other code and only the construct itself was cut out.
+   */
+  wholeLines: boolean;
+}
+
+/**
+ * Build an edit that deletes the source range `[offset, end)` of a single
+ * construct (element, relation, property, tag block) without disturbing the
+ * surrounding lines.
+ *
+ * - When the construct is alone on its lines (only indentation before it,
+ *   only whitespace and optionally a `//` comment after it on its last line),
+ *   those whole lines are deleted, including the terminating newline.  The
+ *   newline ending the PREVIOUS line is never consumed, so a `//` comment at
+ *   the end of the previous line cannot swallow the next line.  A trailing
+ *   `//` comment on the construct's own last line is deleted with it.
+ * - Otherwise only the construct is cut out, together with the horizontal
+ *   whitespace on one side of it; newlines are left untouched.  When code
+ *   remains on both sides, a single space separates it.
+ */
+export function buildRemovalEdit(fullText: string, offset: number, end: number): RemovalEdit {
+  const lineStart = fullText.lastIndexOf('\n', offset - 1) + 1;
+  const newlineAfter = fullText.indexOf('\n', end);
+  const lineEnd = newlineAfter === -1 ? fullText.length : newlineAfter;
+  const leading = fullText.substring(lineStart, offset);
+  const trailing = fullText.substring(end, lineEnd);
+
+  if (/^[ \t]*$/.test(leading) && /^[ \t]*(\/\/.*)?\r?$/.test(trailing)) {
+    if (newlineAfter !== -1) {
+      return { offset: lineStart, end: newlineAfter + 1, newText: '', wholeLines: true };
+    }
+    // Last line of the file without a terminating newline: drop the newline
+    // that ends the previous line instead (nothing follows, so nothing can
+    // be joined to it).
+    let start = lineStart;
+    if (start > 0) {
+      start--;
+      if (start > 0 && fullText[start - 1] === '\r') start--;
+    }
+    return { offset: start, end: fullText.length, newText: '', wholeLines: true };
+  }
+
+  const isHorizontalWs = (ch: string | undefined) => ch === ' ' || ch === '\t';
+  let start = offset;
+  let stop = end;
+  while (isHorizontalWs(fullText[stop])) stop++;
+  if (stop === end || stop === lineEnd) {
+    // Nothing (or only whitespace up to the newline) follows: take the
+    // whitespace before the construct instead.
+    stop = end;
+    while (start > lineStart && isHorizontalWs(fullText[start - 1])) start--;
+  }
+  const before = start > 0 ? fullText[start - 1] : undefined;
+  const after = stop < fullText.length ? fullText[stop] : undefined;
+  const needsSeparator =
+    before !== undefined && after !== undefined && !/\s/.test(before) && !/\s/.test(after);
+  return { offset: start, end: stop, newText: needsSeparator ? ' ' : '', wholeLines: false };
 }
 
 /**

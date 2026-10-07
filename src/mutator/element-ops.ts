@@ -22,6 +22,7 @@ import {
   insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
+  buildRemovalEdit,
   buildReplaceLinksEdit as buildReplaceLinksEditShared,
   collectLeaves,
   type BodyOwnerNode,
@@ -301,7 +302,9 @@ function buildCombinedBodyInsertElement(
 }
 
 /**
- * Build a TextEdit that removes an element and the newline(s) surrounding it.
+ * Build a TextEdit that removes an element.  When the element occupies its
+ * lines alone those lines are deleted; otherwise only the element text is cut
+ * out.  Neighbouring lines are never joined (see {@link buildRemovalEdit}).
  *
  * @param doc - Parsed document
  * @param fqn - FQN of the element to remove
@@ -316,27 +319,8 @@ export function removeElementEdit(doc: ParsedDocument, fqn: string): TextEdit {
   const cst = entry.node.$cstNode;
   if (!cst) throw new Error(`Element '${fqn}' has no CST node`);
 
-  // Expand the deletion range to consume the preceding newline (and any
-  // trailing whitespace on the same line) so we do not leave blank lines.
-  let offset = cst.offset;
-  let end = cst.end;
-
-  // Walk back past indentation on the same line to include the leading newline
-  const prevNewline = fullText.lastIndexOf('\n', offset - 1);
-  if (prevNewline !== -1) {
-    // Check that everything between prevNewline+1 and offset is whitespace
-    const between = fullText.substring(prevNewline + 1, offset);
-    if (/^\s*$/.test(between)) {
-      offset = prevNewline; // include the \n before the indent
-    }
-  }
-
-  // Also consume trailing newline after the element
-  if (fullText[end] === '\n') {
-    end += 1;
-  }
-
-  return { offset, end, newText: '' };
+  const { offset, end, newText } = buildRemovalEdit(fullText, cst.offset, cst.end);
+  return { offset, end, newText };
 }
 
 // ---------------------------------------------------------------------------
@@ -592,16 +576,21 @@ function buildReplaceTagsEdit(
     return { offset: insertAt, end: insertAt, newText: '\n' + tagLines + '\n' };
   }
 
-  // Case 2: existing tag block — expand its range to consume surrounding
-  // newlines, then replace.
+  // Case 2: existing tag block.  Clearing deletes it without joining the
+  // neighbouring lines; replacing swaps it for the new tag lines.
+  if (tags.length === 0) {
+    const { offset, end, newText } = buildRemovalEdit(
+      fullText,
+      existingTagsCst.offset,
+      existingTagsCst.end,
+    );
+    return { offset, end, newText };
+  }
   const { offset, end } = expandRangeToConsumeSurroundingNewlines(
     fullText,
     existingTagsCst.offset,
     existingTagsCst.end,
   );
-  if (tags.length === 0) {
-    return { offset, end, newText: '' };
-  }
   return { offset, end, newText: '\n' + tagLines + '\n' };
 }
 

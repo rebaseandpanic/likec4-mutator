@@ -16,6 +16,7 @@ import {
   findClosingBrace,
   insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
+  buildRemovalEdit,
   buildInsertBodySnippet,
   buildReplaceLinksEdit,
   collectAllRelations,
@@ -114,21 +115,8 @@ export function removeRelationshipEdit(
   const cst = rel.$cstNode;
   if (!cst) throw new Error(`Relationship '${source} -> ${target}' has no CST node`);
 
-  // Expand range to include leading newline + indent and trailing newline
-  let offset = cst.offset;
-  let end = cst.end;
-
-  const prevNewline = fullText.lastIndexOf('\n', offset - 1);
-  if (prevNewline !== -1) {
-    const between = fullText.substring(prevNewline + 1, offset);
-    if (/^\s*$/.test(between)) {
-      offset = prevNewline;
-    }
-  }
-
-  if (fullText[end] === '\n') end += 1;
-
-  return { offset, end, newText: '' };
+  const { offset, end, newText } = buildRemovalEdit(fullText, cst.offset, cst.end);
+  return { offset, end, newText };
 }
 
 // ---------------------------------------------------------------------------
@@ -470,14 +458,19 @@ function buildRelationReplaceTagsEdit(
     return { offset: openingBrace + 1, end: openingBrace + 1, newText: '\n' + tagLines + '\n' };
   }
 
+  if (tags.length === 0) {
+    const { offset, end, newText } = buildRemovalEdit(
+      fullText,
+      existingTagsCst.offset,
+      existingTagsCst.end,
+    );
+    return { offset, end, newText };
+  }
   const { offset, end } = expandRangeToConsumeSurroundingNewlines(
     fullText,
     existingTagsCst.offset,
     existingTagsCst.end,
   );
-  if (tags.length === 0) {
-    return { offset, end, newText: '' };
-  }
   return { offset, end, newText: '\n' + tagLines + '\n' };
 }
 
