@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0] - 2026-10-07
+
+### Breaking
+- Minimum Node.js is now `>=22.22.3`, matching the requirement of `@likec4/language-server` (`>=22.22.3` since 1.57.0).
+- CLI: passing unexpected positional arguments to a command is now an error (Commander 13+ default), e.g. `likec4-mutator validate --dir ./c4 extra` exits with `error: too many arguments for 'validate'`. Previously such arguments were silently ignored.
+
+### Dependencies
+- `@likec4/language-server` `^1.55.0` → `^1.59.4`. Tests now run against the same version a clean install resolves to.
+- `esbuild` `0.27.4` → `0.28.2`, matching the optional peer pinned by `@likec4/language-server@1.59.4`. A clean install now contains a single esbuild copy instead of two.
+- `commander` `^12.0.0` → `^15.0.0`.
+- Dev: `vitest` `^3` → `^5`, `tsx` → `^4.23.15`, `@types/node` `^25` → `^22` (types now match the minimum supported Node.js).
+- Release workflow runs on Node.js 22.
+
 ## [0.4.2] - 2026-05-03
 
 ### Bugfix
