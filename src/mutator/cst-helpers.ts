@@ -217,40 +217,53 @@ export interface BodyOwnerNode {
 }
 
 /**
- * Compute the offset at which a new property line/block should be spliced into
- * an existing body so that it lands BEFORE any child elements.  The LikeC4
- * grammar requires `(properties* tags*) children*` ordering — inserting
- * properties after children produces a parse error.
+ * Build a TextEdit that splices a new property snippet into an existing body
+ * so that it lands BEFORE any child elements.  The LikeC4 grammar requires
+ * `(properties* tags*) children*` ordering — inserting properties after
+ * children produces a parse error.
  *
- * If the body has no children (or none with a CST node), returns `closingBrace`
- * — the original insertion point, which is correct in that case.
+ * `snippet` is one or more complete, indented lines ending with `\n`.
+ * The returned edit is always a zero-width insertion, so several property
+ * insertions produced by one update compose without overlapping.
  *
- * Otherwise locates the earliest child by CST offset, walks back over leading
- * whitespace, and returns the offset of the line-start `\n` (so the caller can
- * splice text whose final character is `\n`, ending up on its own line above
- * the child with the child's indent intact).  When the child is on the same
- * line as the opening brace (no preceding `\n`), falls back to `closingBrace`.
+ * - No children: the snippet is inserted at `closingBrace` (unchanged
+ *   historical behaviour).
+ * - First child starts its own line: the snippet is inserted at the start
+ *   of that line, above the child.
+ * - First child shares its line with preceding code (e.g. `{ child = x }`):
+ *   the snippet is inserted on new lines between that code and the child;
+ *   the child follows the last inserted property on its line.
  */
-export function findInsertOffsetBeforeChildren(
+export function buildInsertBeforeChildrenEdit(
   node: BodyOwnerNode,
   fullText: string,
   closingBrace: number,
-): number {
+  snippet: string,
+): TextEdit {
+  const atBrace: TextEdit = { offset: closingBrace, end: closingBrace, newText: snippet };
   const children = node.body?.elements;
-  if (!children || children.length === 0) return closingBrace;
+  if (!children || children.length === 0) return atBrace;
 
   let firstOffset = Infinity;
   for (const child of children) {
     const off = child.$cstNode?.offset;
     if (typeof off === 'number' && off < firstOffset) firstOffset = off;
   }
-  if (!Number.isFinite(firstOffset)) return closingBrace;
-  if (firstOffset >= closingBrace) return closingBrace;
+  if (!Number.isFinite(firstOffset) || firstOffset >= closingBrace) return atBrace;
 
   let i = firstOffset;
   while (i > 0 && (fullText[i - 1] === ' ' || fullText[i - 1] === '\t')) i--;
-  if (i > 0 && fullText[i - 1] === '\n') return i;
-  return closingBrace;
+  if (i > 0 && fullText[i - 1] === '\n') {
+    return { offset: i, end: i, newText: snippet };
+  }
+  // Zero-width insertion just before the whitespace preceding the child, so
+  // that several property insertions in one update compose without
+  // overlapping.  The snippet's final newline is dropped: the original
+  // whitespace (or a single space when there is none) separates the last
+  // inserted property from the child.
+  const body = snippet.endsWith('\n') ? snippet.slice(0, -1) : snippet;
+  const separator = i === firstOffset ? ' ' : '';
+  return { offset: i, end: i, newText: '\n' + body + separator };
 }
 
 /**
@@ -278,9 +291,7 @@ export function buildInsertBodySnippet(
   }
 
   const closingBrace = findClosingBraceOffset(node.body.$cstNode);
-  const insertAt = findInsertOffsetBeforeChildren(node, fullText, closingBrace);
-  const snippet = snippetFn(innerIndent);
-  return { offset: insertAt, end: insertAt, newText: snippet };
+  return buildInsertBeforeChildrenEdit(node, fullText, closingBrace, snippetFn(innerIndent));
 }
 
 /**

@@ -138,6 +138,43 @@ describe('updateElement: insert property block before children', () => {
     expect(out).toContain('childA = database');
     expect(out.indexOf('metadata {')).toBeLessThan(out.indexOf('childA = database'));
   });
+
+  test.each([
+    { name: 'description', patch: { description: 'new' }, marker: "description 'new'" },
+    { name: 'metadata', patch: { metadata: { owner: 'new' } }, marker: 'metadata {' },
+    { name: 'style', patch: { style: { color: 'red' as const } }, marker: 'style {' },
+    { name: 'links', patch: { links: [{ url: 'https://example.com' }] }, marker: 'link https://example.com' },
+  ])('$name inserted before a child declared on the same line as the opening brace', ({ patch, marker }) => {
+    const m = LikeC4Mutator.fromFiles({
+      '_spec.c4': SPEC,
+      'model.c4': 'model { app = service { child = service } }\n',
+    });
+    m.updateElement('app', patch);
+    const out = m.serialize()['model.c4'];
+    expect(m.validate()).toEqual([]);
+    expect(m.getElement('app.child')).not.toBeNull();
+    expect(out.indexOf(marker)).toBeGreaterThan(-1);
+    expect(out.indexOf(marker)).toBeLessThan(out.indexOf('child = service'));
+  });
+
+  test.each([
+    { name: 'with whitespace', model: 'model { app = service { child = service } }\n' },
+    { name: 'without whitespace', model: 'model { app = service {child = service} }\n' },
+  ])('several properties at once before a child on the brace line ($name)', ({ model }) => {
+    const m = LikeC4Mutator.fromFiles({ '_spec.c4': SPEC, 'model.c4': model });
+    m.updateElement('app', {
+      description: 'd',
+      technology: 't',
+      metadata: { owner: 'o' },
+      style: { color: 'red' },
+    });
+    expect(m.validate()).toEqual([]);
+    const app = m.getElement('app');
+    expect(app?.description).toBe('d');
+    expect(app?.technology).toBe('t');
+    expect(app?.metadata).toEqual({ owner: 'o' });
+    expect(m.getElement('app.child')).not.toBeNull();
+  });
 });
 
 describe('updateElement: empty metadata block cleanup after null-deletion', () => {

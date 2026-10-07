@@ -18,7 +18,7 @@ import {
 } from './codegen.js';
 import {
   findClosingBraceOffset,
-  findInsertOffsetBeforeChildren,
+  buildInsertBeforeChildrenEdit,
   insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
@@ -419,11 +419,10 @@ function buildBodyPropEdit(
   // (or, when the body has child elements, before the first child, to keep
   // the LikeC4 grammar `(properties* tags*) children*` ordering valid).
   const closingBrace = findClosingBraceOffset(node.body.$cstNode);
-  const insertAt = findInsertOffsetBeforeChildren(node, fullText, closingBrace);
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';
-  const newText = `${innerIndent}${key} ${newValueText}\n`;
-  return { offset: insertAt, end: insertAt, newText };
+  const snippet = `${innerIndent}${key} ${newValueText}\n`;
+  return buildInsertBeforeChildrenEdit(node, fullText, closingBrace, snippet);
 }
 
 /**
