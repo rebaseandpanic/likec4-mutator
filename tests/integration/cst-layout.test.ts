@@ -188,3 +188,51 @@ describe('updateElement title changes the title declared in the body', () => {
     expect(lines(m)).toContain("title 'Changed'");
   });
 });
+
+// ===========================================================================
+// Braces inside comments, strings and URIs are not structure
+// ===========================================================================
+
+describe('braces inside comments, strings and URIs are not structure', () => {
+  const CASES = [
+    { name: 'block comment with "} {"', model: 'model { app = service { /* } { */ } }\n' },
+    { name: 'block comment with "}"', model: 'model { app = service { /* } */ } }\n' },
+    { name: 'block comment spanning lines', model: 'model {\n  app = service {\n    /*\n    }\n    */\n  }\n}\n' },
+    { name: 'unquoted URL with //', model: 'model { app = service { link https://example.com } }\n' },
+    { name: 'markdown string with "}" and a quote', model: "model { app = service { description '''it's }''' } }\n" },
+    { name: 'line comment with "}"', model: 'model {\n  app = service { // }\n  }\n}\n' },
+  ];
+
+  it.each(CASES)('$name: validate() reports no error', ({ model }) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + model });
+    expect(m.validate()).toEqual([]);
+  });
+
+  it.each(CASES)('$name: addElement puts the child inside the body', ({ model }) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + model });
+    const fqn = m.addElement('app', { name: 'child', kind: 'service' });
+    expect(m.validate()).toEqual([]);
+    expect(m.getElement(fqn)).not.toBeNull();
+    expect(m.getElement('app')?.children).toContain('app.child');
+  });
+
+  it.each(CASES)('$name: updateElement adds a property', ({ model }) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + model });
+    m.updateElement('app', { technology: 'Go' });
+    expect(m.validate()).toEqual([]);
+    expect(m.getElement('app')?.technology).toBe('Go');
+  });
+
+  it('addRelationship and addView work with braces inside comments of the model and views blocks', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'm.c4':
+        SPEC +
+        'model {\n  a = service\n  b = service /* } */\n}\nviews {\n  view index {\n    include *\n  } // }\n}\n',
+    });
+    m.addRelationship('a', 'b', 'uses');
+    m.addView({ id: 'second', type: 'element', target: 'a', includes: ['*'] });
+    expect(m.validate()).toEqual([]);
+    expect(m.getRelationships({ sourceFqn: 'a' })).toHaveLength(1);
+    expect(m.serialize()['m.c4']).toContain('view second of a');
+  });
+});

@@ -17,7 +17,7 @@ import {
   type ElementStyle,
 } from './codegen.js';
 import {
-  findClosingBrace,
+  findClosingBraceOffset,
   findInsertOffsetBeforeChildren,
   insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
@@ -120,10 +120,7 @@ export function addElementEdit(
     if (!parentNode.body?.$cstNode) {
       throw new Error(`Parent element '${parentFqn}' has no body`);
     }
-    const bodyCst = parentNode.body.$cstNode;
-    // The closing } is the last non-whitespace character of the body block.
-    // bodyCst.end points one past the }, so bodyCst.end - 1 is the }.
-    closingBraceOffset = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+    closingBraceOffset = findClosingBraceOffset(parentNode.body.$cstNode);
     // Inner indent = parent element indent + one level
     innerIndent = getNodeIndent(parentNode, fullText) + '  ';
   } else {
@@ -132,8 +129,7 @@ export function addElementEdit(
     if (!model?.$cstNode) {
       throw new Error('No model block found in document');
     }
-    const modelCst = model.$cstNode;
-    closingBraceOffset = findClosingBrace(fullText, modelCst.offset, modelCst.end);
+    closingBraceOffset = findClosingBraceOffset(model.$cstNode);
     innerIndent = '  ';
   }
 
@@ -422,8 +418,7 @@ function buildBodyPropEdit(
   // Body exists but property is missing — insert before the closing `}`
   // (or, when the body has child elements, before the first child, to keep
   // the LikeC4 grammar `(properties* tags*) children*` ordering valid).
-  const bodyCst = node.body.$cstNode;
-  const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+  const closingBrace = findClosingBraceOffset(node.body.$cstNode);
   const insertAt = findInsertOffsetBeforeChildren(node, fullText, closingBrace);
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';

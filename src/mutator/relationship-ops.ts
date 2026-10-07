@@ -13,7 +13,7 @@ import {
   type RelationshipStyle,
 } from './codegen.js';
 import {
-  findClosingBrace,
+  findClosingBraceOffset,
   insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
   buildRemovalEdit,
@@ -59,8 +59,7 @@ export function addRelationshipEdit(
     throw new Error('No model block found in document');
   }
 
-  const modelCst = model.$cstNode;
-  const closingBrace = findClosingBrace(fullText, modelCst.offset, modelCst.end);
+  const closingBrace = findClosingBraceOffset(model.$cstNode);
   const indent = '  ';
 
   const snippet = generateRelationship({
@@ -414,8 +413,7 @@ function buildRelationStringPropEdit(
     );
   }
   const innerIndent = indent + '  ';
-  const bodyCst = rel.body.$cstNode;
-  const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+  const closingBrace = findClosingBraceOffset(rel.body.$cstNode);
   return {
     offset: closingBrace,
     end: closingBrace,

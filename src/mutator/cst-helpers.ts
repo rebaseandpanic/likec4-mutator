@@ -7,80 +7,41 @@ import type { TextEdit } from './text-edit.js';
 import { escapeString } from './codegen.js';
 
 /**
- * Find the offset of the matching closing `}` for the opening `{` at or after
- * `startOffset`.  Skips over braces inside single- or double-quoted string
- * literals and `//` line comments.  Throws when no balanced closing brace is
- * found in the range.
- *
- * @param fullText     - Full source text
- * @param startOffset  - Offset at or before the opening `{`
- * @param endExclusive - Exclusive upper bound for the scan
+ * Minimal shape of a Langium CST node: composite nodes carry `content`,
+ * leaf nodes carry `text` and `hidden` (true for comments and whitespace).
  */
-export function findClosingBrace(
-  fullText: string,
-  startOffset: number,
-  endExclusive: number,
-): number {
-  let openIdx = startOffset;
-  while (openIdx < endExclusive && fullText[openIdx] !== '{') {
-    openIdx++;
-  }
-  if (openIdx >= endExclusive) {
-    throw new Error('Could not find opening brace in range');
-  }
+export interface CstNodeLike {
+  offset: number;
+  end: number;
+  text?: string;
+  hidden?: boolean;
+  content?: CstNodeLike[];
+}
 
-  let depth = 0;
-  let i = openIdx;
-  while (i < endExclusive) {
-    const ch = fullText[i];
-    if (ch === "'") {
-      i++;
-      while (i < endExclusive) {
-        const sc = fullText[i];
-        if (sc === '\\') {
-          i = Math.min(i + 2, endExclusive);
-          continue;
-        }
-        if (sc === "'") {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      i++;
-      while (i < endExclusive) {
-        const sc = fullText[i];
-        if (sc === '\\') {
-          i = Math.min(i + 2, endExclusive);
-          continue;
-        }
-        if (sc === '"') {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '/' && fullText[i + 1] === '/') {
-      i += 2;
-      while (i < endExclusive && fullText[i] !== '\n') {
-        i++;
-      }
-      continue;
-    }
-    if (ch === '{') {
-      depth++;
-    } else if (ch === '}') {
-      depth--;
-      if (depth === 0) return i;
-    }
-    i++;
+/**
+ * Return the offset of the closing `}` of a braced block (`model { }`,
+ * `views { }`, an element or relation body) from the block's CST node.
+ *
+ * The brace is the last non-hidden leaf token of the node, as produced by
+ * the LikeC4 lexer and parser — so braces inside comments, string literals
+ * (including markdown strings) and unquoted URIs are never mistaken for it.
+ * Throws when the node does not end with a `}` token.
+ */
+export function findClosingBraceOffset(node: CstNodeLike): number {
+  const leaf = lastNonHiddenLeaf(node);
+  if (!leaf || leaf.text !== '}') {
+    throw new Error('Could not find closing brace of the block');
   }
-  throw new Error('Could not find closing brace in range');
+  return leaf.offset;
+}
+
+function lastNonHiddenLeaf(node: CstNodeLike): CstNodeLike | null {
+  if (!node.content) return node.hidden ? null : node;
+  for (let i = node.content.length - 1; i >= 0; i--) {
+    const found = lastNonHiddenLeaf(node.content[i]);
+    if (found) return found;
+  }
+  return null;
 }
 
 /**
@@ -241,7 +202,7 @@ export function collectLeaves(node: {
 export interface BodyOwnerNode {
   $cstNode?: { offset: number; end: number };
   body?: {
-    $cstNode?: { offset: number; end: number };
+    $cstNode?: CstNodeLike;
     props?: Array<{
       $type?: string;
       $cstNode?: { offset: number; end: number };
@@ -316,8 +277,7 @@ export function buildInsertBodySnippet(
     return { offset: cst.end, end: cst.end, newText: insertion };
   }
 
-  const bodyCst = node.body.$cstNode;
-  const closingBrace = findClosingBrace(fullText, bodyCst.offset, bodyCst.end);
+  const closingBrace = findClosingBraceOffset(node.body.$cstNode);
   const insertAt = findInsertOffsetBeforeChildren(node, fullText, closingBrace);
   const snippet = snippetFn(innerIndent);
   return { offset: insertAt, end: insertAt, newText: snippet };
