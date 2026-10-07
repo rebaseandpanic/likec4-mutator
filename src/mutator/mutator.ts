@@ -8,7 +8,7 @@
  */
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
-import { WorkspaceIndex } from '../query/workspace-index.js';
+import { WorkspaceIndex, resolveRelations } from '../query/workspace-index.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, type TextEdit } from './text-edit.js';
@@ -23,6 +23,7 @@ import type { ElementStyle, RelationshipStyle } from './codegen.js';
 import {
   addRelationshipEdit,
   removeRelationshipEdit,
+  removeRelationNodeEdit,
   updateRelationshipEdit,
   findMatchingRelations,
   formatNotFoundError,
@@ -40,8 +41,10 @@ export type AddViewOpts = Omit<GenerateViewOpts, 'indent'>;
 
 /**
  * Result of {@link LikeC4Mutator.removeElement}.  Lists every relationship
- * that was implicitly removed because it referenced the deleted element or
- * one of its descendants.
+ * that was removed along with the element: those whose source or target is
+ * the deleted element or one of its descendants (in any file), and those
+ * declared inside the deleted element's body.  `source` / `target` are
+ * absolute FQNs.
  */
 export interface RemoveElementResult {
   removedRelationships: Array<{ source: string; target: string; title?: string }>;
@@ -206,39 +209,57 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Remove an element (and its entire body) from the model.
+   * Remove an element (and its entire body) from the model, together with
+   * every relationship that depends on it.
+   *
+   * Removed relationships are those whose source or target is the element or
+   * one of its descendants — in any loaded file — plus those declared inside
+   * the element's body (which disappear with the body).  The operation is
+   * atomic: when any step fails, no file is changed.
    *
    * @param fqn - FQN of the element to remove
-   * @returns Info about any relationships that were implicitly removed because
-   *          they referenced the deleted element (or one of its descendants).
+   * @returns The relationships that were removed.
    */
   removeElement(fqn: string): RemoveElementResult {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
 
-    // Capture relationships that reference the element (or any descendant) before removal.
-    const allRels = this.getRelationships();
-    const prefix = fqn + '.';
-    const affected = allRels.filter(
-      (r) =>
-        r.sourceFqn === fqn ||
-        r.targetFqn === fqn ||
-        r.sourceFqn.startsWith(prefix) ||
-        r.targetFqn.startsWith(prefix),
-    );
+    const isDependent = (r: { sourceFqn: string; targetFqn: string }): boolean =>
+      isSameOrDescendant(r.sourceFqn, fqn) || isSameOrDescendant(r.targetFqn, fqn);
 
-    const doc = this.documents.get(filename);
-    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    const edit = removeElementEdit(doc, fqn);
-    this.applyEdit(filename, edit);
+    // Report every relationship that is about to disappear, in file order.
+    const removedRelationships: RemoveElementResult['removedRelationships'] = [];
+    for (const [file, query] of this.queries) {
+      const range = file === filename ? this.elementRange(fqn, file) : null;
+      for (const r of query.getRelationships()) {
+        if (isDependent(r) || (range !== null && isWithin(r.sourceRange, range))) {
+          removedRelationships.push({ source: r.sourceFqn, target: r.targetFqn, title: r.title });
+        }
+      }
+    }
 
-    return {
-      removedRelationships: affected.map((r) => ({
-        source: r.sourceFqn,
-        target: r.targetFqn,
-        title: r.title,
-      })),
-    };
+    const snapshot = this.snapshot();
+    try {
+      // Remove dependent relationships declared outside the element one at a
+      // time (each removal reparses its file, so offsets stay valid), then
+      // the element itself, which takes the relationships in its body along.
+      for (;;) {
+        const next = this.findRelationOutsideElement(fqn, filename, isDependent);
+        if (!next) break;
+        const doc = this.documents.get(next.filename);
+        if (!doc) throw new Error(`Internal error: document for '${next.filename}' not found in cache`);
+        this.applyEdit(next.filename, removeRelationNodeEdit(doc.fullText, next.node));
+      }
+
+      const doc = this.documents.get(filename);
+      if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+      this.applyEdit(filename, removeElementEdit(doc, fqn));
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+
+    return { removedRelationships };
   }
 
   /**
@@ -425,6 +446,45 @@ export class LikeC4Mutator {
     }
   }
 
+  /** Source range of an element in `filename`, or null when not found there. */
+  private elementRange(fqn: string, filename: string): { offset: number; end: number } | null {
+    const el = this.queries.get(filename)?.getElement(fqn);
+    return el ? { offset: el.sourceRange.offset, end: el.sourceRange.end } : null;
+  }
+
+  /**
+   * First relation (in file order) that satisfies `isDependent` and is not
+   * declared inside the body of element `fqn` (which lives in `elementFile`).
+   */
+  private findRelationOutsideElement(
+    fqn: string,
+    elementFile: string,
+    isDependent: (r: { sourceFqn: string; targetFqn: string }) => boolean,
+  ): { filename: string; node: unknown } | null {
+    for (const [file, doc] of this.documents) {
+      const range = file === elementFile ? this.elementRange(fqn, file) : null;
+      for (const rel of resolveRelations(doc.ast, this.workspace)) {
+        if (!isDependent(rel)) continue;
+        const cst = (rel.node as { $cstNode?: { offset: number; end: number } }).$cstNode;
+        if (range !== null && cst && isWithin(cst, range)) continue;
+        return { filename: file, node: rel.node };
+      }
+    }
+    return null;
+  }
+
+  /** Capture the mutable state so that a multi-step operation can roll back. */
+  private snapshot(): MutatorSnapshot {
+    return { sources: new Map(this.sources), documents: new Map(this.documents) };
+  }
+
+  /** Restore state captured by {@link snapshot}. */
+  private restore(state: MutatorSnapshot): void {
+    this.sources = state.sources;
+    this.documents = state.documents;
+    this.rebuildQueries();
+  }
+
   private findFileContaining(fqn: string): string | null {
     for (const [filename, query] of this.queries) {
       if (query.getElement(fqn)) return filename;
@@ -491,6 +551,25 @@ export class LikeC4Mutator {
 // ---------------------------------------------------------------------------
 // Module-level helpers
 // ---------------------------------------------------------------------------
+
+/** Mutable state of a {@link LikeC4Mutator}, captured for rollback. */
+interface MutatorSnapshot {
+  sources: Map<string, string>;
+  documents: Map<string, ParsedDocument>;
+}
+
+/** True when `fqn` equals `ancestor` or is nested below it. */
+function isSameOrDescendant(fqn: string, ancestor: string): boolean {
+  return fqn === ancestor || fqn.startsWith(ancestor + '.');
+}
+
+/** True when range `inner` lies entirely inside range `outer`. */
+function isWithin(
+  inner: { offset: number; end: number },
+  outer: { offset: number; end: number },
+): boolean {
+  return inner.offset >= outer.offset && inner.end <= outer.end;
+}
 
 /**
  * Check that `{` and `}` are balanced in `source`, skipping content inside

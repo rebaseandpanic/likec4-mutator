@@ -428,6 +428,73 @@ describe('LikeC4Mutator.removeElement', () => {
     const m = makeMutator();
     expect(() => m.removeElement('ghost')).toThrow();
   });
+
+  it('should remove a model-level relationship that targets the removed element', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'm.c4': 'specification { element service }\nmodel { a = service\n b = service\n a -> b }',
+    });
+
+    const result = m.removeElement('b');
+
+    expect(result.removedRelationships).toEqual([{ source: 'a', target: 'b', title: undefined }]);
+    expect(m.getRelationships()).toEqual([]);
+    expect(m.serialize()['m.c4']).not.toContain('a -> b');
+    expect(m.validate()).toEqual([]);
+  });
+
+  it('should remove relationships of the element and its descendants in every file', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'model.c4': `specification { element service }
+model {
+  app = service {
+    api = service {
+      handler = service
+    }
+    db = service
+    api -> db 'reads'
+  }
+  ext = service
+  app.db -> ext 'exports'
+}
+`,
+      'other.c4': `model {
+  ui = service
+  ui -> app.api.handler 'calls'
+  ui -> ext 'links'
+}
+`,
+    });
+
+    const result = m.removeElement('app.api');
+
+    expect(result.removedRelationships).toEqual([
+      { source: 'app.api', target: 'app.db', title: 'reads' },
+      { source: 'ui', target: 'app.api.handler', title: 'calls' },
+    ]);
+    expect(m.getRelationships().map((r) => r.title)).toEqual(['exports', 'links']);
+    expect(m.validate()).toEqual([]);
+  });
+
+  it('should report relationships declared inside the removed element body', () => {
+    // `x -> y` lives in app's body, so it disappears with app even though
+    // neither endpoint is app or one of its descendants.
+    const m = LikeC4Mutator.fromFiles({
+      'm.c4': `specification { element service }
+model {
+  x = service
+  y = service
+  app = service {
+    x -> y 'inner'
+  }
+}
+`,
+    });
+
+    const result = m.removeElement('app');
+
+    expect(result.removedRelationships).toEqual([{ source: 'x', target: 'y', title: 'inner' }]);
+    expect(m.getRelationships()).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

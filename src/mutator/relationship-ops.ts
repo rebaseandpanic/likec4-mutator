@@ -106,9 +106,21 @@ export function removeRelationshipEdit(
   if (!rel) {
     throw new Error(`Relationship '${source} -> ${target}' not found`);
   }
+  if (!rel.$cstNode) throw new Error(`Relationship '${source} -> ${target}' has no CST node`);
 
-  const cst = rel.$cstNode;
-  if (!cst) throw new Error(`Relationship '${source} -> ${target}' has no CST node`);
+  return removeRelationNodeEdit(fullText, rel);
+}
+
+/**
+ * Build a TextEdit that deletes one `Relation` node, together with its
+ * leading indentation / newline and trailing newline.
+ *
+ * @param fullText - Text of the document the node belongs to
+ * @param node     - The `Relation` AST node to delete
+ */
+export function removeRelationNodeEdit(fullText: string, node: unknown): TextEdit {
+  const cst = (node as RelationAstNode).$cstNode;
+  if (!cst) throw new Error('Relationship has no CST node');
 
   // Expand range to include leading newline + indent and trailing newline
   let offset = cst.offset;
