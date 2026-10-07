@@ -353,17 +353,21 @@ function buildTitleEdits(node: AstElementNode, newTitle: string): TextEdit[] {
     }
   }
 
-  const bodyTitle = node.body?.props?.find(
-    (p) => p.$type === 'ElementStringProperty' && p.key === 'title',
-  );
-  const bodyValue = bodyTitle?.value;
-  const bodyValueCst =
-    bodyValue && typeof bodyValue === 'object'
-      ? (bodyValue as { $cstNode?: { offset: number; end: number } }).$cstNode
-      : undefined;
-  if (bodyValueCst) {
-    edits.push({ offset: bodyValueCst.offset, end: bodyValueCst.end, newText });
-  } else if (inlineInsertAt !== null) {
+  // A body may declare `title` more than once; rewrite every declaration so
+  // no stale title is left behind, whichever one a reader picks.
+  let bodyTitleFound = false;
+  for (const prop of node.body?.props ?? []) {
+    if (prop.$type !== 'ElementStringProperty' || prop.key !== 'title') continue;
+    const value = prop.value;
+    const valueCst =
+      value && typeof value === 'object'
+        ? (value as { $cstNode?: { offset: number; end: number } }).$cstNode
+        : undefined;
+    if (!valueCst) continue;
+    edits.push({ offset: valueCst.offset, end: valueCst.end, newText });
+    bodyTitleFound = true;
+  }
+  if (!bodyTitleFound && inlineInsertAt !== null) {
     // No existing title anywhere — insert an inline one after the kind.
     edits.push({ offset: inlineInsertAt, end: inlineInsertAt, newText: ` ${newText}` });
   }

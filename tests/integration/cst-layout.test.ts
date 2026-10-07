@@ -172,6 +172,10 @@ describe('updateElement title changes the title declared in the body', () => {
       model: "model {\n  a = service 'Existing' {\n    title 'Existing'\n  }\n}\n",
     },
     { name: 'body title on the brace line', model: "model { a = service { title 'Existing' } }\n" },
+    {
+      name: 'several body titles',
+      model: "model {\n  a = service 'Existing' {\n    title 'Existing'\n    title 'Existing too'\n  }\n}\n",
+    },
   ])('$name', ({ model }) => {
     const m = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + model });
     m.updateElement('a', { title: 'Changed' });
