@@ -166,4 +166,20 @@ model {
 
     expect(m.getRelationships().map((r) => [r.sourceFqn, r.targetFqn])).toEqual([['ui', 'api']]);
   });
+
+  // LikeC4 registers `this` / `it` in an element body before that body's
+  // children, so the alias wins over a child that happens to share its name.
+  it.each(['this', 'it'])('binds `-> %s` to the body owner even when a child has that name', (alias) => {
+    const source = `specification { element service }
+model {
+  app = service {
+    ${alias} = service
+    -> ${alias}
+  }
+}
+`;
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+
+    expect(m.getRelationships().map((r) => [r.sourceFqn, r.targetFqn])).toEqual([['app', 'app']]);
+  });
 });

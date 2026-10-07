@@ -276,11 +276,13 @@ class EndpointResolver {
 
   private resolveName(name: string, chain: ScopeFrame[]): string | undefined {
     for (const frame of chain) {
-      const local = frame.scope.get(name);
-      if (local !== undefined) return local;
+      // LikeC4 registers `this` / `it` in a body scope before the body's
+      // children, so the alias shadows a child that shares its name.
       if (frame.self !== undefined && (SELF_ALIASES as readonly string[]).includes(name)) {
         return frame.self;
       }
+      const local = frame.scope.get(name);
+      if (local !== undefined) return local;
       if (frame.extended !== undefined) {
         if (lastSegment(frame.extended) === name) return frame.extended;
         const desc = this.workspace.uniqueDescendants(frame.extended).get(name);
