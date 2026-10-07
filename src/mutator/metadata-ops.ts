@@ -1,10 +1,19 @@
 /**
  * Metadata read/merge/write helpers shared by element-ops and relationship-ops.
  *
- * The metadata block in the LikeC4 grammar accepts both scalar string values
- * (`key 'value'`) and array values (`key ['v1', 'v2']`).  These helpers expose
- * a single in-memory representation (`Record<string, string | string[]>`) plus
- * a patch type that allows `null` to mean "delete this key".
+ * LikeC4 grammar:
+ *
+ *   MetadataAttribute: key=Id ':'? (value=MetadataValue | boolValue=BOOLEAN) ';'?
+ *   MetadataValue:     MarkdownOrString | MetadataArray
+ *   MetadataArray:     '[' values+=MarkdownOrString (',' values+=MarkdownOrString)* ']'
+ *   MarkdownOrString:  markdown=MarkdownString | text=String
+ *
+ * These helpers expose a single in-memory read representation
+ * (`Record<string, string | string[]>`) plus a patch type that allows `null`
+ * to mean "delete this key".  Booleans read as `'true'` / `'false'` and
+ * markdown strings read as their content, matching how LikeC4 itself exposes
+ * metadata.  Writing never round-trips through the read representation:
+ * attributes the patch does not touch are copied from the source verbatim.
  */
 import type { TextEdit } from './text-edit.js';
 import { formatMetadataValue, generateMetadataBlock, validateMetadataKey } from './codegen.js';
@@ -28,25 +37,19 @@ export type MetadataPatch = Record<string, string | string[] | null>;
 // Read existing metadata block
 // ---------------------------------------------------------------------------
 
+interface MarkdownOrStringShape {
+  $type?: string;
+  text?: string;
+  markdown?: string;
+}
+
 interface MetadataAttributeShape {
   $type?: string;
   $cstNode?: { offset: number; end: number; text?: string };
   key?: string;
-  name?: string;
-  value?: {
-    $type?: string;
-    text?: string;
-    value?: string;
-    values?: Array<{ text?: string; value?: string }>;
-    $cstNode?: {
-      offset: number;
-      end: number;
-      text?: string;
-      range?: {
-        start?: { line?: number };
-        end?: { line?: number };
-      };
-    };
+  boolValue?: boolean;
+  value?: MarkdownOrStringShape & {
+    values?: MarkdownOrStringShape[];
   };
 }
 
@@ -56,55 +59,41 @@ interface MetadataBodyShape {
   props?: MetadataAttributeShape[];
 }
 
+/** Content of a `MarkdownOrString` node, or undefined when the parser recovered without one. */
+function readMarkdownOrString(node: MarkdownOrStringShape | undefined): string | undefined {
+  if (typeof node?.text === 'string') return node.text;
+  if (typeof node?.markdown === 'string') return node.markdown;
+  return undefined;
+}
+
+/** Read the value of one metadata attribute, or undefined when it is incomplete. */
+function readMetadataValue(attr: MetadataAttributeShape): string | string[] | undefined {
+  const value = attr.value;
+  if (!value) {
+    // `boolValue` is only meaningful when no `value` was parsed: Langium
+    // initialises boolean features to `false` on every attribute.
+    return typeof attr.boolValue === 'boolean' ? String(attr.boolValue) : undefined;
+  }
+  if (value.$type === 'MetadataArray') {
+    const items = (value.values ?? []).map(readMarkdownOrString);
+    if (items.length === 0 || items.some((item) => item === undefined)) return undefined;
+    return items as string[];
+  }
+  return readMarkdownOrString(value);
+}
+
 /**
  * Extract `key → string | string[]` pairs from a parsed `MetadataBody` AST node.
- * Both scalar (`MarkdownOrString`) and array (`MetadataArray`) value shapes are
- * supported.  Entries whose value cannot be extracted are silently omitted.
+ * Attributes whose value is incomplete (parser error recovery) are omitted.
  */
 export function readMetadataBlock(metaBody: MetadataBodyShape): MetadataMap {
   const out: MetadataMap = {};
   for (const attr of metaBody.props ?? []) {
-    const key = attr.key ?? attr.name;
-    if (!key) continue;
-    const value = attr.value;
-    if (!value) continue;
-    if (value.$type === 'MetadataArray' && Array.isArray(value.values)) {
-      const items = value.values.map((v) => v.text ?? v.value ?? '');
-      out[key] = items;
-      continue;
-    }
-    // MarkdownOrString or older shape — text or value
-    if (typeof value.text === 'string') {
-      out[key] = value.text;
-      continue;
-    }
-    if (typeof value.value === 'string') {
-      out[key] = value.value;
-      continue;
-    }
-    if (typeof attr.value === 'string') {
-      out[key] = attr.value as unknown as string;
-      continue;
-    }
-    // Silent skip — value cannot be extracted, entry is omitted.
+    if (!attr.key) continue;
+    const value = readMetadataValue(attr);
+    if (value !== undefined) out[attr.key] = value;
   }
   return out;
-}
-
-/**
- * Merge `existing` with `patch`.  `null` in the patch deletes the key; any
- * other value upserts it.  Keys absent from `patch` are preserved verbatim.
- */
-export function mergeMetadata(existing: MetadataMap, patch: MetadataPatch): MetadataMap {
-  const merged: MetadataMap = { ...existing };
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null) {
-      delete merged[key];
-    } else {
-      merged[key] = value;
-    }
-  }
-  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,11 +109,14 @@ export function mergeMetadata(existing: MetadataMap, patch: MetadataPatch): Meta
  *    deletes keys, returns null (nothing to do).
  *  - When the node has no metadata block but the patch has at least one
  *    upsert, a fresh block is inserted before the closing brace.
- *  - When a metadata block exists, the merged result replaces the existing
- *    block.  Keys that the patch did not touch are preserved with their
- *    original CST text (round-trip stability for multi-line vs inline arrays).
- *  - When the merged result is empty, the existing block is deleted entirely
- *    (along with the surrounding newlines).
+ *  - When a metadata block exists, it is rewritten attribute by attribute:
+ *    attributes whose key the patch does not mention are copied verbatim
+ *    from the source (any value form — string, markdown, boolean, array —
+ *    with its original formatting); a patched key is regenerated at the
+ *    position of its first occurrence or dropped when the patch maps it to
+ *    `null`; new keys are appended in patch order.
+ *  - When nothing remains, the existing block is deleted entirely (along
+ *    with the surrounding newlines).
  *
  * @param bodyOwner - Element or Relation AST node
  * @param fullText  - Full source text
@@ -140,15 +132,18 @@ export function buildReplaceMetadataEditOnNode(
   const innerIndent = indent + '  ';
   const entryIndent = innerIndent + '  ';
 
-  // Validate up-front that no upsert value is an empty array — this is a
-  // grammar limitation we surface early so the caller sees the error before
-  // any other edits run.
+  // Validate every upsert up-front (key syntax, non-empty arrays) so the
+  // caller sees the error before any other edits run.
+  const upserts: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(patch)) {
+    if (value === null) continue;
+    validateMetadataKey(key);
     if (Array.isArray(value) && value.length === 0) {
       throw new Error(
         `Invalid metadata patch for key '${key}': empty array not allowed by LikeC4 grammar`,
       );
     }
+    upserts[key] = value;
   }
 
   // Locate the existing MetadataBody.
@@ -156,31 +151,42 @@ export function buildReplaceMetadataEditOnNode(
     (p) => p.$type === 'MetadataBody',
   ) as MetadataBodyShape | undefined;
 
-  // Case 1: no existing metadata block.
+  // Case 1: no existing metadata block.  Pure deletes are no-ops.
   if (!existingMeta?.$cstNode) {
-    // Drop pure deletes — they are no-ops.
-    const upserts: Record<string, string | string[]> = {};
-    for (const [k, v] of Object.entries(patch)) {
-      if (v !== null) upserts[k] = v;
-    }
     if (Object.keys(upserts).length === 0) return null;
     return buildInsertBodySnippet(bodyOwner, fullText, indent, (ii) =>
       generateMetadataBlock(upserts, ii),
     );
   }
 
-  // Case 2: existing block — read keys, capture per-key CST text for round-trip
-  // stability of array literal formatting.
-  const existing = readMetadataBlock(existingMeta);
-  const merged = mergeMetadata(existing, patch);
+  // Case 2: existing block — rewrite it attribute by attribute.
+  const isPatched = (key: string): boolean => Object.prototype.hasOwnProperty.call(patch, key);
+  const regenerated = new Set<string>();
+  const entries: string[] = [];
+  for (const attr of existingMeta.props ?? []) {
+    const key = attr.key;
+    if (key !== undefined && isPatched(key)) {
+      // Deleted, or a duplicate of a key already regenerated above.
+      if (patch[key] === null || regenerated.has(key)) continue;
+      regenerated.add(key);
+      entries.push(`${key} ${formatMetadataValue(upserts[key]!, entryIndent)}`);
+      continue;
+    }
+    if (!attr.$cstNode) continue;
+    entries.push(fullText.substring(attr.$cstNode.offset, attr.$cstNode.end));
+  }
+  for (const [key, value] of Object.entries(upserts)) {
+    if (regenerated.has(key)) continue;
+    entries.push(`${key} ${formatMetadataValue(value, entryIndent)}`);
+  }
 
-  // Sub-case: merged is empty → delete the entire block.  Pass
-  // `consumeTrailingNewline: false` so the trailing `\n` after the block stays
-  // intact — otherwise both surrounding newlines collapse and adjacent body
-  // content (e.g. `description 'd'` on the previous line, the body's closing
-  // `}` on the following line) ends up squashed onto a single line.
-  const cst = existingMeta.$cstNode!;
-  if (Object.keys(merged).length === 0) {
+  // Nothing left → delete the entire block.  Pass `consumeTrailingNewline:
+  // false` so the trailing `\n` after the block stays intact — otherwise both
+  // surrounding newlines collapse and adjacent body content (e.g.
+  // `description 'd'` on the previous line, the body's closing `}` on the
+  // following line) ends up squashed onto a single line.
+  const cst = existingMeta.$cstNode;
+  if (entries.length === 0) {
     const { offset, end } = expandRangeToConsumeSurroundingNewlines(
       fullText,
       cst.offset,
@@ -190,35 +196,12 @@ export function buildReplaceMetadataEditOnNode(
     return { offset, end, newText: '' };
   }
 
-  // Build the per-key CST-text override map: keys that the patch did NOT touch
-  // and that have a usable CST text are emitted verbatim, preserving e.g.
-  // multi-line vs inline array formatting.
-  const verbatim: Record<string, string> = {};
-  for (const attr of existingMeta.props ?? []) {
-    const k = attr.key ?? attr.name;
-    if (!k) continue;
-    if (Object.prototype.hasOwnProperty.call(patch, k)) continue; // patched, regenerate
-    const valueCst = attr.value?.$cstNode;
-    const keyCst = attr.$cstNode;
-    if (!valueCst || !keyCst) continue;
-    // Verbatim text = the slice of fullText covering the key+value range.
-    verbatim[k] = fullText.substring(keyCst.offset, valueCst.end);
-  }
-
-  // Generate the merged block with verbatim overrides.
   let block = `\n${innerIndent}metadata {\n`;
-  for (const [key, value] of Object.entries(merged)) {
-    if (Object.prototype.hasOwnProperty.call(verbatim, key)) {
-      block += `${entryIndent}${verbatim[key]}\n`;
-    } else {
-      validateMetadataKey(key);
-      const formatted = formatMetadataValue(value, entryIndent);
-      block += `${entryIndent}${key} ${formatted}\n`;
-    }
+  for (const entry of entries) {
+    block += `${entryIndent}${entry}\n`;
   }
   block += `${innerIndent}}\n`;
 
   const { offset, end } = expandRangeToConsumeSurroundingNewlines(fullText, cst.offset, cst.end);
   return { offset, end, newText: block };
 }
-
