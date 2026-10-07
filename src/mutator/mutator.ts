@@ -139,7 +139,13 @@ export class LikeC4Mutator {
   getSpecification(): SpecificationInfo | null {
     for (const query of this.queries.values()) {
       const spec = query.getSpecification();
-      if (spec.elementKinds.length > 0 || spec.tags.length > 0) return spec;
+      if (
+        spec.elementKinds.length > 0 ||
+        spec.tags.length > 0 ||
+        spec.relationshipKinds.length > 0
+      ) {
+        return spec;
+      }
     }
     return null;
   }

@@ -594,9 +594,21 @@ describe('Minimal input variations', () => {
   it('should return null from getSpecification when no specification block exists', () => {
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MODEL_ONLY });
     // When no specification block is present, getSpecification returns null
-    // (because the method returns null if elementKinds and tags are both empty)
+    // (no element kinds, tags or relationship kinds are declared anywhere)
     const spec = mutator.getSpecification();
     expect(spec).toBeNull();
+  });
+
+  it('should return a specification that declares only relationship kinds', () => {
+    const mutator = LikeC4Mutator.fromFiles({
+      'model.c4': 'specification { relationship calls }',
+    });
+
+    expect(mutator.getSpecification()).toEqual({
+      elementKinds: [],
+      tags: [],
+      relationshipKinds: ['calls'],
+    });
   });
 });
 
