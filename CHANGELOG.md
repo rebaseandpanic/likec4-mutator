@@ -4,7 +4,7 @@
 
 ### Breaking
 - Minimum Node.js is now `>=22.22.3`, matching the requirement of `@likec4/language-server` (`>=22.22.3` since 1.57.0).
-- CLI: passing unexpected positional arguments to a command is now an error (Commander 13+ default), e.g. `likec4-mutator validate --dir ./c4 extra` exits with `error: too many arguments for 'validate'`. Previously such arguments were silently ignored.
+- CLI: passing unexpected positional arguments to a command is now an error (Commander 13+ default), e.g. `likec4-mutator validate --dir ./c4 extra` exits with code 1 and `error: too many arguments for 'validate'. Expected 0 arguments but got 1: extra.`. Previously such arguments were silently ignored.
 
 ### Dependencies
 - `@likec4/language-server` `^1.55.0` → `^1.59.4`. Tests now run against the same version a clean install resolves to.
