@@ -379,3 +379,8 @@ FodyWeavers.xsd
 # Build output
 dist/
 *.tsbuildinfo
+
+# Local agent instructions (not part of the project)
+CLAUDE.md
+CLAUDE_*.md
+DEPENDENCY_UPDATE_PLAN.md
