@@ -2,6 +2,15 @@
 
 TypeScript library + CLI for programmatic mutation of LikeC4 `.c4` files. Parses `.c4` via `@likec4/language-server` (Langium), mutates through CST-position-based text replacement, serializes back preserving formatting.
 
+## Installation
+
+Requires Node.js >= 22.22.3 (the minimum supported by `@likec4/language-server`).
+
+```bash
+npm install likec4-mutator      # library
+npx likec4-mutator --help        # CLI
+```
+
 ## Library API
 
 ```typescript
@@ -467,7 +476,7 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 
 ```bash
 npm install
-npm run build    # tsup → ESM + TypeScript declarations
+npm run build    # tsdown → ESM + TypeScript declarations
 npm test         # vitest
 npm run lint     # tsc --noEmit
 ```
