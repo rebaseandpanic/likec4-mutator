@@ -1,5 +1,10 @@
 # likec4-mutator
 
+[![npm version](https://img.shields.io/npm/v/likec4-mutator)](https://www.npmjs.com/package/likec4-mutator)
+[![npm downloads](https://img.shields.io/npm/dm/likec4-mutator)](https://www.npmjs.com/package/likec4-mutator)
+[![node](https://img.shields.io/node/v/likec4-mutator)](https://www.npmjs.com/package/likec4-mutator)
+[![license](https://img.shields.io/npm/l/likec4-mutator)](./LICENSE)
+
 TypeScript library + CLI for programmatic mutation of LikeC4 `.c4` files. Parses `.c4` via `@likec4/language-server` (Langium), mutates through CST-position-based text replacement, serializes back preserving formatting.
 
 ## Installation
