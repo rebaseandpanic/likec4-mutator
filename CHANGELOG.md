@@ -13,6 +13,10 @@
 - Dev: `vitest` `^3` → `^5`, `tsx` → `^4.23.15`, `@types/node` `^25` → `^22` (types now match the minimum supported Node.js).
 - Release workflow runs on Node.js 22.
 
+### Internal
+- Build tool switched from `tsup` to `tsdown`; `typescript` `^5.4` → `^7.0.2`. Public exports (runtime and type) are unchanged; the emitted `.d.ts` type-checks for consumers on TypeScript 5.9 and 7.
+- `tsconfig.json` lists `"types": ["node"]` explicitly (required since TypeScript 6).
+
 ## [0.4.2] - 2026-05-03
 
 ### Bugfix
