@@ -23,7 +23,7 @@ export interface ElementInfo {
    * string (for `key 'value'`) or string[] (for `key ['v1', 'v2']`).
    */
   metadata?: Record<string, string | string[]>;
-  /** FQNs of direct children */
+  /** FQNs of direct children, including those declared in `extend` blocks of any file */
   children: string[];
   /** FQN of the parent element, undefined for root elements */
   parentFqn?: string;
