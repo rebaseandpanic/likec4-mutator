@@ -1,4 +1,5 @@
-import { buildFqnIndex, resolveFqnRef, type FqnEntry } from './fqn.js';
+import { buildFqnIndex, type FqnEntry } from './fqn.js';
+import { WorkspaceIndex, resolveRelations } from './workspace-index.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from './types.js';
 import { readMetadataBlock } from '../mutator/metadata-ops.js';
 
@@ -22,10 +23,19 @@ interface LikeC4DocumentAst {
 export class C4Query {
   private readonly ast: LikeC4DocumentAst;
   private readonly fqnIndex: Map<string, FqnEntry>;
+  private readonly workspace: WorkspaceIndex;
 
-  constructor(ast: LikeC4DocumentAst) {
+  /**
+   * @param ast       - Root AST of the document to query
+   * @param workspace - Index of every document of the project, used to
+   *                    resolve relationship endpoints that refer to elements
+   *                    declared in other files.  Defaults to an index of
+   *                    `ast` alone.
+   */
+  constructor(ast: LikeC4DocumentAst, workspace?: WorkspaceIndex) {
     this.ast = ast;
     this.fqnIndex = buildFqnIndex(ast);
+    this.workspace = workspace ?? new WorkspaceIndex([ast]);
   }
 
   /**
@@ -73,14 +83,18 @@ export class C4Query {
 
   /**
    * Return all relationships in the model, optionally filtered by source/target FQN.
-   * Relationships nested inside element bodies are included.
+   * Relationships nested inside element bodies and `extend` bodies are included.
+   *
+   * `sourceFqn` / `targetFqn` are absolute FQNs, resolved with LikeC4's scoping
+   * rules: `api -> db` written inside `app { ... }` is reported as
+   * `app.api -> app.db`, `this` / `it` and sourceless `-> x` resolve to the
+   * enclosing element.  A reference that cannot be resolved (unknown or
+   * ambiguous name) is reported as written.
    */
   getRelationships(opts?: { sourceFqn?: string; targetFqn?: string }): RelationshipInfo[] {
-    const relations: RelationshipInfo[] = [];
-
-    for (const model of this.ast.models ?? []) {
-      this.collectRelations(model.elements ?? [], '', relations);
-    }
+    const relations = resolveRelations(this.ast, this.workspace).map((r) =>
+      toRelationshipInfo(r.node, r.sourceFqn, r.targetFqn),
+    );
 
     return relations.filter((r) => {
       if (opts?.sourceFqn !== undefined && r.sourceFqn !== opts.sourceFqn) return false;
@@ -192,89 +206,68 @@ export class C4Query {
         : { offset: 0, end: 0, line: 0, column: 0 },
     };
   }
+}
 
-  /**
-   * Recursively collect Relation nodes from a flat elements array.
-   * parentFqn is the FQN context for implicit-source relations.
-   */
-  private collectRelations(
-    elements: unknown[],
-    parentFqn: string,
-    results: RelationshipInfo[],
-  ): void {
-    for (const raw of elements) {
-      const item = raw as {
-        $type?: string;
-        name?: string;
-        source?: unknown;
-        target?: unknown;
-        title?: string;
-        kind?: { $refText?: string };
-        body?: { props?: unknown[]; elements?: unknown[]; [k: string]: unknown };
-        $cstNode?: { offset: number; end: number; range?: { start?: { line?: number; character?: number } } };
-      };
-      if (item.$type === 'Relation') {
-        // source is undefined when the relation is inside an element body
-        const sourceFqn = item.source ? resolveFqnRef(item.source) : parentFqn;
-        const targetFqn = resolveFqnRef(item.target);
+/**
+ * Build the public {@link RelationshipInfo} for a `Relation` AST node whose
+ * endpoints have already been resolved to FQNs.
+ */
+function toRelationshipInfo(raw: unknown, sourceFqn: string, targetFqn: string): RelationshipInfo {
+  const item = raw as {
+    title?: string;
+    kind?: { $refText?: string };
+    body?: { props?: unknown[]; [k: string]: unknown };
+    $cstNode?: { offset: number; end: number; range?: { start?: { line?: number; character?: number } } };
+  };
+  const cst = item.$cstNode;
 
-        const cst = item.$cstNode;
+  // title is a direct string property on Relation
+  let title: string | undefined = item.title;
+  let technology: string | undefined;
+  let description: string | undefined;
 
-        // title is a direct string property on Relation
-        let title: string | undefined = item.title;
-        let technology: string | undefined;
-        let description: string | undefined;
-
-        // Named properties live in body.props as RelationStringProperty nodes
-        if (item.body?.props) {
-          for (const rawProp of item.body.props) {
-            const prop = rawProp as { $type?: string; key?: string; value?: unknown };
-            if (prop.$type !== 'RelationStringProperty') continue;
-            const value = extractStringValue(prop);
-            switch (prop.key) {
-              case 'technology':
-                technology = value;
-                break;
-              case 'description':
-                description = value;
-                break;
-              case 'title':
-                if (!title) title = value;
-                break;
-            }
-          }
-        }
-
-        const kind: string | undefined = item.kind?.$refText ?? undefined;
-        const decorations = extractBodyDecorations(item.body);
-
-        results.push({
-          sourceFqn,
-          targetFqn,
-          title,
-          kind,
-          technology,
-          description,
-          tags: decorations.tags,
-          links: decorations.links,
-          metadata: decorations.metadata,
-          sourceRange: cst
-            ? {
-                offset: cst.offset as number,
-                end: cst.end as number,
-                line: (cst.range?.start?.line ?? 0) as number,
-                column: (cst.range?.start?.character ?? 0) as number,
-              }
-            : { offset: 0, end: 0, line: 0, column: 0 },
-        });
-      } else if (item.$type === 'Element') {
-        const fqn = parentFqn ? `${parentFqn}.${item.name ?? ''}` : (item.name ?? '');
-        if (item.body?.elements) {
-          this.collectRelations(item.body.elements, fqn, results);
-        }
+  // Named properties live in body.props as RelationStringProperty nodes
+  if (item.body?.props) {
+    for (const rawProp of item.body.props) {
+      const prop = rawProp as { $type?: string; key?: string; value?: unknown };
+      if (prop.$type !== 'RelationStringProperty') continue;
+      const value = extractStringValue(prop);
+      switch (prop.key) {
+        case 'technology':
+          technology = value;
+          break;
+        case 'description':
+          description = value;
+          break;
+        case 'title':
+          if (!title) title = value;
+          break;
       }
     }
   }
+
+  const kind: string | undefined = item.kind?.$refText ?? undefined;
+  const decorations = extractBodyDecorations(item.body);
+
+  return {
+    sourceFqn,
+    targetFqn,
+    title,
+    kind,
+    technology,
+    description,
+    tags: decorations.tags,
+    links: decorations.links,
+    metadata: decorations.metadata,
+    sourceRange: cst
+      ? {
+          offset: cst.offset,
+          end: cst.end,
+          line: cst.range?.start?.line ?? 0,
+          column: cst.range?.start?.character ?? 0,
+        }
+      : { offset: 0, end: 0, line: 0, column: 0 },
+  };
 }
 
 /**

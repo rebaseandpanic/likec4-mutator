@@ -312,35 +312,3 @@ export function buildReplaceLinksEdit(
 
   return { offset: start, end, newText: replacement };
 }
-
-// ---------------------------------------------------------------------------
-// Relation collection
-// ---------------------------------------------------------------------------
-
-/**
- * Walk every model block in the AST and return all Relation nodes, keeping
- * track of the FQN of the enclosing element (used to resolve implicit-source
- * relations).  Each result row carries the original AST node plus a
- * `_parentFqn` field for source resolution.
- */
-export function collectAllRelations(ast: {
-  models?: Array<{ elements?: unknown[] }>;
-}): Array<{ node: unknown; parentFqn: string }> {
-  const out: Array<{ node: unknown; parentFqn: string }> = [];
-  for (const model of ast.models ?? []) {
-    walk(model.elements ?? [], '', out);
-  }
-  return out;
-
-  function walk(elements: unknown[], parentFqn: string, results: typeof out): void {
-    for (const item of elements) {
-      const it = item as { $type?: string; name?: string; body?: { elements?: unknown[] } };
-      if (it.$type === 'Relation') {
-        results.push({ node: item, parentFqn });
-      } else if (it.$type === 'Element') {
-        const fqn = parentFqn ? `${parentFqn}.${it.name ?? ''}` : (it.name ?? '');
-        if (it.body?.elements) walk(it.body.elements, fqn, results);
-      }
-    }
-  }
-}

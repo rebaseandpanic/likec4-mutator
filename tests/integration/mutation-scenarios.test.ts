@@ -69,8 +69,9 @@ describe('Scenario 1: Add a complete service', () => {
     expect(mutator.getElement('app.api')).not.toBeNull();
     expect(mutator.getElement('app.db')).not.toBeNull();
 
-    // 8. Verify the new relationship exists
-    const rels = mutator.getRelationships({ sourceFqn: 'app.gateway', targetFqn: 'app.cache' });
+    // 8. Verify the new relationship exists.  LikeC4 links `app.cache` to the
+    //    unique descendant `app.gateway.cache`, so that is the reported target.
+    const rels = mutator.getRelationships({ sourceFqn: 'app.gateway', targetFqn: 'app.gateway.cache' });
     expect(rels.length).toBeGreaterThan(0);
 
     // 9. Verify view appears in serialized output

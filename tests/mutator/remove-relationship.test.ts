@@ -35,14 +35,12 @@ describe('LikeC4Mutator.removeRelationship', () => {
   it('should remove an existing relationship so it is no longer queryable', () => {
     const m = makeMutator();
 
-    // The fixture has api -> db nested inside app — the source FQN as stored
-    // by the parser is the $refText of the FqnRef, which is 'api' (not 'app.api').
-    // The target is 'db' (not 'app.db').
+    // The fixture has `api -> db` nested inside app; it is addressed here by
+    // the reference text as written and reported as app.api -> app.db.
+    expect(m.getRelationships({ sourceFqn: 'app.api', targetFqn: 'app.db' })).toHaveLength(1);
     m.removeRelationship('api', 'db');
 
-    const rels = m.getRelationships();
-    const removed = rels.find((r) => r.sourceFqn === 'api' && r.targetFqn === 'db');
-    expect(removed).toBeUndefined();
+    expect(m.getRelationships({ sourceFqn: 'app.api', targetFqn: 'app.db' })).toHaveLength(0);
   });
 
   it('should throw for a non-existent relationship', () => {
@@ -64,6 +62,46 @@ describe('LikeC4Mutator.removeRelationship', () => {
     m.removeRelationship('api', 'db');
 
     expect(m.validate()).toHaveLength(0);
+  });
+
+  it('should remove a relationship declared in a file other than the first model file', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'one.c4': 'specification { element service }\nmodel { a = service }',
+      'two.c4': 'model { b = service\n a -> b }',
+    });
+
+    m.removeRelationship('a', 'b');
+
+    expect(m.getRelationships()).toEqual([]);
+    expect(m.serialize()['two.c4']).not.toContain('a -> b');
+    expect(m.validate()).toEqual([]);
+  });
+
+  it('should prefer an absolute-FQN match in a later file over a reference-text match in an earlier one', () => {
+    // one.c4 has `api -> db` inside sys (sys.api -> sys.db); its reference
+    // text is 'api' -> 'db'.  two.c4 has root-level `api -> db`, whose FQNs
+    // are exactly 'api' -> 'db' — that one must be removed.
+    const m = LikeC4Mutator.fromFiles({
+      'one.c4': `specification { element service }
+model {
+  sys = service {
+    api = service
+    db = service
+    api -> db 'nested'
+  }
+}
+`,
+      'two.c4': `model {
+  api = service
+  db = service
+  api -> db 'root'
+}
+`,
+    });
+
+    m.removeRelationship('api', 'db');
+
+    expect(m.getRelationships().map((r) => r.title)).toEqual(['nested']);
   });
 });
 
@@ -184,17 +222,15 @@ views {
 `;
     const doc = parseAndVerify(source);
 
-    // Remove the api -> db relationship.  Both elements have one, so after the
-    // edit exactly one should remain (the first match is consumed).
-    const edit = removeRelationshipEdit(doc, 'api', 'db');
+    // Both systems contain `api -> db`; addressing app's by FQN must remove
+    // exactly that one and leave backup's in place.
+    const edit = removeRelationshipEdit(doc, 'app.api', 'app.db');
     const updated = applyEdits(source, [edit]);
     const updatedDoc = parseAndVerify(updated);
     const query = new C4Query(updatedDoc.ast);
 
-    const rels = query.getRelationships();
-    // One of the two 'api -> db' relationships has been removed; one survives
-    const remaining = rels.filter((r) => r.sourceFqn === 'api' && r.targetFqn === 'db');
-    expect(remaining).toHaveLength(1);
+    const rels = query.getRelationships().map((r) => [r.sourceFqn, r.targetFqn, r.title]);
+    expect(rels).toEqual([['backup.api', 'backup.db', 'internal']]);
   });
 
   it('should throw when the relationship does not exist', () => {

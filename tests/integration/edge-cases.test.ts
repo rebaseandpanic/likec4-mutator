@@ -594,9 +594,21 @@ describe('Minimal input variations', () => {
   it('should return null from getSpecification when no specification block exists', () => {
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MODEL_ONLY });
     // When no specification block is present, getSpecification returns null
-    // (because the method returns null if elementKinds and tags are both empty)
+    // (no element kinds, tags or relationship kinds are declared anywhere)
     const spec = mutator.getSpecification();
     expect(spec).toBeNull();
+  });
+
+  it('should return a specification that declares only relationship kinds', () => {
+    const mutator = LikeC4Mutator.fromFiles({
+      'model.c4': 'specification { relationship calls }',
+    });
+
+    expect(mutator.getSpecification()).toEqual({
+      elementKinds: [],
+      tags: [],
+      relationshipKinds: ['calls'],
+    });
   });
 });
 
@@ -639,15 +651,13 @@ describe('getRelationships filtering', () => {
   });
 
   it('should filter relationships by source FQN', () => {
-    // NOTE: The relationship `api -> db` written inside `app { }` is stored
-    // with sourceFqn 'api' (the literal reference text), NOT 'app.api'.
-    // resolveFqnRef returns the textual form from the source, not the absolute FQN.
-    // This is documented v0.1 behaviour.
+    // The relationship `api -> db` written inside `app { }` is reported with
+    // the absolute FQN LikeC4 links it to: 'app.api'.
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MINIMAL_FULL });
-    const rels = mutator.getRelationships({ sourceFqn: 'api' });
+    const rels = mutator.getRelationships({ sourceFqn: 'app.api' });
     expect(rels.length).toBeGreaterThan(0);
     for (const r of rels) {
-      expect(r.sourceFqn).toBe('api');
+      expect(r.sourceFqn).toBe('app.api');
     }
   });
 

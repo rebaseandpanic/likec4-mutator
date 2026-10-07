@@ -2,7 +2,8 @@
  * Text-edit operations that target model relationships.
  */
 import type { ParsedDocument } from '../parser/types.js';
-import { resolveFqnRef } from '../query/fqn.js';
+import type { resolveFqnRef } from '../query/fqn.js';
+import { WorkspaceIndex, resolveRelations } from '../query/workspace-index.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import {
@@ -18,7 +19,6 @@ import {
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
   buildReplaceLinksEdit,
-  collectAllRelations,
   collectLeaves,
   type BodyOwnerNode,
 } from './cst-helpers.js';
@@ -83,36 +83,44 @@ export function addRelationshipEdit(
 
 /**
  * Build a TextEdit that removes a relationship matching the given source and
- * target FQNs (or local names).  Only the first matching relationship is removed.
+ * target.  Endpoints are matched as described for {@link matchRelations}.
+ * Only the first matching relationship is removed.
  *
- * @param doc    - Parsed document
- * @param source - Source FQN (or local name) to match
- * @param target - Target FQN (or local name) to match
+ * @param doc       - Parsed document
+ * @param source    - Source FQN (or reference text as written) to match
+ * @param target    - Target FQN (or reference text as written) to match
+ * @param workspace - Index of all documents of the project, used to resolve
+ *                    references to elements declared in other files
+ *                    (defaults to an index of `doc` alone)
  * @returns TextEdit that deletes the relationship line
  */
 export function removeRelationshipEdit(
   doc: ParsedDocument,
   source: string,
   target: string,
+  workspace?: WorkspaceIndex,
 ): TextEdit {
   const { ast, fullText } = doc;
 
-  // Collect all relations across every model block.
-  const all = collectAllRelations(ast as { models?: Array<{ elements?: unknown[] }> });
-  const matched = all.find(({ node, parentFqn }) => {
-    const r = node as RelationAstNode;
-    const relSource = r.source ? resolveFqnRef(r.source) : parentFqn;
-    const relTarget = resolveFqnRef(r.target);
-    return relSource === source && relTarget === target;
-  });
-
-  if (!matched) {
+  const [rel] = matchRelations(ast, { source, target }, workspace);
+  if (!rel) {
     throw new Error(`Relationship '${source} -> ${target}' not found`);
   }
+  if (!rel.$cstNode) throw new Error(`Relationship '${source} -> ${target}' has no CST node`);
 
-  const rel = matched.node as RelationAstNode;
-  const cst = rel.$cstNode;
-  if (!cst) throw new Error(`Relationship '${source} -> ${target}' has no CST node`);
+  return removeRelationNodeEdit(fullText, rel);
+}
+
+/**
+ * Build a TextEdit that deletes one `Relation` node, together with its
+ * leading indentation / newline and trailing newline.
+ *
+ * @param fullText - Text of the document the node belongs to
+ * @param node     - The `Relation` AST node to delete
+ */
+export function removeRelationNodeEdit(fullText: string, node: unknown): TextEdit {
+  const cst = (node as RelationAstNode).$cstNode;
+  if (!cst) throw new Error('Relationship has no CST node');
 
   // Expand range to include leading newline + indent and trailing newline
   let offset = cst.offset;
@@ -137,9 +145,9 @@ export function removeRelationshipEdit(
 
 /** Match clause used to locate a relationship to update. */
 export interface UpdateRelationshipMatcher {
-  /** Source FQN (or local name) — required */
+  /** Source FQN (or reference text as written, see {@link matchRelations}) — required */
   source: string;
-  /** Target FQN (or local name) — required */
+  /** Target FQN (or reference text as written, see {@link matchRelations}) — required */
   target: string;
   /** Optional: only match relations whose `kind` reference text equals this */
   matchKind?: string;
@@ -188,6 +196,7 @@ export function updateRelationshipEdit(
   doc: ParsedDocument,
   matcher: UpdateRelationshipMatcher,
   patch: UpdateRelationshipPatch,
+  workspace?: WorkspaceIndex,
 ): TextEdit[] {
   // Empty-patch guard.
   const hasAny =
@@ -215,8 +224,8 @@ export function updateRelationshipEdit(
 
   const { ast, fullText } = doc;
 
-  // Locate the matching relation using collectAllRelations.
-  const matched = matchRelations(ast, matcher);
+  // Locate the matching relation.
+  const matched = matchRelations(ast, matcher, workspace);
 
   // Disambiguate.
   if (matched.length === 0) {
@@ -321,26 +330,56 @@ interface RelationAstNode {
     }>;
     tags?: { $cstNode?: { offset: number; end: number } };
   };
-  _parentFqn?: string;
 }
 
+/**
+ * Relations of `ast` that match `matcher`, split by how the endpoints matched.
+ *
+ * `byFqn` holds relations whose resolved absolute source/target FQNs equal
+ * `matcher.source` / `matcher.target` (so `app.api -> app.db` finds
+ * `api -> db` written inside `app { ... }`).  `byText` holds relations whose
+ * endpoints, as written in the source, equal the matcher — the pre-resolution
+ * behaviour, kept so that callers addressing a relation by its local
+ * reference text (`api -> db`) still find it.  `matchKind` / `matchTitle`
+ * filter both lists.
+ *
+ * @param workspace - Index of all documents of the project (defaults to an
+ *                    index of `ast` alone)
+ */
+export function findMatchingRelations(
+  ast: unknown,
+  matcher: UpdateRelationshipMatcher,
+  workspace?: WorkspaceIndex,
+): { byFqn: RelationAstNode[]; byText: RelationAstNode[] } {
+  const docAst = ast as { models?: Array<{ elements?: unknown[] }> };
+  const resolved = resolveRelations(docAst, workspace ?? new WorkspaceIndex([docAst]));
+  const byFqn: RelationAstNode[] = [];
+  const byText: RelationAstNode[] = [];
+  for (const rel of resolved) {
+    const r = rel.node as RelationAstNode;
+    if (matcher.matchKind !== undefined && r.kind?.$refText !== matcher.matchKind) continue;
+    if (matcher.matchTitle !== undefined && r.title !== matcher.matchTitle) continue;
+    if (rel.sourceFqn === matcher.source && rel.targetFqn === matcher.target) {
+      byFqn.push(r);
+    } else if (rel.sourceText === matcher.source && rel.targetText === matcher.target) {
+      byText.push(r);
+    }
+  }
+  return { byFqn, byText };
+}
+
+/**
+ * Relations of `ast` matching `matcher`: the absolute-FQN matches when there
+ * are any, otherwise the matches by reference text as written (see
+ * {@link findMatchingRelations}).
+ */
 export function matchRelations(
   ast: unknown,
   matcher: UpdateRelationshipMatcher,
+  workspace?: WorkspaceIndex,
 ): RelationAstNode[] {
-  const all = collectAllRelations(ast as { models?: Array<{ elements?: unknown[] }> });
-  const results: RelationAstNode[] = [];
-  for (const { node, parentFqn } of all) {
-    const r = node as RelationAstNode;
-    const relSource = r.source ? resolveFqnRef(r.source) : parentFqn;
-    const relTarget = resolveFqnRef(r.target);
-    if (relSource !== matcher.source) continue;
-    if (relTarget !== matcher.target) continue;
-    if (matcher.matchKind !== undefined && r.kind?.$refText !== matcher.matchKind) continue;
-    if (matcher.matchTitle !== undefined && r.title !== matcher.matchTitle) continue;
-    results.push(r);
-  }
-  return results;
+  const { byFqn, byText } = findMatchingRelations(ast, matcher, workspace);
+  return byFqn.length > 0 ? byFqn : byText;
 }
 
 export function formatNotFoundError(matcher: UpdateRelationshipMatcher): string {
