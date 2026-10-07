@@ -326,6 +326,12 @@ export function escapeString(s: string): string {
  * Grammar keywords accepted by `Id` (e.g. `element`) match it too.
  */
 const TAG_NAME = /^(?:[a-zA-Z]|_+[a-zA-Z0-9])[-\w]*$/;
+/**
+ * The lexer's BOOLEAN terminal (`/\b(true|false)\b/`) wins over identifiers, so
+ * a name that starts with `true` / `false` followed by a non-word character
+ * (or nothing) is not lexed as one identifier: `#true` and `#true-x` are not tags.
+ */
+const BOOLEAN_PREFIX = /^(?:true|false)(?![A-Za-z0-9_])/;
 
 /**
  * Format a tag reference as `#name`.  One leading `#` supplied by the caller is
@@ -336,9 +342,9 @@ const TAG_NAME = /^(?:[a-zA-Z]|_+[a-zA-Z0-9])[-\w]*$/;
  */
 export function formatTag(tag: string): string {
   const name = tag.startsWith('#') ? tag.slice(1) : tag;
-  if (!TAG_NAME.test(name)) {
+  if (!TAG_NAME.test(name) || BOOLEAN_PREFIX.test(name)) {
     throw new Error(
-      `Invalid tag ${JSON.stringify(tag)}: a tag name must start with a letter (or underscores followed by a letter or digit) and contain only letters, digits, '_' or '-'`,
+      `Invalid tag ${JSON.stringify(tag)}: a tag name must start with a letter (or underscores followed by a letter or digit) and contain only letters, digits, '_' or '-', and must not begin with the keyword true or false`,
     );
   }
   return `#${name}`;

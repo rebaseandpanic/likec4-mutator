@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { generateElement } from '../../src/index.js';
 
 /**
  * Tags and link URLs are emitted as bare tokens, so a value that is not a
@@ -66,9 +67,15 @@ describe('tag names are validated against LikeC4 tag syntax', () => {
     },
   );
 
+  // `true` / `false` match the identifier pattern but the LikeC4 lexer emits
+  // them as BOOLEAN tokens, so `#true` is not a tag.
+  it.each(['true', 'false', '#true', 'true-x'])('generateElement rejects the boolean keyword %j as a tag name', (tag) => {
+    expect(() => generateElement({ indent: '', name: 'x', kind: 'service', tags: [tag] })).toThrow();
+  });
+
   it.each(tagOperations)('$name accepts valid tag names (with or without a leading #)', ({ run }) => {
     const m = fresh();
-    run(m, ['a-b', '_1', 'element', '#ok']);
+    run(m, ['a-b', '_1', 'element', '#ok', 'trueish', 'false_x']);
     expect(m.validate()).toEqual([]);
   });
 });
