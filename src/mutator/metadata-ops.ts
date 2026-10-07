@@ -23,8 +23,20 @@ import {
   type BodyOwnerNode,
 } from './cst-helpers.js';
 
-/** Read API representation: every value is either a string or string[]. */
+/**
+ * Read API representation: every value is either a string or string[].
+ * Maps produced by this module have a `null` prototype, so every LikeC4
+ * identifier — including `__proto__` and `constructor` — is an own data key.
+ */
 export type MetadataMap = Record<string, string | string[]>;
+
+/**
+ * Create an empty prototype-less metadata map.  Assigning `__proto__` on a
+ * plain `{}` would invoke the prototype setter instead of storing the key.
+ */
+function createMetadataMap(): MetadataMap {
+  return Object.create(null) as MetadataMap;
+}
 
 /**
  * Patch representation: `string` / `string[]` upserts the key, `null` deletes
@@ -87,13 +99,25 @@ function readMetadataValue(attr: MetadataAttributeShape): string | string[] | un
  * Attributes whose value is incomplete (parser error recovery) are omitted.
  */
 export function readMetadataBlock(metaBody: MetadataBodyShape): MetadataMap {
-  const out: MetadataMap = {};
+  const out = createMetadataMap();
   for (const attr of metaBody.props ?? []) {
     if (!attr.key) continue;
     const value = readMetadataValue(attr);
     if (value !== undefined) out[attr.key] = value;
   }
   return out;
+}
+
+/**
+ * The upserts of a patch (entries whose value is not `null`), as a
+ * prototype-less map that keeps keys such as `__proto__` as data.
+ */
+export function collectMetadataUpserts(patch: MetadataPatch): MetadataMap {
+  const upserts = createMetadataMap();
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== null) upserts[key] = value;
+  }
+  return upserts;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,16 +158,14 @@ export function buildReplaceMetadataEditOnNode(
 
   // Validate every upsert up-front (key syntax, non-empty arrays) so the
   // caller sees the error before any other edits run.
-  const upserts: Record<string, string | string[]> = {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null) continue;
+  const upserts = collectMetadataUpserts(patch);
+  for (const [key, value] of Object.entries(upserts)) {
     validateMetadataKey(key);
     if (Array.isArray(value) && value.length === 0) {
       throw new Error(
         `Invalid metadata patch for key '${key}': empty array not allowed by LikeC4 grammar`,
       );
     }
-    upserts[key] = value;
   }
 
   // Locate the existing MetadataBody.

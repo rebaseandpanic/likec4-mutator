@@ -91,3 +91,65 @@ describe('metadata values beyond plain strings', () => {
     expect(m.getElement('a')?.metadata).toEqual({ test: 'replaced', owner: 'original' });
   });
 });
+
+describe('metadata keys that collide with Object.prototype members', () => {
+  // `__proto__` and `constructor` are valid LikeC4 identifiers; they must be
+  // kept as plain data keys, never interpreted as JavaScript object members.
+  const source = `specification {
+  element service
+}
+model {
+  a = service {
+    metadata {
+      __proto__ ['one']
+      constructor 'ctor'
+      owner 'original'
+    }
+  }
+  b = service
+}
+`;
+
+  it('getElement exposes them as own keys', () => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+    expect(Object.entries(m.getElement('a')?.metadata ?? {})).toEqual([
+      ['__proto__', ['one']],
+      ['constructor', 'ctor'],
+      ['owner', 'original'],
+    ]);
+  });
+
+  it('merging an unrelated key keeps them in the source and on read', () => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+    m.updateElement('a', { metadata: { owner: 'new' } });
+    const out = m.serialize()['m.c4'];
+    expect(out).toContain("__proto__ ['one']");
+    expect(out).toContain("constructor 'ctor'");
+    expect(m.validate()).toEqual([]);
+    expect(Object.entries(m.getElement('a')?.metadata ?? {})).toEqual([
+      ['__proto__', ['one']],
+      ['constructor', 'ctor'],
+      ['owner', 'new'],
+    ]);
+  });
+
+  it.each([
+    { name: 'into an existing block', fqn: 'a' },
+    { name: 'into a new block', fqn: 'b' },
+  ])('a patch parsed from JSON can upsert __proto__ $name', ({ fqn }) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+    const patch = JSON.parse('{"__proto__": "patched"}') as Record<string, string>;
+    m.updateElement(fqn, { metadata: patch });
+    expect(m.validate()).toEqual([]);
+    const metadata = m.getElement(fqn)?.metadata ?? {};
+    expect(Object.getOwnPropertyDescriptor(metadata, '__proto__')?.value).toBe('patched');
+  });
+
+  it('a patch parsed from JSON can null-delete __proto__', () => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+    const patch = JSON.parse('{"__proto__": null}') as Record<string, null>;
+    m.updateElement('a', { metadata: patch });
+    expect(m.validate()).toEqual([]);
+    expect(Object.keys(m.getElement('a')?.metadata ?? {})).toEqual(['constructor', 'owner']);
+  });
+});

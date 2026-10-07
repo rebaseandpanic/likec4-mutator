@@ -24,6 +24,7 @@ import {
 } from './cst-helpers.js';
 import {
   buildReplaceMetadataEditOnNode,
+  collectMetadataUpserts,
   type MetadataPatch,
 } from './metadata-ops.js';
 
@@ -594,10 +595,7 @@ function buildCombinedBodyInsert(
     body += generateRelationshipStyleBlock(patch.style, innerIndent);
   }
   if (patch.metadata) {
-    const upserts: Record<string, string | string[]> = {};
-    for (const [k, v] of Object.entries(patch.metadata)) {
-      if (v !== null) upserts[k] = v;
-    }
+    const upserts = collectMetadataUpserts(patch.metadata);
     if (Object.keys(upserts).length > 0) {
       body += generateMetadataBlock(upserts, innerIndent);
     }
