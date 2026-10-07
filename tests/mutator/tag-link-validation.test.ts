@@ -146,7 +146,7 @@ describe('link URLs are validated against the LikeC4 URI terminals', () => {
 
   const validUrls = [
     "https://example.com/it's",
-    'ssh://bastion.internal',
+    'ssh://host.example.com',
     '../src/index.ts#L1-L10',
     '/docs/readme.md',
     '@alias/path/file.md',
