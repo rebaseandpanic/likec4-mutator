@@ -14,6 +14,7 @@ import {
   generateStyleBlock,
   generateMetadataBlock,
   escapeString,
+  formatLinkUrl,
   formatTag,
   type ElementStyle,
 } from './codegen.js';
@@ -276,10 +277,9 @@ function buildCombinedBodyInsertElement(
     body += `${innerIndent}technology '${escapeString(patch.technology)}'\n`;
   }
   if (patch.links && patch.links.length > 0) {
-    const sanitizeUrl = (u: string) => u.replace(/[\n\r']/g, '');
     for (const lnk of patch.links) {
       const escapedLabel = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-      body += `${innerIndent}link ${sanitizeUrl(lnk.url)}${escapedLabel}\n`;
+      body += `${innerIndent}link ${formatLinkUrl(lnk.url)}${escapedLabel}\n`;
     }
   }
   if (patch.style && Object.keys(patch.style).length > 0) {

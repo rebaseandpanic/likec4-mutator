@@ -4,7 +4,7 @@
  * operate on offsets, raw text, and minimal AST shapes.
  */
 import type { TextEdit } from './text-edit.js';
-import { escapeString } from './codegen.js';
+import { escapeString, formatLinkUrl } from './codegen.js';
 
 /**
  * Find the offset of the matching closing `}` for the opening `{` at or after
@@ -276,11 +276,10 @@ export function buildReplaceLinksEdit(
   links: Array<{ url: string; label?: string }>,
 ): TextEdit | null {
   const innerIndent = indent + '  ';
-  const sanitizeUrl = (url: string) => url.replace(/[\n\r']/g, '');
   const newSnippetLines = links
     .map((lnk) => {
       const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-      return `${innerIndent}link ${sanitizeUrl(lnk.url)}${escaped}`;
+      return `${innerIndent}link ${formatLinkUrl(lnk.url)}${escaped}`;
     })
     .join('\n');
   const replacement = links.length === 0 ? '' : '\n' + newSnippetLines + '\n';
@@ -299,7 +298,7 @@ export function buildReplaceLinksEdit(
       links
         .map((lnk) => {
           const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
-          return `${ii}link ${sanitizeUrl(lnk.url)}${escaped}`;
+          return `${ii}link ${formatLinkUrl(lnk.url)}${escaped}`;
         })
         .join('\n') + '\n',
     );

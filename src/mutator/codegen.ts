@@ -108,9 +108,9 @@ export function generateElement(opts: GenerateElementOpts): string {
     if (links && links.length > 0) {
       for (const lnk of links) {
         if (lnk.label) {
-          result += `${innerIndent}link ${sanitizeUrl(lnk.url)} '${escapeString(lnk.label)}'\n`;
+          result += `${innerIndent}link ${formatLinkUrl(lnk.url)} '${escapeString(lnk.label)}'\n`;
         } else {
-          result += `${innerIndent}link ${sanitizeUrl(lnk.url)}\n`;
+          result += `${innerIndent}link ${formatLinkUrl(lnk.url)}\n`;
         }
       }
     }
@@ -223,9 +223,9 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
     if (links) {
       for (const link of links) {
         if (link.label) {
-          result += `${innerIndent}link ${sanitizeUrl(link.url)} '${escapeString(link.label)}'\n`;
+          result += `${innerIndent}link ${formatLinkUrl(link.url)} '${escapeString(link.label)}'\n`;
         } else {
-          result += `${innerIndent}link ${sanitizeUrl(link.url)}\n`;
+          result += `${innerIndent}link ${formatLinkUrl(link.url)}\n`;
         }
       }
     }
@@ -345,12 +345,31 @@ export function formatTag(tag: string): string {
 }
 
 /**
- * Strip characters that would break DSL syntax from a URL string.
- * Single quotes and newlines are removed since they cannot appear inside
- * an unquoted URL token in the LikeC4 grammar.
+ * The LikeC4 `Uri` rule: a link URL is emitted unquoted and must form exactly
+ * one of these terminal tokens.
  */
-function sanitizeUrl(url: string): string {
-  return url.replace(/[\n\r']/g, '');
+const LINK_URI_TERMINALS = [
+  /^\w+:\/{2}\S+$/, // URI_WITH_SCHEMA  e.g. https://host/path, ssh://host
+  /^\.{0,2}\/[^/]\S+$/, // URI_RELATIVE  e.g. ../src/index.ts, /docs/readme.md
+  /^@[a-zA-Z0-9_-]*\/\S+$/, // URI_ALIAS   e.g. @alias/path
+];
+
+/**
+ * Validate a link URL for emission as an unquoted `link` token and return it
+ * unchanged.
+ *
+ * @throws {Error} when the URL contains whitespace or does not match one of
+ *   the LikeC4 URI forms (`scheme://…`, `/…`, `./…`, `../…`, `@alias/…`) —
+ *   it would otherwise not be a single token and its tail would become part
+ *   of the model
+ */
+export function formatLinkUrl(url: string): string {
+  if (/\s/.test(url) || !LINK_URI_TERMINALS.some((re) => re.test(url))) {
+    throw new Error(
+      `Invalid link URL ${JSON.stringify(url)}: expected 'scheme://…', a relative path ('/…', './…', '../…') or '@alias/…' without whitespace`,
+    );
+  }
+  return url;
 }
 
 /**
