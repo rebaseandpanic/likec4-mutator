@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { generateElement } from '../../src/index.js';
 
 /**
  * Metadata values in the LikeC4 grammar:
@@ -151,5 +152,73 @@ model {
     m.updateElement('a', { metadata: patch });
     expect(m.validate()).toEqual([]);
     expect(Object.keys(m.getElement('a')?.metadata ?? {})).toEqual(['constructor', 'owner']);
+  });
+});
+
+describe('metadata keys must form a LikeC4 metadata attribute key', () => {
+  // MetadataAttribute: key=Id.  Id is IdTerminal /([a-zA-Z]|_+[a-zA-Z0-9])[-\w]*/
+  // or one of the keywords the Id rule lists (e.g. `element`, `model`).  Other
+  // keywords (`title`, `link`, `metadata`, ...) are lexed as keywords and are
+  // not an Id; BOOLEAN /\b(true|false)\b/ wins over IdTerminal.
+  const source = `specification {
+  element service
+}
+model {
+  a = service {
+    metadata {
+      owner 'original'
+    }
+  }
+  b = service
+  a -> b 'uses'
+}
+`;
+
+  const rejected = ['1abc', '-x', '_', '_-', 'title', 'link', 'metadata', 'style', 'true', 'false', 'true-x', 'a b', 'a.b'];
+  const accepted = ['team', 'Team1', '_a', '__1', 'a-b', 'x-', 'a_b', 'element', 'model', 'true1', 'false_x', 'version'];
+
+  type Apply = (m: LikeC4Mutator, metadata: Record<string, string>) => void;
+  const operations: Array<{ op: string; apply: Apply }> = [
+    { op: 'updateElement (existing block)', apply: (m, metadata) => m.updateElement('a', { metadata }) },
+    { op: 'updateElement (new block)', apply: (m, metadata) => m.updateElement('b', { metadata }) },
+    {
+      op: 'addElement',
+      apply: (m, metadata) => m.addElement('a', { name: 'c', kind: 'service', title: 'C', metadata }),
+    },
+    { op: 'addRelationship', apply: (m, metadata) => m.addRelationship('b', 'a', 'calls', { metadata }) },
+    {
+      op: 'updateRelationship',
+      apply: (m, metadata) => m.updateRelationship({ source: 'a', target: 'b' }, { metadata }),
+    },
+  ];
+  const cases = <T>(keys: string[], f: (key: string, op: string, apply: Apply) => T) =>
+    keys.flatMap((key) => operations.map(({ op, apply }) => f(key, op, apply)));
+
+  it.each(cases(rejected, (key, op, apply) => ({ key, op, apply })))(
+    'rejects key $key in $op and leaves the source unchanged',
+    ({ key, apply }) => {
+      const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+      expect(() => apply(m, { [key]: 'v' })).toThrow();
+      expect(m.serialize()['m.c4']).toBe(source);
+    },
+  );
+
+  it.each(cases(accepted, (key, op, apply) => ({ key, op, apply })))(
+    'accepts key $key in $op',
+    ({ key, apply }) => {
+      const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+      apply(m, { [key]: 'v' });
+      expect(m.validate()).toEqual([]);
+      const out = m.serialize()['m.c4'];
+      const reparsed = LikeC4Mutator.fromFiles({ 'm.c4': out });
+      expect(reparsed.validate()).toEqual([]);
+      expect(out).toContain(`${key} 'v'`);
+    },
+  );
+
+  it.each(rejected)('generateElement rejects key %s', (key) => {
+    expect(() =>
+      generateElement({ indent: '', name: 'c', kind: 'service', metadata: { [key]: 'v' } }),
+    ).toThrow();
   });
 });
