@@ -51,3 +51,32 @@ describe('LikeC4Mutator.addView includes', () => {
     expect(m.serialize()['model.c4']).toBe(source);
   });
 });
+
+// An includes item must form exactly one include rule of the view: anything
+// that would add another rule, a property or another view is rejected before
+// the view is written.
+describe('LikeC4Mutator.addView rejects an item that is not exactly one include rule', () => {
+  it.each([
+    ['element', '* exclude app.api'],
+    ['element', '*\n  autoLayout LeftRight'],
+    ['element', "*\n  title 'x'"],
+    ['element', '* }\n  view other {\n  include *'],
+    ['deployment', '* exclude app.api'],
+    ['dynamic', "*\n  title 'x'"],
+  ] as const)('%s view, item %j', (type, item) => {
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': source });
+    expect(() => m.addView({ id: 'v', type, target: type === 'element' ? 'app' : undefined, includes: [item] })).toThrow();
+    expect(m.serialize()['model.c4']).toBe(source);
+  });
+
+  it.each([
+    ['element', 'app.api, app.includeApi'],
+    ['element', '* // every element'],
+    ['dynamic', 'app.api'],
+    ['deployment', '*'],
+  ] as const)('%s view accepts %j', (type, item) => {
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': source });
+    m.addView({ id: 'v', type, target: type === 'element' ? 'app' : undefined, includes: [item] });
+    expect(m.serialize()['model.c4']).toContain(`include ${item}`);
+  });
+});

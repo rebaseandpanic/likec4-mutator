@@ -207,17 +207,18 @@ function optionalStringArray(obj: JsonObject, key: string, path: string): void {
 }
 
 /**
- * `includes` of addView: an array of strings, each holding an include
- * expression once trimmed and stripped of one leading `include` keyword.
+ * `includes` of addView: an array of strings, each holding exactly one include
+ * rule of the view's type once trimmed and stripped of one leading `include`
+ * keyword (no further rule, property or view).
  */
-function optionalViewIncludes(obj: JsonObject, path: string): void {
+function optionalViewIncludes(obj: JsonObject, path: string, type: AddViewMutation['type']): void {
   optionalStringArray(obj, 'includes', path);
   const value = obj.includes as string[] | undefined;
   value?.forEach((item, i) => {
-    if (viewIncludeExpression(item) === undefined) {
+    if (viewIncludeExpression(item, type) === undefined) {
       throw new MutationsFileError(
         `${path}.includes[${i}]`,
-        `expected an include expression such as '*' or 'app.api', got ${JSON.stringify(item)}`,
+        `expected one include rule's predicates such as '*' or 'app.api, app.db', got ${JSON.stringify(item)}`,
       );
     }
   });
@@ -463,7 +464,7 @@ function validateMutation(m: JsonObject, path: string): void {
       }
       optionalString(m, 'target', path);
       optionalString(m, 'title', path);
-      optionalViewIncludes(m, path);
+      optionalViewIncludes(m, path, m.type as AddViewMutation['type']);
       return;
     default:
       throw new MutationsFileError(

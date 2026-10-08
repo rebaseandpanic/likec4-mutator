@@ -5,7 +5,7 @@
  * into a document via a TextEdit.  The caller is responsible for supplying the
  * correct indentation strings.
  */
-import { isLikeC4Id } from '../parser/grammar.js';
+import { isLikeC4Id, isSingleIncludeRule, type IncludeViewType } from '../parser/grammar.js';
 
 // ---------------------------------------------------------------------------
 // Element generation
@@ -279,16 +279,19 @@ export interface GenerateViewOpts {
  * The predicates of one view `include` rule given as `item`: trimmed, with one
  * leading `include` keyword (followed by whitespace or nothing) removed, so
  * that both `'*'` and `'include *'` give `'*'`.  Returns `undefined` when
- * nothing remains (an empty item or a bare `include`).  The predicates
- * themselves are not checked here; a malformed one is rejected when the
- * edited file is reparsed.
+ * nothing remains (an empty item or a bare `include`), and — when `type` is
+ * given — when the predicates do not form exactly one `include` rule of a view
+ * of that type (a parse error, or a further rule, property or view such as
+ * `'* exclude x'`; see {@link isSingleIncludeRule}).
  */
-export function viewIncludeExpression(item: string): string | undefined {
+export function viewIncludeExpression(item: string, type?: IncludeViewType): string | undefined {
   const expression = item
     .trim()
     .replace(/^include(?=\s|$)/, '')
     .trim();
-  return expression === '' ? undefined : expression;
+  if (expression === '') return undefined;
+  if (type !== undefined && !isSingleIncludeRule(expression, type)) return undefined;
+  return expression;
 }
 
 /**
@@ -296,18 +299,18 @@ export function viewIncludeExpression(item: string): string | undefined {
  * `autoLayout TopBottom` directive is included; pass `autoLayout: ''`
  * to suppress it.
  *
- * @throws {Error} when an `includes` item is empty or a bare `include`
- *   keyword (see {@link viewIncludeExpression})
+ * @throws {Error} when an `includes` item is empty, a bare `include` keyword,
+ *   or not exactly one include rule of the view (see {@link viewIncludeExpression})
  */
 export function generateView(opts: GenerateViewOpts): string {
   const { indent, id, type, target, title, includes, autoLayout = 'TopBottom' } = opts;
   const innerIndent = indent + '  ';
 
   const expressions = includes?.map((item, i) => {
-    const expression = viewIncludeExpression(item);
+    const expression = viewIncludeExpression(item, type);
     if (expression === undefined) {
       throw new Error(
-        `View '${id}': includes[${i}] has no include expression (got ${JSON.stringify(item)})`,
+        `View '${id}': includes[${i}] is not exactly one include rule (got ${JSON.stringify(item)})`,
       );
     }
     return expression;

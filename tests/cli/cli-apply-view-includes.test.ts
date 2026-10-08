@@ -83,6 +83,13 @@ describe('CLI apply: addView includes', () => {
     { name: 'a whitespace-only item', includes: ['*', '   '], path: 'mutations[1].includes[1]' },
     { name: 'a bare include keyword', includes: ['include'], path: 'mutations[1].includes[0]' },
     { name: 'an include keyword with trailing spaces', includes: ['include   '], path: 'mutations[1].includes[0]' },
+    // An item must be exactly one include rule: no further rule, property or view.
+    { name: 'an item that adds an exclude rule', includes: ['* exclude app.api'], path: 'mutations[1].includes[0]' },
+    { name: 'an item that adds a rule on a new line', includes: ['*', '*\n  autoLayout LeftRight'], path: 'mutations[1].includes[1]' },
+    { name: 'an item that adds a view property', includes: ["*\n  title 'x'"], path: 'mutations[1].includes[0]' },
+    { name: 'an item that closes the view', includes: ['* }\n  view other {\n  include *'], path: 'mutations[1].includes[0]' },
+    // `include*` lexes as the keyword plus `*`; only a whitespace-separated keyword is stripped.
+    { name: 'an include keyword glued to the expression', includes: ['include*'], path: 'mutations[1].includes[0]' },
   ])('rejects includes that is $name before touching any file', ({ includes, path }) => {
     const { status, stderr, model } = runApply({
       mutations: [{ op: 'addView', id: 'first', type: 'element', target: 'app' }, { ...view, includes }],

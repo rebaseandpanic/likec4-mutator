@@ -75,3 +75,51 @@ export function isLikeC4Id(name: string): boolean {
   const [token] = tokens;
   return token!.image === name && getIdTokenTypes().has(token!.tokenType.name);
 }
+
+/** View kinds an `include` rule can be written for. */
+export type IncludeViewType = 'element' | 'dynamic' | 'deployment';
+
+const VIEW_KEYWORD: Record<IncludeViewType, string> = {
+  element: 'view',
+  dynamic: 'dynamic view',
+  deployment: 'deployment view',
+};
+
+/** AST type of the `include` rule in the body of each view kind. */
+const INCLUDE_RULE_TYPE: Record<IncludeViewType, string> = {
+  element: 'ViewRulePredicate',
+  dynamic: 'DynamicViewIncludePredicate',
+  deployment: 'DeploymentViewRulePredicate',
+};
+
+/**
+ * Whether `expression` — the text written after the `include` keyword — forms
+ * exactly one `include` rule in the body of a view of `type`: it parses without
+ * errors and adds no further rule, property, step, view or top-level block.
+ * Comma-separated predicates (`a, b`) form one rule.  This guards against an
+ * expression such as `* exclude x` or `*\n autoLayout LeftRight`, which is
+ * valid LikeC4 but would write more than the one include rule asked for.
+ */
+export function isSingleIncludeRule(expression: string, type: IncludeViewType): boolean {
+  const source = `views {\n${VIEW_KEYWORD[type]} probe {\ninclude ${expression}\n}\n}\n`;
+  const result = getServices().likec4.parser.LangiumParser.parse(source);
+  if (result.parserErrors.length > 0 || result.lexerErrors.length > 0) return false;
+
+  const document = result.value as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(document)) {
+    if (key.startsWith('$') || key === 'views') continue;
+    if (Array.isArray(value) && value.length > 0) return false;
+  }
+  const blocks = document.views as ReadonlyArray<{ views?: ReadonlyArray<unknown> }> | undefined;
+  if (blocks?.length !== 1 || blocks[0]!.views?.length !== 1) return false;
+
+  const view = blocks[0]!.views[0] as {
+    body?: { rules?: ReadonlyArray<{ $type: string; isInclude?: boolean }>; props?: unknown[]; steps?: unknown[] };
+  };
+  const body = view.body;
+  if (!body || (body.props?.length ?? 0) > 0 || (body.steps?.length ?? 0) > 0) return false;
+  const rules = body.rules ?? [];
+  if (rules.length !== 1) return false;
+  const [rule] = rules;
+  return rule!.$type === INCLUDE_RULE_TYPE[type] && rule!.isInclude !== false;
+}
