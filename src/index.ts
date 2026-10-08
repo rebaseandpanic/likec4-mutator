@@ -3,7 +3,15 @@ export { C4Query } from './query/query.js';
 export { buildFqnIndex, resolveFqnRef } from './query/fqn.js';
 export { WorkspaceIndex } from './query/workspace-index.js';
 export type { ParsedDocument, ParseError } from './parser/types.js';
-export type { ElementInfo, RelationshipInfo, SpecificationInfo } from './query/types.js';
+export type { WorkspaceDocument, WorkspaceDocumentAst, ExtendBlockRef } from './query/workspace-index.js';
+export type {
+  ElementDecorations,
+  ElementInfo,
+  ExtendContribution,
+  RelationshipInfo,
+  SourceRange,
+  SpecificationInfo,
+} from './query/types.js';
 
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';
@@ -11,6 +19,7 @@ export type {
   AddElementOpts,
   AddViewOpts,
   RemoveElementResult,
+  UpdateElementResult,
   UpdateElementPatch,
   UpdateRelationshipMatcher,
   UpdateRelationshipPatch,

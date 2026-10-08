@@ -90,8 +90,9 @@ mutator.addView({
   includes: ['*'],
 });
 
-// Update element (only specified fields are changed)
-mutator.updateElement('app.db', {
+// Update element (only specified fields are changed).  tags / links / metadata
+// apply to the effective values, including `extend` blocks — see "`extend` blocks".
+const { changedFiles } = mutator.updateElement('app.db', {
   title: 'Updated Title',             // REPLACE
   summary: 'Updated summary',         // REPLACE
   description: 'Updated description', // REPLACE
@@ -196,7 +197,7 @@ likec4-mutator add-relationship --dir ./c4 \
 
 ### update-element
 
-Update properties of an existing element. Only the flags you provide are changed; all other properties are left intact.
+Update properties of an existing element. Only the flags you provide are changed; all other properties are left intact. `--tags` replaces all tags of the element, including those added by `extend` blocks (see [`extend` blocks](#extend-blocks)). Every loaded file is written to the output directory.
 
 ```bash
 likec4-mutator update-element --dir ./c4 --fqn app.api \
@@ -285,7 +286,7 @@ Adds a new element inside a parent. All fields except `op`, `parent`, `kind`, `i
 
 #### updateElement
 
-Updates properties of an existing element.  Only specified fields are changed.
+Updates properties of an existing element.  Only specified fields are changed.  `tags`, `links` and `metadata` apply to the effective values, including contributions of `extend` blocks (see [`extend` blocks](#extend-blocks)).
 
 | Field | Semantics |
 | --- | --- |
@@ -470,6 +471,83 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | color | Theme colors |
 | head | normal, onormal, diamond, odiamond, crow, open, vee, dot, odot, none |
 | tail | Same as head |
+
+## `extend` blocks
+
+An element can get tags, links and metadata from `extend X { ... }` blocks, in the same or other files:
+
+```
+// base.c4
+model {
+  app = service 'App' {
+    #internal
+    metadata { owner 'team-a' }
+  }
+}
+
+// ext/ops.c4
+model {
+  extend app {
+    #critical
+    link https://runbooks.example.com/app 'Runbook'
+    metadata { owner 'ops' }
+  }
+}
+```
+
+### Reading
+
+`getElement` / `listElements` report the **effective** `tags`, `links` and `metadata` — what LikeC4 itself builds for the element — plus their provenance:
+
+```typescript
+const app = mutator.getElement('app')!;
+app.tags;        // ['internal', 'critical']
+app.links;       // [{ url: 'https://runbooks.example.com/app', label: 'Runbook' }]
+app.metadata;    // { owner: ['team-a', 'ops'] }
+app.declared;    // { tags: ['internal'], metadata: { owner: 'team-a' } } — the declaration body only
+app.extendedBy;  // [{ file: 'ext/ops.c4', sourceRange: {...}, tags: ['critical'], links: [...], metadata: { owner: 'ops' } }]
+```
+
+Merge rules (LikeC4 1.59.4):
+
+- The declaration body comes first, then every `extend` block of exactly this element — files ordered by path the way LikeC4 orders documents (natural and segment by segment: `a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`; independent of the order passed to `fromFiles`), then source order within a file.
+- `tags`: union without duplicates.
+- `links`: concatenated; duplicates are kept.
+- `metadata`: every value of a key is collected (a key repeated inside one block too); when a key appears in more than one body, duplicate values are dropped. A key with one value maps to a string — also when written as `key ['v1']` — otherwise to an array. `declared` and `extendedBy` keep the form as written.
+- String values are reported as written (LikeC4 additionally dedents and trims them).
+- `getElementSource` and `sourceRange` still refer to the declaration; each `extendedBy` entry carries the range of its block. Blocks that only declare nested elements, or nothing, are listed too.
+- File names must denote distinct paths: `fromFiles({ 'a.c4': ..., './a.c4': ... })` throws.
+- A standalone `new C4Query(ast)` merges only the `extend` blocks of that document and reports them without `file`; pass a `WorkspaceIndex` built from `{ file, ast }` documents for the whole project.
+- A workspace with syntax errors is read best effort: what the parser recovers is merged.
+- `extend a -> b { ... }` (extending a relationship) is not merged into `getRelationships()` yet, and `updateRelationship` does not edit such blocks.
+
+### Writing
+
+`updateElement` keeps its documented semantics for the effective values:
+
+| Patch | Declaration body | Every `extend X { ... }` of exactly this element, in every file |
+| --- | --- | --- |
+| `title`, `summary`, `description`, `technology`, `style` | updated as before | untouched (the grammar does not allow them there) |
+| `tags: [...]` / `tags: []` | replaced / removed | tags removed |
+| `links: [...]` / `links: []` | replaced / removed | links removed |
+| `metadata: { k: value }` | `k` upserted | `k` removed |
+| `metadata: { k: null }` | `k` removed | `k` removed |
+| metadata keys not in the patch | kept verbatim | kept verbatim |
+
+```typescript
+mutator.updateElement('app', { tags: ['internal'], metadata: { owner: 'platform' } });
+// base.c4:    #internal, metadata { owner 'platform' }
+// ext/ops.c4: extend app { link https://runbooks.example.com/app 'Runbook' }
+// => { changedFiles: ['base.c4', 'ext/ops.c4'] }
+```
+
+- New values always go into the declaration; `extend` blocks only lose the patched properties / keys. Nested elements, relationships, comments and other keys in the blocks are kept; a block that ends up empty (`extend app { }`) stays in place — remove it by hand if you do not want it.
+- Extend blocks of descendants (`extend app.api`) are not touched by `updateElement('app', ...)`.
+- After the update, reading the element returns what LikeC4 makes of the written value: e.g. `metadata: { k: ['v1'] }` reads back as `k: 'v1'` (`declared` keeps `['v1']`).
+- `updateElement` returns `{ changedFiles }`: the files whose text changed, in load order (`[]` when nothing changed). It describes the in-memory state — use it to save only those files from `serialize()`.
+- An update of `tags`, `links` or `metadata` is rejected, before anything changes, while any loaded file has syntax errors (`validate()` is not empty): an `extend` block in that file could not be found reliably. Other properties can still be updated.
+- The update is atomic in memory: when any file's edit fails, all files are restored. Writing files to disk (e.g. the CLI's `--output` / `--in-place`) happens file by file and is not atomic.
+- `removeElement` deletes every `extend` block of the element's subtree; `addElement` and `generateElement` write only the new declaration — `extend` blocks that already target the new FQN start contributing once it exists.
 
 ## How it works
 

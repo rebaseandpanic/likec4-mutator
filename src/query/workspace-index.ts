@@ -27,6 +27,7 @@
  * A reference that cannot be resolved (unknown or ambiguous name) keeps its
  * reference text, joined with dots, so callers still see what was written.
  */
+import { compareNaturalHierarchically } from '@likec4/core/utils';
 import { forEachElementDeclaration, readStrictFqnRef, resolveFqnRef } from './fqn.js';
 
 /** Minimal structural view of an AST node used by this module. */
@@ -51,6 +52,26 @@ interface RefLike {
 /** Root AST of one parsed document, as far as this module reads it. */
 export interface WorkspaceDocumentAst {
   models?: Array<{ elements?: unknown[] }>;
+}
+
+/** A document of the workspace together with the name of its file. */
+export interface WorkspaceDocument {
+  /**
+   * File name, e.g. `model.c4` or `sub/ext.c4` — a path relative to the
+   * project root (`/` or `\` separated).  It decides the order in which
+   * `extend` blocks are merged and is reported as provenance.
+   */
+  file: string;
+  /** Root AST of the document */
+  ast: WorkspaceDocumentAst;
+}
+
+/** An `extend X { ... }` block found by {@link WorkspaceIndex.extendBlocks}. */
+export interface ExtendBlockRef {
+  /** File of the block; undefined when the document was indexed without a name */
+  file?: string;
+  /** The `ExtendElement` AST node */
+  node: any;
 }
 
 /** A relation found in a document together with its resolved endpoints. */
@@ -89,14 +110,46 @@ export class WorkspaceIndex {
   private readonly roots = new Map<string, string[]>();
   private readonly uniqueDescendantsCache = new Map<string, Map<string, string>>();
 
-  constructor(asts: readonly WorkspaceDocumentAst[]) {
-    for (const ast of asts) {
+  /** extended FQN → `extend` blocks targeting exactly it, in merge order */
+  private readonly extendsOf = new Map<string, ExtendBlockRef[]>();
+
+  /**
+   * @param documents - Every document of the project: root ASTs, or
+   *                    {@link WorkspaceDocument}s carrying file names.  When
+   *                    every document is named, `extend` blocks are merged in
+   *                    LikeC4's document order (file paths sorted naturally,
+   *                    segment by segment); otherwise in the order given.
+   * @throws When two file names denote the same path (e.g. `a.c4` and
+   *         `./a.c4`).
+   */
+  constructor(documents: ReadonlyArray<WorkspaceDocumentAst | WorkspaceDocument>) {
+    const docs = documents.map(toWorkspaceDocument);
+    for (const { ast } of docs) {
       forEachElementDeclaration(ast, (_node, fqn, parentFqn) => {
         this.declarations.set(fqn, (this.declarations.get(fqn) ?? 0) + 1);
         if (parentFqn) push(this.childrenOf, parentFqn, fqn);
         else push(this.roots, fqn, fqn);
       });
     }
+    for (const { file, ast } of mergeOrder(docs)) {
+      for (const model of ast.models ?? []) {
+        for (const item of (model.elements ?? []) as AstNodeLike[]) {
+          if (item.$type !== 'ExtendElement') continue;
+          const target = readStrictFqnRef(item.element);
+          if (!target) continue;
+          push(this.extendsOf, target, file === undefined ? { node: item } : { file, node: item });
+        }
+      }
+    }
+  }
+
+  /**
+   * The `extend X { ... }` blocks whose X is exactly `fqn`, in the order
+   * LikeC4 merges their tags, links and metadata: by document (see the
+   * constructor), then in source order.
+   */
+  extendBlocks(fqn: string): readonly ExtendBlockRef[] {
+    return this.extendsOf.get(fqn) ?? [];
   }
 
   /** True when at least one element with this FQN is declared. */
@@ -330,6 +383,57 @@ function uniqueAcross(scopes: LocalScope[]): LocalScope {
     if (fqns.length === 1) out.set(name, fqns[0]);
   }
   return out;
+}
+
+/** A document with its optional file name. */
+interface IndexedDocument {
+  file?: string;
+  ast: WorkspaceDocumentAst;
+}
+
+function toWorkspaceDocument(doc: WorkspaceDocumentAst | WorkspaceDocument): IndexedDocument {
+  if ('file' in doc && typeof doc.file === 'string' && 'ast' in doc) {
+    return { file: doc.file, ast: doc.ast };
+  }
+  return { ast: doc as WorkspaceDocumentAst };
+}
+
+/** LikeC4 orders the documents of a project by URI path (`compareByUri`). */
+const compareByPath = compareNaturalHierarchically('/');
+
+/**
+ * Documents in the order LikeC4 merges their `extend` blocks: sorted by
+ * normalized path when every document is named, otherwise as given.
+ */
+function mergeOrder(docs: IndexedDocument[]): IndexedDocument[] {
+  if (docs.some((d) => d.file === undefined)) return docs;
+  const byPath = new Map<string, string>();
+  const keyed = docs.map((doc) => {
+    const path = normalizePath(doc.file!);
+    const other = byPath.get(path);
+    if (other !== undefined) {
+      throw new Error(`Files '${other}' and '${doc.file}' denote the same path '${path}'`);
+    }
+    byPath.set(path, doc.file!);
+    return { doc, path };
+  });
+  keyed.sort((a, b) => compareByPath(a.path, b.path));
+  return keyed.map((k) => k.doc);
+}
+
+/**
+ * Path of a file below the virtual project root, as it appears in a
+ * document URI: `\` and `/` separate segments, `.` segments are dropped and
+ * `..` removes the preceding segment (never above the root).
+ */
+function normalizePath(file: string): string {
+  const segments: string[] = [];
+  for (const segment of file.split(/[\\/]/)) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') segments.pop();
+    else segments.push(segment);
+  }
+  return segments.join('/');
 }
 
 function lastSegment(fqn: string): string {

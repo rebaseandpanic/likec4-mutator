@@ -113,7 +113,14 @@ model {
 
   it('getElement exposes them as own keys', () => {
     const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+    // Effective metadata collapses a single-element array to a string, as
+    // LikeC4 does; `declared` keeps the form as written.
     expect(Object.entries(m.getElement('a')?.metadata ?? {})).toEqual([
+      ['__proto__', 'one'],
+      ['constructor', 'ctor'],
+      ['owner', 'original'],
+    ]);
+    expect(Object.entries(m.getElement('a')?.declared.metadata ?? {})).toEqual([
       ['__proto__', ['one']],
       ['constructor', 'ctor'],
       ['owner', 'original'],
@@ -128,7 +135,7 @@ model {
     expect(out).toContain("constructor 'ctor'");
     expect(m.validate()).toEqual([]);
     expect(Object.entries(m.getElement('a')?.metadata ?? {})).toEqual([
-      ['__proto__', ['one']],
+      ['__proto__', 'one'],
       ['constructor', 'ctor'],
       ['owner', 'new'],
     ]);

@@ -197,6 +197,11 @@ program
         if (el.parentFqn) process.stdout.write(`Parent:      ${el.parentFqn}\n`);
         if (el.children.length > 0) process.stdout.write(`Children:    ${el.children.join(', ')}\n`);
         if (el.tags && el.tags.length > 0) process.stdout.write(`Tags:        ${el.tags.join(', ')}\n`);
+        if (el.extendedBy.length > 0) {
+          // 1-based line of each `extend` block that contributes to the element.
+          const places = el.extendedBy.map((e) => `${e.file ?? '<unnamed>'}:${e.sourceRange.line + 1}`);
+          process.stdout.write(`Extended by: ${places.join(', ')}\n`);
+        }
       }
       process.exit(0);
     } catch (err) {
@@ -303,7 +308,7 @@ program
   .option('--summary <text>', 'New summary for the element')
   .option('--description <text>', 'New description for the element')
   .option('--technology <text>', 'New technology label for the element')
-  .option('--tags <tags>', 'Comma-separated list of tags to add (e.g. internal,backend)')
+  .option('--tags <tags>', 'Comma-separated list of tags replacing all tags of the element, including those added by extend blocks (e.g. internal,backend)')
   .option('--output <path>', 'Output directory (defaults to --dir for in-place)')
   .action((opts: {
     dir: string;

@@ -109,6 +109,33 @@ export function readMetadataBlock(metaBody: MetadataBodyShape): MetadataMap {
 }
 
 /**
+ * Read a `MetadataBody` the way LikeC4 builds an element's metadata from it
+ * (language-server `getMetadata`): array values are flattened, every value
+ * of a key repeated inside the block is kept in source order, and a key with
+ * exactly one value maps to a string, otherwise to an array.  So
+ * `k ['v1']` reads as `'v1'`, and `k 'a'` followed by `k 'b'` as
+ * `['a', 'b']`.  String contents are returned as written.
+ *
+ * {@link readMetadataBlock} instead returns the block as declared.
+ */
+export function readMetadataGrouped(metaBody: MetadataBodyShape): MetadataMap {
+  const grouped = new Map<string, string[]>();
+  for (const attr of metaBody.props ?? []) {
+    if (!attr.key) continue;
+    const value = readMetadataValue(attr);
+    if (value === undefined) continue;
+    const values = grouped.get(attr.key) ?? [];
+    values.push(...(Array.isArray(value) ? value : [value]));
+    grouped.set(attr.key, values);
+  }
+  const out = createMetadataMap();
+  for (const [key, values] of grouped) {
+    out[key] = values.length === 1 ? values[0]! : values;
+  }
+  return out;
+}
+
+/**
  * The upserts of a patch (entries whose value is not `null`), as a
  * prototype-less map that keeps keys such as `__proto__` as data.
  */
