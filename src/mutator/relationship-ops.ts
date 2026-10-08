@@ -3,7 +3,9 @@
  */
 import type { ParsedDocument } from '../parser/types.js';
 import type { resolveFqnRef } from '../query/fqn.js';
-import { WorkspaceIndex, resolveRelations } from '../query/workspace-index.js';
+import { WorkspaceIndex, resolveRelations, type ResolvedRelation } from '../query/workspace-index.js';
+import type { ExtendRelationNode } from '../query/relation-extends.js';
+import { relationKind } from '../query/relation-node.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import {
@@ -241,6 +243,13 @@ export function updateRelationshipEdit(
   //   - If body exists, build an edit per field as usual.
   //   - If body is absent, build a single combined snippet and emit one edit
   //     that creates the body and includes all fields.
+  //
+  // Tags written on the relation line (`a -> b 'x' #t`) are what LikeC4
+  // reads; they are replaced there, and the body is left without tags.
+  if (patch.tags !== undefined && rel.tags?.$cstNode) {
+    edits.push(buildReplaceHeaderTagsEdit(rel.tags.$cstNode, fullText, patch.tags));
+    patch = { ...patch, tags: undefined };
+  }
   const bodyTargeting =
     patch.description !== undefined ||
     patch.technology !== undefined ||
@@ -301,6 +310,9 @@ interface RelationAstNode {
   target?: FqnRefLike;
   title?: string;
   kind?: { $refText?: string };
+  dotKind?: { kind?: { $refText?: string } };
+  /** Tags written on the relation line, after the title */
+  tags?: { $cstNode?: { offset: number; end: number } };
   body?: {
     $cstNode?: { offset: number; end: number };
     props?: Array<{
@@ -333,22 +345,36 @@ export function findMatchingRelations(
   ast: unknown,
   matcher: UpdateRelationshipMatcher,
   workspace?: WorkspaceIndex,
-): { byFqn: RelationAstNode[]; byText: RelationAstNode[] } {
+): { byFqn: ResolvedRelation[]; byText: ResolvedRelation[] } {
   const docAst = ast as { models?: Array<{ elements?: unknown[] }> };
   const resolved = resolveRelations(docAst, workspace ?? new WorkspaceIndex([docAst]));
-  const byFqn: RelationAstNode[] = [];
-  const byText: RelationAstNode[] = [];
+  const byFqn: ResolvedRelation[] = [];
+  const byText: ResolvedRelation[] = [];
   for (const rel of resolved) {
     const r = rel.node as RelationAstNode;
-    if (matcher.matchKind !== undefined && r.kind?.$refText !== matcher.matchKind) continue;
+    if (matcher.matchKind !== undefined && relationKind(r) !== matcher.matchKind) continue;
     if (matcher.matchTitle !== undefined && r.title !== matcher.matchTitle) continue;
     if (rel.sourceFqn === matcher.source && rel.targetFqn === matcher.target) {
-      byFqn.push(r);
+      byFqn.push(rel);
     } else if (rel.sourceText === matcher.source && rel.targetText === matcher.target) {
-      byText.push(r);
+      byText.push(rel);
     }
   }
   return { byFqn, byText };
+}
+
+/**
+ * Relations of `ast` matching `matcher`, with their resolved endpoints: the
+ * absolute-FQN matches when there are any, otherwise the matches by
+ * reference text as written (see {@link findMatchingRelations}).
+ */
+export function matchResolvedRelations(
+  ast: unknown,
+  matcher: UpdateRelationshipMatcher,
+  workspace?: WorkspaceIndex,
+): ResolvedRelation[] {
+  const { byFqn, byText } = findMatchingRelations(ast, matcher, workspace);
+  return byFqn.length > 0 ? byFqn : byText;
 }
 
 /**
@@ -361,8 +387,18 @@ export function matchRelations(
   matcher: UpdateRelationshipMatcher,
   workspace?: WorkspaceIndex,
 ): RelationAstNode[] {
-  const { byFqn, byText } = findMatchingRelations(ast, matcher, workspace);
-  return byFqn.length > 0 ? byFqn : byText;
+  return matchResolvedRelations(ast, matcher, workspace).map((r) => r.node as RelationAstNode);
+}
+
+/**
+ * Build the TextEdit that sets the title of an `extend a -> b 'title' { ... }`
+ * block: the title string is replaced, or inserted after the target when the
+ * block has none.
+ */
+export function buildExtendRelationTitleEdit(node: ExtendRelationNode, title: string): TextEdit {
+  const edit = buildLabelEdit(node as unknown as RelationAstNode, title);
+  if (!edit) throw new Error('extend block has no source position');
+  return edit;
 }
 
 export function formatNotFoundError(matcher: UpdateRelationshipMatcher): string {
@@ -378,7 +414,7 @@ function formatAmbiguousError(
 ): string {
   const found = matched
     .map((m) => {
-      const k = m.kind?.$refText ?? 'null';
+      const k = relationKind(m) ?? 'null';
       const t = m.title === undefined ? 'null' : `'${m.title}'`;
       return `[kind=${k} title=${t}]`;
     })
@@ -455,6 +491,24 @@ function buildRelationStringPropEdit(
     end: closingBrace,
     newText: `${innerIndent}${key} ${newValueText}\n`,
   };
+}
+
+/**
+ * Replace the tags written on the relation line (`a -> b 'x' #t1 #t2`) with
+ * `tags`, in place; an empty array removes them together with the blanks
+ * before them.
+ */
+function buildReplaceHeaderTagsEdit(
+  tagsCst: { offset: number; end: number },
+  fullText: string,
+  tags: string[],
+): TextEdit {
+  if (tags.length > 0) {
+    return { offset: tagsCst.offset, end: tagsCst.end, newText: tags.map((t) => formatTag(t)).join(' ') };
+  }
+  let start = tagsCst.offset;
+  while (start > 0 && (fullText[start - 1] === ' ' || fullText[start - 1] === '\t')) start--;
+  return { offset: start, end: tagsCst.end, newText: '' };
 }
 
 /**

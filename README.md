@@ -107,7 +107,7 @@ const { changedFiles } = mutator.updateElement('app.db', {
   style: { color: 'red' },            // MERGE per-field (v0.4.0 BREAKING — was full replace)
 });
 
-// Update an existing relationship
+// Update an existing relationship (=> { changedFiles })
 mutator.updateRelationship(
   { source: 'app', target: 'app.db' },
   {
@@ -219,7 +219,7 @@ likec4-mutator remove-element --dir ./c4 --fqn app.api --output ./out
 
 ### remove-relationship
 
-Remove a relationship matched by source and target FQN (searched across all files).
+Remove a relationship matched by source and target FQN (searched across all files), together with `extend a -> b` blocks that applied only to it.
 
 ```bash
 likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db --output ./out
@@ -293,7 +293,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 | `title`, `summary`, `description`, `technology` | REPLACE |
 | `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags. |
 | `links` | REPLACE.  `[]` clears all links. |
-| `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting). |
+| `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting), and so are comments in the block: patched keys are edited in place, new keys added at the end of the block. |
 | `style` | MERGE per-field (v0.4.0 BREAKING — was full replace).  Pass a complete style object to reproduce the old replace-all behaviour. |
 
 ```json
@@ -316,7 +316,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 
 #### updateRelationship
 
-Updates fields on an existing relationship.  Required: `op`, `source`, `target`, plus at least one update field.  When more than one relation matches `source`/`target`, supply `matchKind` and/or `matchTitle` to disambiguate.
+Updates fields on an existing relationship.  Required: `op`, `source`, `target`, plus at least one update field.  When more than one relation matches `source`/`target`, supply `matchKind` and/or `matchTitle` to disambiguate.  `label`, `tags`, `links` and `metadata` also apply to `extend a -> b { ... }` blocks of the relationship (see [Relationships](#relationships)).
 
 | Field | Semantics |
 | --- | --- |
@@ -520,7 +520,7 @@ Merge rules (LikeC4 1.59.4):
 - File names must denote distinct paths: `fromFiles({ 'a.c4': ..., './a.c4': ... })` throws.
 - A standalone `new C4Query(ast)` merges only the `extend` blocks of that document and reports them without `file`; pass a `WorkspaceIndex` built from `{ file, ast }` documents for the whole project.
 - A workspace with syntax errors is read best effort: what the parser recovers is merged.
-- `extend a -> b { ... }` (extending a relationship) is not merged into `getRelationships()` yet, and `updateRelationship` does not edit such blocks.
+- Relationships have `extend a -> b { ... }` blocks with their own matching and merge rules — see [Relationships](#relationships).
 
 ### Writing
 
@@ -550,6 +550,40 @@ mutator.updateElement('app', { tags: ['internal'], metadata: { owner: 'platform'
 - An update of `tags`, `links` or `metadata` is rejected, before anything changes, while any loaded file has syntax errors (`validate()` is not empty): an `extend` block in that file could not be found reliably. Other properties can still be updated.
 - The update is atomic in memory: when any file's edit fails, all files are restored. Writing files to disk (e.g. the CLI's `--output` / `--in-place`) happens file by file and is not atomic.
 - `removeElement` deletes every `extend` block of the element's subtree; `addElement` and `generateElement` write only the new declaration — `extend` blocks that already target the new FQN start contributing once it exists.
+
+### Relationships
+
+A relationship can get tags, links and metadata from `extend a -> b { ... }` blocks (only directly in a `model` block):
+
+```
+// base.c4
+model {
+  api -[calls]-> db 'reads' {
+    metadata { sla '99.9%' }
+  }
+}
+
+// ext/ops.c4
+model {
+  extend api -[calls]-> db 'reads' {
+    #critical
+    metadata { owner 'ops' }
+  }
+}
+```
+
+`getRelationships()` reports effective `tags`, `links` and `metadata`, `declared` and `extendedBy`, as for elements. LikeC4 1.59.4 decides which relationships a block applies to, and merges, as follows:
+
+- A block applies to every relationship with the same source and target (resolved to FQNs), kind, title and direction. No kind matches only relationships without a kind (`-[calls]->` and `.calls` are the same kind). Titles are compared dedented and trimmed; the title may be written after the target or as a `title` body property, and a relationship without a title is compared with the `title` of its kind's specification when that declares one. A bidirectional block (`extend b <-> a`) matches `a <-> b`; a directed block never matches a bidirectional relationship.
+- The relationship's own values come first — its tags are those written on the relation line (`a -> b 'x' #t`) or else those of its body — then every matching block in the order used for elements.
+- `tags` and `metadata` merge as for elements. `links` differ: a block's link is skipped when a link with the same url and label is already present; the relationship's own duplicates are kept.
+- Spec defaults of a relationship kind (its tags and links) are not merged, neither for relationships nor for elements.
+
+`updateRelationship` treats these blocks like `updateElement` treats `extend X` blocks — same table and rules (new values go into the relationship; patched tags, links and metadata keys leave every matching block in every file; empty blocks stay; rejected while a file has syntax errors; atomic in memory) — and returns `{ changedFiles }`. In addition:
+
+- The title identifies the relationship for its blocks, so a `label` that changes the title is written into every matching block as well (`extend api -[calls]-> db 'queries' { ... }`); otherwise they would stop applying.
+- A block applies to every relationship with the same identity (e.g. `a -> b 'x'` and `a -> b { title 'x' }`). When an update would change such a shared block, it is rejected before anything changes, because the other relationship would change too.
+- `removeRelationship` also removes the blocks that applied to the removed relationship and apply to no remaining one (they would match nothing). `removeElement` removes, besides those of the relationships it removes, every block whose source or target is in the removed subtree. Blocks that matched nothing before are left alone.
 
 ## How it works
 

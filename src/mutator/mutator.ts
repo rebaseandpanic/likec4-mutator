@@ -8,7 +8,15 @@
  */
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
-import { WorkspaceIndex, resolveRelations } from '../query/workspace-index.js';
+import {
+  WorkspaceIndex,
+  resolveRelations,
+  type ExtendRelationBlockRef,
+  type ResolvedRelation,
+} from '../query/workspace-index.js';
+import { buildRemovalEdit } from './cst-helpers.js';
+import { relationFingerprint, relationIdentity, type RelationIdentity } from '../query/relation-extends.js';
+import { removeIndent } from '../query/likec4-text.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, type TextEdit } from './text-edit.js';
@@ -30,6 +38,8 @@ import {
   removeRelationNodeEdit,
   updateRelationshipEdit,
   findMatchingRelations,
+  matchResolvedRelations,
+  buildExtendRelationTitleEdit,
   formatNotFoundError,
   type UpdateRelationshipMatcher,
   type UpdateRelationshipPatch,
@@ -65,6 +75,20 @@ export interface UpdateElementResult {
    * whose `extend` blocks lost tags, links or metadata keys.  Empty when the
    * update changed nothing.  Describes the in-memory state: nothing is
    * written to disk.
+   */
+  changedFiles: string[];
+}
+
+/**
+ * Result of {@link LikeC4Mutator.updateRelationship}.
+ */
+export interface UpdateRelationshipResult {
+  /**
+   * Files whose text changed, without duplicates, in the order the files
+   * were loaded: the file of the relationship and files whose
+   * `extend a -> b { ... }` blocks lost tags, links or metadata keys or got
+   * the new title.  Empty when the update changed nothing.  Describes the
+   * in-memory state: nothing is written to disk.
    */
   changedFiles: string[];
 }
@@ -260,24 +284,12 @@ export class LikeC4Mutator {
       metadataKeys: props.metadata ? Object.keys(props.metadata) : [],
     };
     const crossFile = clearing.tags || clearing.links || clearing.metadataKeys.length > 0;
-    if (crossFile) {
-      const errors = this.validate();
-      if (errors.length > 0) {
-        throw new Error(
-          `Cannot update tags, links or metadata of '${fqn}': extend blocks of loaded files ` +
-            `cannot be located reliably while files have syntax errors:\n` +
-            errors.map((e) => `  ${e}`).join('\n'),
-        );
-      }
-    }
+    if (crossFile) this.rejectWhileSyntaxErrors(`tags, links or metadata of '${fqn}'`);
 
     // Every edit is computed against the current documents before any file
     // changes, then applied as one group per file.
     const editsByFile = new Map<string, TextEdit[]>();
-    const addEdits = (file: string, edits: TextEdit[]): void => {
-      if (edits.length === 0) return;
-      editsByFile.set(file, [...(editsByFile.get(file) ?? []), ...edits]);
-    };
+    const addEdits = (file: string, edits: TextEdit[]): void => addEditGroup(editsByFile, file, edits);
     addEdits(filename, updateElementEdit(this.document(filename), fqn, props));
     if (crossFile) {
       for (const block of this.workspace.extendBlocks(fqn)) {
@@ -288,21 +300,7 @@ export class LikeC4Mutator {
       }
     }
 
-    const snapshot = this.snapshot();
-    try {
-      for (const file of this.sources.keys()) {
-        const edits = editsByFile.get(file);
-        if (edits) this.applyEditsToFile(file, edits);
-      }
-    } catch (err) {
-      this.restore(snapshot);
-      throw err;
-    }
-
-    const changedFiles = [...this.sources]
-      .filter(([file, text]) => snapshot.sources.get(file) !== text)
-      .map(([file]) => file);
-    return { changedFiles };
+    return { changedFiles: this.applyEditGroups(editsByFile) };
   }
 
   /**
@@ -317,7 +315,10 @@ export class LikeC4Mutator {
    * Removed relationships are those whose source or target is the element or
    * one of its descendants — in any loaded file — plus those declared inside
    * the element's body or inside a removed `extend` block (which disappear
-   * with it).  The operation is atomic: when any step fails, no file is
+   * with it).  `extend a -> b { ... }` blocks whose source or target is in
+   * the subtree, and blocks that applied only to removed relationships, are
+   * removed too (see {@link removeRelationship}); they are not listed in the
+   * result.  The operation is atomic: when any step fails, no file is
    * changed.
    *
    * @param fqn - FQN of the element to remove
@@ -341,18 +342,32 @@ export class LikeC4Mutator {
       }
     }
 
+    // Fingerprints of the relationships that go and of those that stay, for
+    // the `extend a -> b` blocks below.
+    const removedNodes = new Set<unknown>();
+    for (const [file, doc] of this.documents) {
+      const ranges = this.removedRanges(fqn, filename, file);
+      for (const rel of resolveRelations(doc.ast, this.workspace)) {
+        const cst = (rel.node as { $cstNode?: { offset: number; end: number } }).$cstNode;
+        if (isDependent(rel) || (cst && ranges.some((range) => isWithin(cst, range)))) removedNodes.add(rel.node);
+      }
+    }
+    const keys = this.relationKeys((rel) => removedNodes.has(rel.node));
+
     const snapshot = this.snapshot();
     try {
       // Remove dependent relationships declared outside the removed ranges one
       // at a time (each removal reparses its file, so offsets stay valid),
-      // then the `extend` blocks of the subtree, then the element itself.
-      // Relationships inside the element's body or an `extend` block go along
-      // with it.
+      // then the `extend a -> b` blocks that lose their relationships or an
+      // endpoint (while the endpoints still resolve), then the `extend`
+      // blocks of the subtree, then the element itself.  Relationships inside
+      // the element's body or an `extend` block go along with it.
       for (;;) {
         const next = this.findRelationOutsideRemovedRanges(fqn, filename, isDependent);
         if (!next) break;
         this.applyEdit(next.filename, removeRelationNodeEdit(this.document(next.filename).fullText, next.node));
       }
+      this.removeOrphanedExtendRelations(keys, (endpoint) => isSameOrDescendant(endpoint, fqn));
 
       for (;;) {
         const next = this.findExtendBlock(fqn);
@@ -418,10 +433,30 @@ export class LikeC4Mutator {
    * Multi-file behaviour: every loaded document is scanned and every match
    * across files is collected.  Throws on cross-file ambiguity.
    *
+   * `extend a -> b { ... }` blocks that apply to the relationship (see
+   * {@link RelationshipInfo.extendedBy}) take part as for
+   * {@link updateElement}: `tags`, `links` and `metadata` act on the
+   * effective values — new values go into the relationship, and the patched
+   * tags, links and metadata keys are removed from every such block in every
+   * loaded file (a block that ends up empty stays).  A block is identified
+   * by the relationship's title, so a `label` that changes the title is
+   * written into every such block too; otherwise they would stop applying.
+   *
+   * A block also applies to every other relationship with the same source,
+   * target, kind, title and direction.  When such a block would change, the
+   * update is rejected before anything changes: it would change the other
+   * relationship as well.
+   *
+   * A `label`, `tags`, `links` or `metadata` update is rejected — before
+   * anything is changed — while any loaded file has syntax errors (as
+   * reported by {@link validate}).  The operation is atomic in memory: when
+   * any step fails, every file is restored and the error is rethrown.
+   *
    * @param matcher - Source/target plus optional matchKind/matchTitle disambiguators
    * @param patch   - Update payload (at least one field must be specified)
+   * @returns The files that changed.
    */
-  updateRelationship(matcher: UpdateRelationshipMatcher, patch: UpdateRelationshipPatch): void {
+  updateRelationship(matcher: UpdateRelationshipMatcher, patch: UpdateRelationshipPatch): UpdateRelationshipResult {
     const matches = this.locateRelations(matcher);
     if (matches.length === 0) {
       throw new Error(formatNotFoundError(matcher));
@@ -435,12 +470,53 @@ export class LikeC4Mutator {
     }
 
     const filename = matches[0];
-    const doc = this.documents.get(filename);
-    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    const edits = updateRelationshipEdit(doc, matcher, patch, this.workspace);
-    if (edits.length > 0) {
-      this.applyEditsToFile(filename, edits);
+    const doc = this.document(filename);
+    // Validates the patch and selects exactly one relationship in `doc`.
+    const relationEdits = updateRelationshipEdit(doc, matcher, patch, this.workspace);
+    const [relation] = matchResolvedRelations(doc.ast, matcher, this.workspace);
+    if (!relation) throw new Error(formatNotFoundError(matcher));
+
+    const clearing = {
+      tags: patch.tags !== undefined,
+      links: patch.links !== undefined,
+      metadataKeys: patch.metadata ? Object.keys(patch.metadata) : [],
+    };
+    const crossFile =
+      clearing.tags || clearing.links || clearing.metadataKeys.length > 0 || patch.label !== undefined;
+    const name = `'${relation.sourceFqn} -> ${relation.targetFqn}'`;
+    if (crossFile) this.rejectWhileSyntaxErrors(`the label, tags, links or metadata of relationship ${name}`);
+
+    const editsByFile = new Map<string, TextEdit[]>();
+    addEditGroup(editsByFile, filename, relationEdits);
+
+    // A relationship with an unresolved endpoint is not in LikeC4's model:
+    // no `extend` block applies to it.
+    if (crossFile && relation.resolved) {
+      const identity = relationIdentity(relation);
+      const newTitle = patch.label === undefined ? undefined : this.extendTitleAfterLabel(identity, patch.label);
+      const changedBlockFiles: string[] = [];
+      for (const { file, node } of this.workspace.extendRelationBlocks(identity)) {
+        // The mutator indexes every document under its file name.
+        if (file === undefined) throw new Error(`Internal error: extend block of ${name} has no file name`);
+        const blockEdits = clearExtendContributionsEdits(this.document(file), node, clearing);
+        if (newTitle !== undefined) blockEdits.push(buildExtendRelationTitleEdit(node, newTitle));
+        if (blockEdits.length === 0) continue;
+        changedBlockFiles.push(file);
+        addEditGroup(editsByFile, file, blockEdits);
+      }
+      if (changedBlockFiles.length > 0) {
+        const others = this.countRelationsSharing(identity, relation.node);
+        if (others > 0) {
+          throw new Error(
+            `Cannot update relationship ${name}: its extend blocks (${[...new Set(changedBlockFiles)].join(', ')}) ` +
+              `would change, and each also applies to ${others} other relationship(s) with the same source, ` +
+              `target, kind, title and direction`,
+          );
+        }
+      }
     }
+
+    return { changedFiles: this.applyEditGroups(editsByFile) };
   }
 
   /**
@@ -452,6 +528,12 @@ export class LikeC4Mutator {
    * searched; when several relationships match, the first one in file order
    * is removed.
    *
+   * `extend a -> b { ... }` blocks that applied to the removed relationship
+   * and apply to no remaining one are removed too, in every loaded file: they
+   * only decorated it (LikeC4 would warn that they match no relation).
+   * Blocks that matched nothing before are left alone.  The operation is
+   * atomic: when any step fails, no file is changed.
+   *
    * @param source - Source FQN (or reference text as written)
    * @param target - Target FQN (or reference text as written)
    */
@@ -459,10 +541,19 @@ export class LikeC4Mutator {
     const [filename] = this.locateRelations({ source, target });
     if (!filename) throw new Error(`Relationship '${source} -> ${target}' not found`);
 
-    const doc = this.documents.get(filename);
-    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+    const doc = this.document(filename);
     const edit = removeRelationshipEdit(doc, source, target, this.workspace);
-    this.applyEdit(filename, edit);
+    const [removed] = matchResolvedRelations(doc.ast, { source, target }, this.workspace);
+    const keys = this.relationKeys((rel) => rel.node === removed?.node);
+
+    const snapshot = this.snapshot();
+    try {
+      this.applyEdit(filename, edit);
+      this.removeOrphanedExtendRelations(keys, () => false);
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
   }
 
   /**
@@ -563,6 +654,112 @@ export class LikeC4Mutator {
       for (let i = 0; i < found.byText.length; i++) byText.push(filename);
     }
     return byFqn.length > 0 ? byFqn : byText;
+  }
+
+  /**
+   * Throw, naming every syntax error, when any loaded file does not parse:
+   * `extend` blocks in such a file cannot be located reliably.
+   */
+  private rejectWhileSyntaxErrors(what: string): void {
+    const errors = this.validate();
+    if (errors.length === 0) return;
+    throw new Error(
+      `Cannot update ${what}: extend blocks of loaded files ` +
+        `cannot be located reliably while files have syntax errors:\n` +
+        errors.map((e) => `  ${e}`).join('\n'),
+    );
+  }
+
+  /**
+   * Apply edit groups (file → edits computed against the current documents)
+   * atomically: when any file fails, every file is restored and the error is
+   * rethrown.
+   *
+   * @returns The files whose text changed, in load order.
+   */
+  private applyEditGroups(editsByFile: Map<string, TextEdit[]>): string[] {
+    const snapshot = this.snapshot();
+    try {
+      for (const file of this.sources.keys()) {
+        const edits = editsByFile.get(file);
+        if (edits) this.applyEditsToFile(file, edits);
+      }
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+    return [...this.sources]
+      .filter(([file, text]) => snapshot.sources.get(file) !== text)
+      .map(([file]) => file);
+  }
+
+  /**
+   * The title to write into the `extend` blocks of a relationship whose label
+   * becomes `label`, or undefined when the blocks keep applying unchanged.
+   * The title LikeC4 compares is the dedented, trimmed label — or, when that
+   * is empty, the title of the kind's specification.
+   */
+  private extendTitleAfterLabel(identity: RelationIdentity, label: string): string | undefined {
+    const before = this.workspace.effectiveIdentity(identity);
+    const after = this.workspace.effectiveIdentity({ ...identity, title: removeIndent(label) });
+    if (relationFingerprint(before) === relationFingerprint(after)) return undefined;
+    return after.title === removeIndent(label) ? label : after.title;
+  }
+
+  /**
+   * Number of relationships, other than `node`, in any loaded file that the
+   * `extend` blocks of `identity` apply to as well.
+   */
+  private countRelationsSharing(identity: RelationIdentity, node: unknown): number {
+    const key = relationFingerprint(this.workspace.effectiveIdentity(identity));
+    let count = 0;
+    for (const doc of this.documents.values()) {
+      for (const rel of resolveRelations(doc.ast, this.workspace)) {
+        if (rel.node === node || !rel.resolved) continue;
+        if (relationFingerprint(this.workspace.effectiveIdentity(relationIdentity(rel))) === key) count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Fingerprints of the relationships (with resolved endpoints) of every
+   * loaded file, split by `isRemoved`.
+   */
+  private relationKeys(isRemoved: (rel: ResolvedRelation) => boolean): { removed: Set<string>; remaining: Set<string> } {
+    const removed = new Set<string>();
+    const remaining = new Set<string>();
+    for (const doc of this.documents.values()) {
+      for (const rel of resolveRelations(doc.ast, this.workspace)) {
+        if (!rel.resolved) continue;
+        const key = relationFingerprint(this.workspace.effectiveIdentity(relationIdentity(rel)));
+        (isRemoved(rel) ? removed : remaining).add(key);
+      }
+    }
+    return { removed, remaining };
+  }
+
+  /**
+   * Remove, one at a time, every `extend a -> b { ... }` block (endpoints
+   * resolved) that applied to a removed relationship and to no remaining
+   * one, or whose source or target satisfies `endpointRemoved`.
+   */
+  private removeOrphanedExtendRelations(
+    keys: { removed: Set<string>; remaining: Set<string> },
+    endpointRemoved: (fqn: string) => boolean,
+  ): void {
+    const isOrphaned = ({ key, block }: { key: string; block: ExtendRelationBlockRef }): boolean =>
+      endpointRemoved(block.sourceFqn) ||
+      endpointRemoved(block.targetFqn) ||
+      (keys.removed.has(key) && !keys.remaining.has(key));
+    for (;;) {
+      const next = this.workspace.extendRelationBlockList().find(isOrphaned);
+      if (!next) return;
+      const { file, node } = next.block;
+      if (file === undefined || !node.$cstNode) throw new Error('Internal error: extend block without file or position');
+      const { offset, end, newText } = buildRemovalEdit(this.document(file).fullText, node.$cstNode.offset, node.$cstNode.end);
+      this.applyEdit(file, { offset, end, newText });
+    }
   }
 
   /** Latest parsed document of `filename`. */
@@ -706,6 +903,12 @@ export class LikeC4Mutator {
 interface MutatorSnapshot {
   sources: Map<string, string>;
   documents: Map<string, ParsedDocument>;
+}
+
+/** Append `edits` to the group of `file` (empty lists are ignored). */
+function addEditGroup(editsByFile: Map<string, TextEdit[]>, file: string, edits: TextEdit[]): void {
+  if (edits.length === 0) return;
+  editsByFile.set(file, [...(editsByFile.get(file) ?? []), ...edits]);
 }
 
 /** True when `fqn` equals `ancestor` or is nested below it. */

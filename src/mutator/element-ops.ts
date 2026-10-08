@@ -8,6 +8,7 @@
 import type { ParsedDocument } from '../parser/types.js';
 import { buildFqnIndex, readStrictFqnRef } from '../query/fqn.js';
 import type { ExtendElementNode } from '../query/workspace-index.js';
+import type { ExtendRelationNode } from '../query/relation-extends.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import {
@@ -371,13 +372,13 @@ export interface ExtendClearing {
 
 /**
  * Build the TextEdits that remove tags, links and/or metadata keys from an
- * `extend X { ... }` block, so that the block no longer contributes them to
- * X.  Nested elements and relations, other properties and comments outside
+ * `extend X { ... }` block (or an `extend a -> b { ... }` block), so that
+ * the block no longer contributes them to X.  Nested elements and relations, other properties and comments outside
  * the removed constructs are left as they are; a block that ends up empty
  * stays in place.
  *
  * @param doc        - Parsed document holding the block
- * @param node       - The `ExtendElement` AST node
+ * @param node       - The `ExtendElement` / `ExtendRelation` AST node
  * @param clear      - What to remove
  * Every construct is removed with {@link buildRemovalEdit} (whole lines when
  * it stands alone on its lines), so the edits never overlap and everything
@@ -387,7 +388,7 @@ export interface ExtendClearing {
  */
 export function clearExtendContributionsEdits(
   doc: ParsedDocument,
-  node: ExtendElementNode,
+  node: ExtendElementNode | ExtendRelationNode,
   clear: ExtendClearing,
 ): TextEdit[] {
   const { fullText } = doc;

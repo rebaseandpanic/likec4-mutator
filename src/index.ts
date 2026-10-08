@@ -8,7 +8,9 @@ export type {
   WorkspaceDocumentAst,
   ExtendBlockRef,
   ExtendElementNode,
+  ExtendRelationBlockRef,
 } from './query/workspace-index.js';
+export type { ExtendRelationNode, RelationIdentity } from './query/relation-extends.js';
 export type {
   ElementDecorations,
   ElementInfo,
@@ -28,6 +30,7 @@ export type {
   UpdateElementPatch,
   UpdateRelationshipMatcher,
   UpdateRelationshipPatch,
+  UpdateRelationshipResult,
 } from './mutator/mutator.js';
 export type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
 export type { MetadataMap, MetadataPatch } from './mutator/metadata-ops.js';
