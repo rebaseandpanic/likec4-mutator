@@ -22,6 +22,7 @@ import {
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
   buildRemovalEdit,
+  findClosingBraceOffset,
   type BodyOwnerNode,
 } from './cst-helpers.js';
 
@@ -175,12 +176,14 @@ export function collectMetadataUpserts(patch: MetadataPatch): MetadataMap {
  *  - When the node has no metadata block but the patch has at least one
  *    upsert, a fresh block is inserted before the closing brace.
  *  - When the first block holds a patched key or the patch has an upsert,
- *    the first block is rewritten attribute by attribute: attributes whose
- *    key the patch does not mention are copied verbatim from the source (any
- *    value form — string, markdown, boolean, array — with its original
- *    formatting); a patched key is regenerated at the position of its first
- *    occurrence or dropped when the patch maps it to `null`; new keys are
- *    appended in patch order.  Otherwise the first block is left as is.
+ *    the first block is edited attribute by attribute: a patched key is
+ *    replaced in place at its first occurrence (later occurrences are
+ *    removed) or removed when the patch maps it to `null`; new keys are
+ *    added in patch order — on their own lines above the closing brace of a
+ *    multi-line block, after the last attribute of a one-line block.
+ *    Everything else — attributes whose key the patch does not mention (any
+ *    value form, with its original formatting), comments, spacing — keeps
+ *    its exact text.  Otherwise the first block is left as is.
  *  - Later blocks lose the attributes with patched keys (see
  *    {@link buildStripMetadataKeysEdits}); everything else in them stays
  *    byte-for-byte.
@@ -236,28 +239,28 @@ export function buildReplaceMetadataEditOnNode(
   const firstAttrs = first.props ?? [];
   if (!hasUpserts && !firstAttrs.some((attr) => isPatched(attr.key))) return edits;
 
-  // Case 3: rewrite the first block attribute by attribute.
+  // Case 3: edit the first block attribute by attribute.  A patched key is
+  // replaced in place at its first occurrence (later occurrences are
+  // removed) or removed when the patch maps it to `null`; new keys are added
+  // after the last attribute.  Everything else in the block — attributes the
+  // patch does not mention, comments, spacing — keeps its exact text.
+  const cst = first.$cstNode;
   const regenerated = new Set<string>();
-  const entries: string[] = [];
+  const removed: MetadataAttributeShape[] = [];
+  const replaced: Array<{ attr: MetadataAttributeShape; key: string }> = [];
   for (const attr of firstAttrs) {
     const key = attr.key;
-    if (key !== undefined && isPatched(key)) {
-      // Deleted, or a duplicate of a key already regenerated above.
-      if (patch[key] === null || regenerated.has(key)) continue;
-      regenerated.add(key);
-      entries.push(`${key} ${formatMetadataValue(upserts[key]!, entryIndent)}`);
+    if (key === undefined || !isPatched(key)) continue;
+    if (patch[key] === null || regenerated.has(key)) {
+      removed.push(attr);
       continue;
     }
-    if (!attr.$cstNode) continue;
-    entries.push(fullText.substring(attr.$cstNode.offset, attr.$cstNode.end));
+    regenerated.add(key);
+    replaced.push({ attr, key });
   }
-  for (const [key, value] of Object.entries(upserts)) {
-    if (regenerated.has(key)) continue;
-    entries.push(`${key} ${formatMetadataValue(value, entryIndent)}`);
-  }
+  const added = Object.entries(upserts).filter(([key]) => !regenerated.has(key));
 
-  const cst = first.$cstNode;
-  if (entries.length === 0) {
+  if (removed.length === firstAttrs.length && added.length === 0) {
     if (laterKeepAttributes) {
       // Keep the first block, emptied: LikeC4 then still ignores the later
       // blocks instead of reading the next one.
@@ -279,14 +282,43 @@ export function buildReplaceMetadataEditOnNode(
     return edits;
   }
 
-  let block = `\n${innerIndent}metadata {\n`;
-  for (const entry of entries) {
-    block += `${entryIndent}${entry}\n`;
-  }
-  block += `${innerIndent}}\n`;
+  const survivors = firstAttrs.filter((attr) => !removed.includes(attr));
+  const ownLineIndent = (offset: number): string | undefined => {
+    const lineStart = fullText.lastIndexOf('\n', offset - 1) + 1;
+    const leading = fullText.substring(lineStart, offset);
+    return /^[ \t]*$/.test(leading) ? leading : undefined;
+  };
+  const lastOnOwnLine = [...survivors].reverse().find((a) => a.$cstNode && ownLineIndent(a.$cstNode.offset) !== undefined);
+  const closingBrace = findClosingBraceOffset(cst);
+  const closingIndent = ownLineIndent(closingBrace);
+  const attrIndent =
+    (lastOnOwnLine?.$cstNode && ownLineIndent(lastOnOwnLine.$cstNode.offset)) ??
+    (closingIndent !== undefined ? closingIndent + '  ' : entryIndent);
 
-  const { offset, end } = expandRangeToConsumeSurroundingNewlines(fullText, cst.offset, cst.end);
-  edits.push({ offset, end, newText: block });
+  edits.push(...removeAttributes(removed, fullText));
+  for (const { attr, key } of replaced) {
+    if (!attr.$cstNode) continue;
+    const indentHere = ownLineIndent(attr.$cstNode.offset) ?? attrIndent;
+    edits.push({
+      offset: attr.$cstNode.offset,
+      end: attr.$cstNode.end,
+      newText: `${key} ${formatMetadataValue(upserts[key]!, indentHere)}`,
+    });
+  }
+  if (added.length > 0) {
+    const entries = added.map(([key, value]) => `${key} ${formatMetadataValue(value, attrIndent)}`);
+    if (closingIndent !== undefined) {
+      // Multi-line block: new lines just above the closing brace.
+      const lineStart = closingBrace - closingIndent.length;
+      edits.push({ offset: lineStart, end: lineStart, newText: entries.map((e) => `${attrIndent}${e}\n`).join('') });
+    } else {
+      // One-line block: on the same line, after the last attribute kept.
+      const lastKept = survivors[survivors.length - 1]?.$cstNode;
+      const at = lastKept ? lastKept.end : fullText.indexOf('{', cst.offset) + 1;
+      const trailing = fullText[at] === '}' ? ' ' : '';
+      edits.push({ offset: at, end: at, newText: ` ${entries.join(' ')}${trailing}` });
+    }
+  }
   return edits;
 }
 

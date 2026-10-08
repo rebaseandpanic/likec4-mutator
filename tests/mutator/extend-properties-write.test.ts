@@ -208,7 +208,7 @@ describe('updateElement metadata when a body has several metadata blocks', () =>
       name: 'an upsert goes into the first block and leaves no copy in later blocks',
       before: `    metadata { k 'first' }\n    metadata { k 'second' extra 'e' }\n`,
       patch: { k: 'new' },
-      after: `    metadata {\n      k 'new'\n    }\n    metadata { extra 'e' }\n`,
+      after: `    metadata { k 'new' }\n    metadata { extra 'e' }\n`,
       metadata: { k: 'new' },
     },
     {
@@ -302,7 +302,7 @@ describe('updateElement — declaration and extend blocks in one file', () => {
     const m = LikeC4Mutator.fromFiles({ 'one.c4': one });
     const result = m.updateElement('app', { tags: ['z'], metadata: { k: 'new' } });
     expect(m.serialize()['one.c4']).toBe(
-      `${SPEC}model {\n  extend app {\n  }\n  app = system 'App' {\n    #z\n    metadata {\n      k 'new'\n    }\n  }\n}\n`,
+      `${SPEC}model {\n  extend app {\n  }\n  app = system 'App' {\n    #z\n    metadata { k 'new' }\n  }\n}\n`,
     );
     expect(result.changedFiles).toEqual(['one.c4']);
     const el = m.getElement('app')!;

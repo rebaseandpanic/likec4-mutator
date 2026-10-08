@@ -293,7 +293,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 | `title`, `summary`, `description`, `technology` | REPLACE |
 | `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags. |
 | `links` | REPLACE.  `[]` clears all links. |
-| `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting). |
+| `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting), and so are comments in the block: patched keys are edited in place, new keys added at the end of the block. |
 | `style` | MERGE per-field (v0.4.0 BREAKING — was full replace).  Pass a complete style object to reproduce the old replace-all behaviour. |
 
 ```json
