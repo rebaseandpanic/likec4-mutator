@@ -56,9 +56,7 @@ export function readContribution(body: unknown): Decorations {
   const links = readLinks(b);
   if (links.length > 0) out.links = links;
 
-  const metaBody = (b.props ?? []).find(
-    (p) => (p as { $type?: string }).$type === 'MetadataBody',
-  ) as Parameters<typeof readMetadataGrouped>[0] | undefined;
+  const metaBody = firstMetadataBody(b);
   if (metaBody) {
     const metadata = readMetadataGrouped(metaBody);
     if (Object.keys(metadata).length > 0) out.metadata = metadata;
@@ -69,8 +67,8 @@ export function readContribution(body: unknown): Decorations {
 /**
  * Read tags, links and metadata of one body as declared (see
  * `ElementDecorations`): tags (of every comma group) and links in source
- * order, metadata as written — the last value of a repeated key, arrays
- * kept as arrays.
+ * order, metadata of the first `metadata { ... }` block as written — the
+ * last value of a repeated key, arrays kept as arrays.
  */
 export function readDeclared(body: unknown): Decorations {
   const out: Decorations = {};
@@ -83,12 +81,23 @@ export function readDeclared(body: unknown): Decorations {
   const links = readLinks(b);
   if (links.length > 0) out.links = links;
 
-  for (const prop of b.props ?? []) {
-    if ((prop as { $type?: string }).$type !== 'MetadataBody') continue;
-    const metadata = readMetadataBlock(prop as Parameters<typeof readMetadataBlock>[0]);
+  const metaBody = firstMetadataBody(b);
+  if (metaBody) {
+    const metadata = readMetadataBlock(metaBody);
     if (Object.keys(metadata).length > 0) out.metadata = metadata;
   }
   return out;
+}
+
+/**
+ * The first `metadata { ... }` block of a body — the only one LikeC4 reads
+ * (`getMetadata(body.props.find(isMetadataProperty))`); later blocks are
+ * ignored, even when the first one is empty.
+ */
+function firstMetadataBody(body: BodyLike): Parameters<typeof readMetadataBlock>[0] | undefined {
+  return (body.props ?? []).find((p) => (p as { $type?: string }).$type === 'MetadataBody') as
+    | Parameters<typeof readMetadataBlock>[0]
+    | undefined;
 }
 
 /**

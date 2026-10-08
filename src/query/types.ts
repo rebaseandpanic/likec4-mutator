@@ -20,9 +20,10 @@ export interface ElementDecorations {
   /** Links in source order */
   links?: Array<{ url: string; label?: string }>;
   /**
-   * Metadata as declared: `key 'value'` reads as a string, `key ['v1', ...]`
-   * as an array (also with a single element); when a key is repeated, the
-   * last value is reported.
+   * Metadata as declared in the body's first `metadata { ... }` block (the
+   * only one LikeC4 reads): `key 'value'` reads as a string,
+   * `key ['v1', ...]` as an array (also with a single element); when a key
+   * is repeated inside the block, the last value is reported.
    */
   metadata?: Record<string, string | string[]>;
 }
@@ -119,7 +120,8 @@ export interface RelationshipInfo {
   /** Hyperlinks declared on the relationship */
   links?: Array<{ url: string; label?: string }>;
   /**
-   * Metadata key/value pairs declared on the relationship.  Each value is
+   * Metadata key/value pairs declared in the relationship's first
+   * `metadata { ... }` block (the only one LikeC4 reads).  Each value is
    * either a string or string[].
    */
   metadata?: Record<string, string | string[]>;

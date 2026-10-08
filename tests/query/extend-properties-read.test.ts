@@ -239,6 +239,33 @@ describe('effective metadata values', () => {
   });
 });
 
+describe('several metadata blocks in one body', () => {
+  // LikeC4 reads only the first `metadata { ... }` block of a body
+  // (`getMetadata(body.props.find(isMetadataProperty))`).
+  const TWO_BLOCKS = `metadata { k 'first' }\n    metadata { k 'second' other 'x' }`;
+  const files = {
+    'base.c4': `${SPEC}model {\n  app = service {\n    ${TWO_BLOCKS}\n  }\n}\n`,
+    'ext.c4': `model {\n  extend app {\n    metadata { e 'first' }\n    metadata { e 'second' }\n  }\n}\n`,
+  };
+
+  it('reads the first block of each body as effective metadata', () => {
+    expect(LikeC4Mutator.fromFiles(files).getElement('app')!.metadata).toEqual({ k: 'first', e: 'first' });
+  });
+
+  it('reports the first block of each body as declared', () => {
+    const el = LikeC4Mutator.fromFiles(files).getElement('app')!;
+    expect(el.declared.metadata).toEqual({ k: 'first' });
+    expect(el.extendedBy[0].metadata).toEqual({ e: 'first' });
+  });
+
+  it('reports the first block of a relationship', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = service\n  db = service\n  app -> db {\n    ${TWO_BLOCKS}\n  }\n}\n`,
+    });
+    expect(m.getRelationships({ sourceFqn: 'app' })[0].metadata).toEqual({ k: 'first' });
+  });
+});
+
 describe('comma-separated tags', () => {
   // LikeC4 grammar: `Tags: (values+=TagRef)+ (',' (values+=TagRef)*)*`; each
   // comma starts a new group chained through `prev`.  LikeC4 reads the last
@@ -306,6 +333,13 @@ async function expectAgreement(files: Record<string, string>, fqn = 'app'): Prom
 }
 
 const EDGE_CASES: Array<[string, Record<string, string>]> = [
+  [
+    'several metadata blocks in one body',
+    {
+      'base.c4': `${SPEC}model {\n  app = service {\n    metadata { k 'first' }\n    metadata { k 'second' other 'x' }\n  }\n}\n`,
+      'ext.c4': `model {\n  extend app {\n    metadata { }\n    metadata { e 'hidden' }\n  }\n  extend app {\n    metadata { e 'first' }\n    metadata { e 'second' }\n  }\n}\n`,
+    },
+  ],
   [
     'comma-separated tags',
     {
