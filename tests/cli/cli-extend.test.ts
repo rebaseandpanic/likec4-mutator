@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -40,5 +40,17 @@ describe('CLI get-element with extend blocks', () => {
     const out = runCli(['get-element', '--dir', writeProject(), '--fqn', 'app']);
     expect(out).toContain('Tags:        a, b, c\n');
     expect(out).toContain(`Extended by: ${join('ext', 'more.c4')}:2, z.c4:3\n`);
+  });
+});
+
+describe('CLI update-element with extend blocks', () => {
+  it('--tags replaces the effective tags and writes the extend files to --output', () => {
+    const dir = writeProject();
+    const out = mkdtempSync(join(tmpdir(), 'likec4-mutator-extend-out-'));
+    runCli(['update-element', '--dir', dir, '--fqn', 'app', '--tags', 'a', '--output', out]);
+    expect(readFileSync(join(out, 'ext', 'more.c4'), 'utf-8')).toBe(`model {\n  extend app {\n    metadata { k 'v' }\n  }\n}\n`);
+    expect(readFileSync(join(out, 'z.c4'), 'utf-8')).toBe(`model {\n\n  extend app {\n  }\n}\n`);
+    const el = JSON.parse(runCli(['get-element', '--dir', out, '--fqn', 'app', '--json']));
+    expect(el.tags).toEqual(['a']);
   });
 });

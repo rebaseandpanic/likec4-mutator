@@ -18,6 +18,7 @@ import {
   removeElementEdit,
   findExtendBlocks,
   removeExtendBlockEdit,
+  clearExtendContributionsEdits,
   type ExtendBlock,
   type AddElementOpts,
   type UpdateElementPatch,
@@ -52,6 +53,20 @@ export type AddViewOpts = Omit<GenerateViewOpts, 'indent'>;
  */
 export interface RemoveElementResult {
   removedRelationships: Array<{ source: string; target: string; title?: string }>;
+}
+
+/**
+ * Result of {@link LikeC4Mutator.updateElement}.
+ */
+export interface UpdateElementResult {
+  /**
+   * Files whose text changed, without duplicates, in the order the files
+   * were loaded.  Besides the file of the declaration this includes files
+   * whose `extend` blocks lost tags, links or metadata keys.  Empty when the
+   * update changed nothing.  Describes the in-memory state: nothing is
+   * written to disk.
+   */
+  changedFiles: string[];
 }
 
 /**
@@ -202,32 +217,91 @@ export class LikeC4Mutator {
   /**
    * Update properties on an existing element.
    *
-   * Semantics summary (v0.4.0):
+   * Semantics apply to the element's effective values — the declaration
+   * merged with every `extend` block of the element (see
+   * {@link ElementInfo}):
    *  - `title`, `summary`, `description`, `technology`: REPLACE.
-   *  - `tags`: REPLACE (BREAKING vs. v0.3 — used to APPEND).  Empty array
-   *    clears all existing tags.
-   *  - `links`: REPLACE.  Empty array clears all existing links.
-   *  - `style`: MERGE per-field (BREAKING vs. v0.3 — used to fully REPLACE
-   *    the existing block).  Pass a complete style object to reproduce the
-   *    old replace-all behaviour.
+   *  - `tags`: REPLACE.  Empty array clears all tags.
+   *  - `links`: REPLACE.  Empty array clears all links.
+   *  - `style`: MERGE per-field; absent fields are preserved.  Pass a
+   *    complete style object to replace everything.
    *  - `metadata`: MERGE with `null`-deletion.  Map a key to `null` to delete
    *    it; map to a string or string[] to upsert.  Keys absent from the
    *    patch are preserved verbatim (including their original array
    *    formatting).
    *
+   * New values are written into the element's declaration.  When the patch
+   * sets `tags` or `links`, those are removed from every `extend X { ... }`
+   * block whose X is exactly this element, in every loaded file; every
+   * metadata key of the patch (upserted or deleted) is removed from those
+   * blocks too.  Anything else in the blocks — other keys, nested elements
+   * and relationships, comments — is kept, and a block that ends up empty
+   * stays in place.
+   *
+   * Because an `extend` block may hide in a file that does not parse, a
+   * `tags`, `links` or `metadata` update is rejected — before anything is
+   * changed — while any loaded file has syntax errors (as reported by
+   * {@link validate}).
+   *
+   * The operation is atomic in memory: when any step fails, every file is
+   * restored and the error is rethrown.
+   *
    * @param fqn   - FQN of the element to update
    * @param props - Properties to change (undefined = keep existing)
+   * @returns The files that changed.
    */
-  updateElement(fqn: string, props: UpdateElementPatch): void {
+  updateElement(fqn: string, props: UpdateElementPatch): UpdateElementResult {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
 
-    const doc = this.documents.get(filename);
-    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    const edits = updateElementEdit(doc, fqn, props);
-    if (edits.length > 0) {
-      this.applyEditsToFile(filename, edits);
+    const clearing = {
+      tags: props.tags !== undefined,
+      links: props.links !== undefined,
+      metadataKeys: props.metadata ? Object.keys(props.metadata) : [],
+    };
+    const crossFile = clearing.tags || clearing.links || clearing.metadataKeys.length > 0;
+    if (crossFile) {
+      const errors = this.validate();
+      if (errors.length > 0) {
+        throw new Error(
+          `Cannot update tags, links or metadata of '${fqn}': extend blocks of loaded files ` +
+            `cannot be located reliably while files have syntax errors:\n` +
+            errors.map((e) => `  ${e}`).join('\n'),
+        );
+      }
     }
+
+    // Every edit is computed against the current documents before any file
+    // changes, then applied as one group per file.
+    const editsByFile = new Map<string, TextEdit[]>();
+    const addEdits = (file: string, edits: TextEdit[]): void => {
+      if (edits.length === 0) return;
+      editsByFile.set(file, [...(editsByFile.get(file) ?? []), ...edits]);
+    };
+    addEdits(filename, updateElementEdit(this.document(filename), fqn, props));
+    if (crossFile) {
+      for (const block of this.workspace.extendBlocks(fqn)) {
+        // The mutator indexes every document under its file name.
+        const file = block.file!;
+        addEdits(file, clearExtendContributionsEdits(this.document(file), block.node, clearing));
+      }
+    }
+
+    const snapshot = this.snapshot();
+    try {
+      for (const file of this.sources.keys()) {
+        const edits = editsByFile.get(file);
+        if (edits) this.applyEditsToFile(file, edits);
+      }
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+
+    const changedFiles = [...this.sources]
+      .filter(([file, text]) => snapshot.sources.get(file) !== text)
+      .map(([file]) => file);
+    return { changedFiles };
   }
 
   /**
@@ -410,31 +484,17 @@ export class LikeC4Mutator {
   // ---------------------------------------------------------------------------
 
   /**
-   * Re-parse all files and collect any parser/lexer errors.
-   * Also performs a brace-balance check (skipping string literals) on each file
-   * to catch structural damage that the parser might not report as an error.
+   * Collect the parser/lexer errors of every file (from its latest parse,
+   * which always matches its current text) and perform a brace-balance
+   * check (skipping string literals) on each file that parses, to catch
+   * structural damage that the parser might not report as an error.
    *
    * @returns Array of error message strings (empty = all files parse cleanly)
    */
   validate(): string[] {
     const errors: string[] = [];
     for (const [filename, source] of this.sources) {
-      const doc = this.parser.parse(source);
-      const parseErrors = doc.errors;
-      for (const err of parseErrors) {
-        errors.push(`${filename}:${err.line}:${err.column}: ${err.message}`);
-      }
-      // Level 2: brace balance check (skip string literals).
-      // Only emitted when the parser did not already report errors for this file,
-      // because brace imbalance found by the parser would cause parse errors that
-      // already cover the structural problem.  The balance check catches cases of
-      // silent structural damage that the parser accepts but that corrupt the file.
-      if (parseErrors.length === 0) {
-        const balanceError = checkBraceBalance(source);
-        if (balanceError !== null) {
-          errors.push(`${filename}: ${balanceError}`);
-        }
-      }
+      errors.push(...this.fileErrors(filename, source, this.document(filename)));
     }
     return errors;
   }
@@ -449,6 +509,20 @@ export class LikeC4Mutator {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Parser/lexer errors of one file, or — when it parses — a brace-balance
+   * error (string literals skipped) catching structural damage the parser
+   * accepts silently.  Parse errors already cover an imbalance, so the
+   * balance check only runs on files that parse.
+   */
+  private fileErrors(filename: string, source: string, doc: ParsedDocument): string[] {
+    if (doc.errors.length > 0) {
+      return doc.errors.map((err) => `${filename}:${err.line}:${err.column}: ${err.message}`);
+    }
+    const balanceError = checkBraceBalance(source);
+    return balanceError === null ? [] : [`${filename}: ${balanceError}`];
+  }
 
   private parseAll(): void {
     for (const [filename, source] of this.sources) {

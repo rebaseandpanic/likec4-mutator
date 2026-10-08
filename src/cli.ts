@@ -308,7 +308,7 @@ program
   .option('--summary <text>', 'New summary for the element')
   .option('--description <text>', 'New description for the element')
   .option('--technology <text>', 'New technology label for the element')
-  .option('--tags <tags>', 'Comma-separated list of tags to add (e.g. internal,backend)')
+  .option('--tags <tags>', 'Comma-separated list of tags replacing all tags of the element, including those added by extend blocks (e.g. internal,backend)')
   .option('--output <path>', 'Output directory (defaults to --dir for in-place)')
   .action((opts: {
     dir: string;

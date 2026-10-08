@@ -19,6 +19,7 @@ export type {
   AddElementOpts,
   AddViewOpts,
   RemoveElementResult,
+  UpdateElementResult,
   UpdateElementPatch,
   UpdateRelationshipMatcher,
   UpdateRelationshipPatch,

@@ -355,9 +355,85 @@ export function removeExtendBlockEdit(doc: ParsedDocument, block: ExtendBlock): 
   return { offset, end, newText };
 }
 
+/** What {@link clearExtendContributionsEdits} removes from an `extend` block. */
+export interface ExtendClearing {
+  /** Remove the block's tags */
+  tags: boolean;
+  /** Remove every `link` of the block */
+  links: boolean;
+  /** Remove these metadata keys (the `metadata` block goes when it empties) */
+  metadataKeys: string[];
+}
+
+/**
+ * Build the TextEdits that remove tags, links and/or metadata keys from an
+ * `extend X { ... }` block, so that the block no longer contributes them to
+ * X.  Nested elements and relations, other properties and comments outside
+ * the removed constructs are left as they are; a block that ends up empty
+ * stays in place.
+ *
+ * @param doc        - Parsed document holding the block
+ * @param extendNode - The `ExtendElement` AST node
+ * @param clear      - What to remove
+ * Every construct is removed with {@link buildRemovalEdit} (whole lines when
+ * it stands alone on its lines), so the edits never overlap and everything
+ * else in the block keeps its exact text.
+ *
+ * @returns Edits for the block (empty when it has nothing to remove)
+ */
+export function clearExtendContributionsEdits(
+  doc: ParsedDocument,
+  extendNode: unknown,
+  clear: ExtendClearing,
+): TextEdit[] {
+  const node = extendNode as AstElementNode;
+  const { fullText } = doc;
+  const edits: TextEdit[] = [];
+  if (!node.body?.$cstNode) return edits;
+  if (clear.tags) {
+    const tagEdit = buildReplaceTagsEdit(node, fullText, []);
+    if (tagEdit) edits.push(tagEdit);
+  }
+  if (clear.links) {
+    edits.push(...buildReplaceLinksEdit(node, fullText, []));
+  }
+  if (clear.metadataKeys.length > 0) {
+    edits.push(...buildRemoveMetadataKeysEdits(node, fullText, new Set(clear.metadataKeys)));
+  }
+  return edits;
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Removal edits for every attribute whose key is in `keys`, in every
+ * `metadata { ... }` block of the body.  A block whose attributes all go is
+ * removed as a whole.
+ */
+function buildRemoveMetadataKeysEdits(
+  node: AstElementNode,
+  fullText: string,
+  keys: ReadonlySet<string>,
+): TextEdit[] {
+  const edits: TextEdit[] = [];
+  for (const prop of node.body?.props ?? []) {
+    if (prop.$type !== 'MetadataBody' || !prop.$cstNode) continue;
+    const attrs = (prop.props ?? []) as Array<{ key?: string; $cstNode?: { offset: number; end: number } }>;
+    const removed = attrs.filter((a) => a.key !== undefined && keys.has(a.key));
+    if (removed.length === 0) continue;
+    const ranges =
+      removed.length === attrs.length
+        ? [prop.$cstNode]
+        : removed.flatMap((a) => (a.$cstNode ? [a.$cstNode] : []));
+    for (const range of ranges) {
+      const { offset, end, newText } = buildRemovalEdit(fullText, range.offset, range.end);
+      edits.push({ offset, end, newText });
+    }
+  }
+  return edits;
+}
 
 /**
  * Build the TextEdits that set the title of an element.
