@@ -27,7 +27,7 @@
  * A reference that cannot be resolved (unknown or ambiguous name) keeps its
  * reference text, joined with dots, so callers still see what was written.
  */
-import { resolveFqnRef } from './fqn.js';
+import { forEachElementDeclaration, readStrictFqnRef, resolveFqnRef } from './fqn.js';
 
 /** Minimal structural view of an AST node used by this module. */
 interface AstNodeLike {
@@ -91,28 +91,26 @@ export class WorkspaceIndex {
 
   constructor(asts: readonly WorkspaceDocumentAst[]) {
     for (const ast of asts) {
-      for (const model of ast.models ?? []) {
-        for (const raw of model.elements ?? []) {
-          const item = raw as AstNodeLike;
-          if (item.$type === 'Element' && item.name) {
-            this.addRoot(item.name);
-            this.indexElement(item, null);
-          } else if (item.$type === 'ExtendElement') {
-            const extended = readStrictRef(item.element);
-            if (!extended) continue;
-            for (const child of item.body?.elements ?? []) {
-              const c = child as AstNodeLike;
-              if (c.$type === 'Element' && c.name) this.indexElement(c, extended);
-            }
-          }
-        }
-      }
+      forEachElementDeclaration(ast, (_node, fqn, parentFqn) => {
+        this.declarations.set(fqn, (this.declarations.get(fqn) ?? 0) + 1);
+        if (parentFqn) push(this.childrenOf, parentFqn, fqn);
+        else push(this.roots, fqn, fqn);
+      });
     }
   }
 
   /** True when at least one element with this FQN is declared. */
   has(fqn: string): boolean {
     return this.declarations.has(fqn);
+  }
+
+  /**
+   * FQNs of the direct children of `fqn` across the workspace — declared in
+   * its body or in any `extend` of it — in declaration order, without
+   * duplicates.
+   */
+  children(fqn: string): string[] {
+    return [...new Set(this.childrenOf.get(fqn) ?? [])];
   }
 
   /**
@@ -155,21 +153,6 @@ export class WorkspaceIndex {
     }
     this.uniqueDescendantsCache.set(parent, result);
     return result;
-  }
-
-  private addRoot(name: string): void {
-    push(this.roots, name, name);
-  }
-
-  private indexElement(node: AstNodeLike, parentFqn: string | null): void {
-    if (!node.name) return;
-    const fqn = parentFqn ? `${parentFqn}.${node.name}` : node.name;
-    this.declarations.set(fqn, (this.declarations.get(fqn) ?? 0) + 1);
-    if (parentFqn) push(this.childrenOf, parentFqn, fqn);
-    for (const child of node.body?.elements ?? []) {
-      const c = child as AstNodeLike;
-      if (c.$type === 'Element') this.indexElement(c, fqn);
-    }
   }
 }
 
@@ -238,7 +221,7 @@ class EndpointResolver {
         };
         this.walkContainer(body.elements, [frame, ...chain], fqn, results);
       } else if (item.$type === 'ExtendElement') {
-        const extended = readStrictRef(item.element);
+        const extended = readStrictFqnRef(item.element);
         const body = item.body;
         if (!extended || !body?.elements) continue;
         const frame: ScopeFrame = {
@@ -318,7 +301,7 @@ function computeLocalScope(
       push(direct, item.name, fqn);
       if (item.body?.elements?.length) nested.push(computeLocalScope(item.body.elements, fqn).scope);
     } else if (item.$type === 'ExtendElement') {
-      const extended = readStrictRef(item.element);
+      const extended = readStrictFqnRef(item.element);
       if (extended && item.body?.elements?.length) {
         nested.push(computeLocalScope(item.body.elements, extended).scope);
       }
@@ -347,19 +330,6 @@ function uniqueAcross(scopes: LocalScope[]): LocalScope {
     if (fqns.length === 1) out.set(name, fqns[0]);
   }
   return out;
-}
-
-/** Read the FQN written in a `StrictFqnElementRef` (`extend a.b.c`). */
-function readStrictRef(ref: unknown): string | undefined {
-  const parts: string[] = [];
-  let current = ref as RefLike | undefined;
-  while (current) {
-    const text = current.el?.$refText;
-    if (!text) return undefined;
-    parts.unshift(text);
-    current = current.parent;
-  }
-  return parts.length > 0 ? parts.join('.') : undefined;
 }
 
 function lastSegment(fqn: string): string {

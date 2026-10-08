@@ -195,7 +195,8 @@ export class C4Query {
       tags: decorations.tags,
       links: decorations.links,
       metadata: decorations.metadata,
-      children: [...entry.children],
+      // Children declared in `extend` blocks of other documents count too.
+      children: this.workspace.children(entry.fqn),
       parentFqn: entry.parentFqn,
       sourceRange: cst
         ? {

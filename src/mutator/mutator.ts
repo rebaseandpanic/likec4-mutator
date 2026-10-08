@@ -16,6 +16,9 @@ import {
   addElementEdit,
   updateElementEdit,
   removeElementEdit,
+  findExtendBlocks,
+  removeExtendBlockEdit,
+  type ExtendBlock,
   type AddElementOpts,
   type UpdateElementPatch,
 } from './element-ops.js';
@@ -44,8 +47,8 @@ export type AddViewOpts = Omit<GenerateViewOpts, 'indent'>;
  * Result of {@link LikeC4Mutator.removeElement}.  Lists every relationship
  * that was removed along with the element: those whose source or target is
  * the deleted element or one of its descendants (in any file), and those
- * declared inside the deleted element's body.  `source` / `target` are
- * absolute FQNs.
+ * declared inside the deleted element's body or inside a removed `extend`
+ * block of its subtree.  `source` / `target` are absolute FQNs.
  */
 export interface RemoveElementResult {
   removedRelationships: Array<{ source: string; target: string; title?: string }>;
@@ -135,20 +138,32 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Return the specification summary from the first file that has one.
+   * Return the specification of the whole project: the specification blocks
+   * of every file merged, as LikeC4 does.  Names are listed in order of first
+   * declaration (file order, then source order); a name declared more than
+   * once — a duplicate LikeC4 reports — is listed once.
+   *
+   * Returns null when no file declares any element kind, tag or relationship
+   * kind.
    */
   getSpecification(): SpecificationInfo | null {
+    const elementKinds = new Set<string>();
+    const tags = new Set<string>();
+    const relationshipKinds = new Set<string>();
     for (const query of this.queries.values()) {
       const spec = query.getSpecification();
-      if (
-        spec.elementKinds.length > 0 ||
-        spec.tags.length > 0 ||
-        spec.relationshipKinds.length > 0
-      ) {
-        return spec;
-      }
+      for (const kind of spec.elementKinds) elementKinds.add(kind);
+      for (const tag of spec.tags) tags.add(tag);
+      for (const kind of spec.relationshipKinds) relationshipKinds.add(kind);
     }
-    return null;
+    if (elementKinds.size === 0 && tags.size === 0 && relationshipKinds.size === 0) {
+      return null;
+    }
+    return {
+      elementKinds: [...elementKinds],
+      tags: [...tags],
+      relationshipKinds: [...relationshipKinds],
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -219,10 +234,16 @@ export class LikeC4Mutator {
    * Remove an element (and its entire body) from the model, together with
    * every relationship that depends on it.
    *
+   * The element's subtree includes children declared in `extend` blocks, so
+   * every `extend X { ... }` block whose X is the element or one of its
+   * descendants — in any loaded file — is removed as well (it would otherwise
+   * refer to an element that no longer exists).
+   *
    * Removed relationships are those whose source or target is the element or
    * one of its descendants — in any loaded file — plus those declared inside
-   * the element's body (which disappear with the body).  The operation is
-   * atomic: when any step fails, no file is changed.
+   * the element's body or inside a removed `extend` block (which disappear
+   * with it).  The operation is atomic: when any step fails, no file is
+   * changed.
    *
    * @param fqn - FQN of the element to remove
    * @returns The relationships that were removed.
@@ -237,9 +258,9 @@ export class LikeC4Mutator {
     // Report every relationship that is about to disappear, in file order.
     const removedRelationships: RemoveElementResult['removedRelationships'] = [];
     for (const [file, query] of this.queries) {
-      const range = file === filename ? this.elementRange(fqn, file) : null;
+      const ranges = this.removedRanges(fqn, filename, file);
       for (const r of query.getRelationships()) {
-        if (isDependent(r) || (range !== null && isWithin(r.sourceRange, range))) {
+        if (isDependent(r) || ranges.some((range) => isWithin(r.sourceRange, range))) {
           removedRelationships.push({ source: r.sourceFqn, target: r.targetFqn, title: r.title });
         }
       }
@@ -247,20 +268,25 @@ export class LikeC4Mutator {
 
     const snapshot = this.snapshot();
     try {
-      // Remove dependent relationships declared outside the element one at a
-      // time (each removal reparses its file, so offsets stay valid), then
-      // the element itself, which takes the relationships in its body along.
+      // Remove dependent relationships declared outside the removed ranges one
+      // at a time (each removal reparses its file, so offsets stay valid),
+      // then the `extend` blocks of the subtree, then the element itself.
+      // Relationships inside the element's body or an `extend` block go along
+      // with it.
       for (;;) {
-        const next = this.findRelationOutsideElement(fqn, filename, isDependent);
+        const next = this.findRelationOutsideRemovedRanges(fqn, filename, isDependent);
         if (!next) break;
-        const doc = this.documents.get(next.filename);
-        if (!doc) throw new Error(`Internal error: document for '${next.filename}' not found in cache`);
-        this.applyEdit(next.filename, removeRelationNodeEdit(doc.fullText, next.node));
+        this.applyEdit(next.filename, removeRelationNodeEdit(this.document(next.filename).fullText, next.node));
       }
 
-      const doc = this.documents.get(filename);
-      if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-      this.applyEdit(filename, removeElementEdit(doc, fqn));
+      for (;;) {
+        const next = this.findExtendBlock(fqn);
+        if (!next) break;
+        const doc = this.document(next.filename);
+        this.applyEdit(next.filename, removeExtendBlockEdit(doc, next.block));
+      }
+
+      this.applyEdit(filename, removeElementEdit(this.document(filename), fqn));
     } catch (err) {
       this.restore(snapshot);
       throw err;
@@ -463,29 +489,60 @@ export class LikeC4Mutator {
     return byFqn.length > 0 ? byFqn : byText;
   }
 
-  /** Source range of an element in `filename`, or null when not found there. */
-  private elementRange(fqn: string, filename: string): { offset: number; end: number } | null {
-    const el = this.queries.get(filename)?.getElement(fqn);
-    return el ? { offset: el.sourceRange.offset, end: el.sourceRange.end } : null;
+  /** Latest parsed document of `filename`. */
+  private document(filename: string): ParsedDocument {
+    const doc = this.documents.get(filename);
+    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+    return doc;
+  }
+
+  /**
+   * Source ranges of `file` that disappear when element `fqn` (declared in
+   * `elementFile`) is removed: the element's own declaration and every
+   * `extend` block targeting it or one of its descendants.
+   */
+  private removedRanges(
+    fqn: string,
+    elementFile: string,
+    file: string,
+  ): Array<{ offset: number; end: number }> {
+    const ranges = findExtendBlocks(this.document(file), fqn).map((b) => b.range);
+    if (file === elementFile) {
+      const el = this.queries.get(file)?.getElement(fqn);
+      if (el) ranges.push({ offset: el.sourceRange.offset, end: el.sourceRange.end });
+    }
+    return ranges;
   }
 
   /**
    * First relation (in file order) that satisfies `isDependent` and is not
-   * declared inside the body of element `fqn` (which lives in `elementFile`).
+   * declared inside a range removed together with element `fqn` (see
+   * {@link removedRanges}).
    */
-  private findRelationOutsideElement(
+  private findRelationOutsideRemovedRanges(
     fqn: string,
     elementFile: string,
     isDependent: (r: { sourceFqn: string; targetFqn: string }) => boolean,
   ): { filename: string; node: unknown } | null {
     for (const [file, doc] of this.documents) {
-      const range = file === elementFile ? this.elementRange(fqn, file) : null;
+      const ranges = this.removedRanges(fqn, elementFile, file);
       for (const rel of resolveRelations(doc.ast, this.workspace)) {
         if (!isDependent(rel)) continue;
         const cst = (rel.node as { $cstNode?: { offset: number; end: number } }).$cstNode;
-        if (range !== null && cst && isWithin(cst, range)) continue;
+        if (cst && ranges.some((range) => isWithin(cst, range))) continue;
         return { filename: file, node: rel.node };
       }
+    }
+    return null;
+  }
+
+  /** First `extend` block (in file order) targeting `fqn` or a descendant. */
+  private findExtendBlock(
+    fqn: string,
+  ): { filename: string; block: ExtendBlock } | null {
+    for (const [file, doc] of this.documents) {
+      const [block] = findExtendBlocks(doc, fqn);
+      if (block) return { filename: file, block };
     }
     return null;
   }

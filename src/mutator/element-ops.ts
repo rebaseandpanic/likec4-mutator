@@ -6,7 +6,7 @@
  * the desired structural change.
  */
 import type { ParsedDocument } from '../parser/types.js';
-import { buildFqnIndex } from '../query/fqn.js';
+import { buildFqnIndex, readStrictFqnRef } from '../query/fqn.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import {
@@ -314,6 +314,44 @@ export function removeElementEdit(doc: ParsedDocument, fqn: string): TextEdit {
   if (!cst) throw new Error(`Element '${fqn}' has no CST node`);
 
   const { offset, end, newText } = buildRemovalEdit(fullText, cst.offset, cst.end);
+  return { offset, end, newText };
+}
+
+/** An `extend X { ... }` block of a document, with the FQN it extends. */
+export interface ExtendBlock {
+  /** FQN written after `extend` */
+  target: string;
+  /** Source range of the whole block */
+  range: { offset: number; end: number };
+}
+
+/**
+ * List the `extend X { ... }` blocks of a document whose target is `fqn` or
+ * one of its descendants, in source order.
+ *
+ * @param doc - Parsed document
+ * @param fqn - FQN of the element whose subtree is matched
+ */
+export function findExtendBlocks(doc: ParsedDocument, fqn: string): ExtendBlock[] {
+  const blocks: ExtendBlock[] = [];
+  for (const model of doc.ast.models ?? []) {
+    for (const item of model.elements ?? []) {
+      if (item.$type !== 'ExtendElement' || !item.$cstNode) continue;
+      const target = readStrictFqnRef(item.element);
+      if (target === undefined || (target !== fqn && !target.startsWith(fqn + '.'))) continue;
+      blocks.push({ target, range: { offset: item.$cstNode.offset, end: item.$cstNode.end } });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Build a TextEdit that removes a whole `extend` block (see
+ * {@link findExtendBlocks}), with the same line handling as
+ * {@link removeElementEdit}.
+ */
+export function removeExtendBlockEdit(doc: ParsedDocument, block: ExtendBlock): TextEdit {
+  const { offset, end, newText } = buildRemovalEdit(doc.fullText, block.range.offset, block.range.end);
   return { offset, end, newText };
 }
 
