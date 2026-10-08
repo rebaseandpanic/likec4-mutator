@@ -16,6 +16,7 @@
  * attributes the patch does not touch are copied from the source verbatim.
  */
 import type { TextEdit } from './text-edit.js';
+import { removeIndent } from '../query/likec4-text.js';
 import { formatMetadataValue, generateMetadataBlock, validateMetadataKey } from './codegen.js';
 import {
   expandRangeToConsumeSurroundingNewlines,
@@ -111,11 +112,12 @@ export function readMetadataBlock(metaBody: MetadataBodyShape): MetadataMap {
 
 /**
  * Read a `MetadataBody` the way LikeC4 builds an element's metadata from it
- * (language-server `getMetadata`): array values are flattened, every value
- * of a key repeated inside the block is kept in source order, and a key with
- * exactly one value maps to a string, otherwise to an array.  So
- * `k ['v1']` reads as `'v1'`, and `k 'a'` followed by `k 'b'` as
- * `['a', 'b']`.  String contents are returned as written.
+ * (language-server `getMetadata`): array values are flattened, every string
+ * value is dedented and trimmed (`removeIndent`), empty values are dropped,
+ * every remaining value of a key repeated inside the block is kept in source
+ * order, and a key with exactly one value maps to a string, otherwise to an
+ * array.  So `k ['v1']` reads as `'v1'`, `k 'a'` followed by `k 'b'` as
+ * `['a', 'b']`, `k ' x '` as `'x'`, and `k ''` not at all.
  *
  * {@link readMetadataBlock} instead returns the block as declared.
  */
@@ -125,8 +127,13 @@ export function readMetadataGrouped(metaBody: MetadataBodyShape): MetadataMap {
     if (!attr.key) continue;
     const value = readMetadataValue(attr);
     if (value === undefined) continue;
+    // Booleans read as 'true' / 'false', which LikeC4 does not normalize.
+    const normalized = attr.value
+      ? (Array.isArray(value) ? value : [value]).map(removeIndent).filter((v) => v !== '')
+      : [value as string];
+    if (normalized.length === 0) continue;
     const values = grouped.get(attr.key) ?? [];
-    values.push(...(Array.isArray(value) ? value : [value]));
+    values.push(...normalized);
     grouped.set(attr.key, values);
   }
   const out = createMetadataMap();

@@ -3,12 +3,13 @@
  * extended by `extend X { ... }` blocks.
  *
  * Mirrors LikeC4 1.59.4: the language-server document parser reads each
- * body (`parseTags`: tags without duplicates; `parseLinks`: links as written;
- * `getMetadata`: values grouped per key), `MergedExtends.merge` accumulates
+ * body (`parseTags`: tags without duplicates; `parseLinks`: links with
+ * single-line labels; `getMetadata`: normalized values grouped per key), `MergedExtends.merge` accumulates
  * the `extend` contributions in document order and `MergedExtends.applyExtended`
  * merges them onto the declaration — the declaration always first.
  */
 import { readMetadataBlock, readMetadataGrouped, type MetadataMap } from '../mutator/metadata-ops.js';
+import { toSingleLine } from './likec4-text.js';
 
 /** Link as reported by the read API. */
 export interface LinkValue {
@@ -42,8 +43,10 @@ interface BodyLike {
 
 /**
  * Read the tags, links and metadata of one body as LikeC4 does before
- * merging: tags of every comma group in LikeC4 order without duplicates, links in source order, metadata of the
- * first `metadata { ... }` block grouped per key.
+ * merging: tags of every comma group in LikeC4 order without duplicates;
+ * links in source order, a label read as one line (`toSingleLine`), an
+ * empty one dropped; metadata of the first `metadata { ... }` block with
+ * values dedented and trimmed, empty values dropped, grouped per key.
  */
 export function readContribution(body: unknown): Decorations {
   const out: Decorations = {};
@@ -53,7 +56,11 @@ export function readContribution(body: unknown): Decorations {
   const tags = readTagGroups(b).flat();
   if (tags.length > 0) out.tags = unique(tags);
 
-  const links = readLinks(b);
+  // LikeC4 `parseLinks`: a non-empty label is read with `toSingleLine`, an
+  // empty one is dropped.
+  const links = readLinks(b).map(({ url, label }): LinkValue =>
+    label ? { url, label: toSingleLine(label) } : { url },
+  );
   if (links.length > 0) out.links = links;
 
   const metaBody = firstMetadataBody(b);

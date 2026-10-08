@@ -237,6 +237,50 @@ describe('effective metadata values', () => {
   it('keeps the declarative form in declared', () => {
     expect(metadataOf(`metadata { k ['v1'] }`).declared.metadata).toEqual({ k: ['v1'] });
   });
+
+  // LikeC4 dedents and trims every value (`removeIndent`) and drops empty
+  // values before grouping (`getMetadata`).
+  it.each([
+    ['values are trimmed', `metadata { k '  x  ' }`, undefined, { k: 'x' }],
+    ['a value equal after trimming merges with another body', `metadata { k '  x  ' }`, `metadata { k 'x' }`, { k: 'x' }],
+    ['empty and blank values are dropped', `metadata { e '' b '   ' k 'v' }`, undefined, { k: 'v' }],
+    ['empty array members are dropped', `metadata { k ['', ' x ', '  '] }`, undefined, { k: 'x' }],
+    ['multi-line values are dedented', `metadata { k '\n      line1\n        line2\n    ' }`, undefined, { k: 'line1\n  line2' }],
+    ['a body with only empty values contributes nothing', `metadata { e '' }`, undefined, undefined],
+  ])('%s', (_name, body, extend, expected) => {
+    expect(metadataOf(body, extend).metadata).toEqual(expected);
+  });
+
+  it('keeps values as written in declared and extendedBy', () => {
+    const el = metadataOf(`metadata { k '  x  ' e '' }`, `metadata { k ' y ' }`);
+    expect(el.declared.metadata).toEqual({ k: '  x  ', e: '' });
+    expect(el.extendedBy[0].metadata).toEqual({ k: ' y ' });
+  });
+});
+
+describe('effective link labels', () => {
+  function linksOf(links: string) {
+    return LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = system 'App' {\n${links}\n  }\n}\n`,
+    }).getElement('app')!;
+  }
+
+  // LikeC4 reads a non-empty label with `toSingleLine` (dedent, trim, lines
+  // joined with a space) and drops an empty one.
+  it.each([
+    ['a padded label is trimmed', `link https://x.example.com '  padded  '`, [{ url: 'https://x.example.com', label: 'padded' }]],
+    ['a blank label reads as empty', `link https://x.example.com '   '`, [{ url: 'https://x.example.com', label: '' }]],
+    ['an empty label is dropped', `link https://x.example.com ''`, [{ url: 'https://x.example.com' }]],
+    ['a multi-line label becomes one line', `link https://x.example.com '\n      one\n      two\n    '`, [{ url: 'https://x.example.com', label: 'one two' }]],
+  ])('%s', (_name, links, expected) => {
+    expect(linksOf(links).links).toEqual(expected);
+  });
+
+  it('keeps labels as written in declared', () => {
+    expect(linksOf(`link https://x.example.com '  padded  '`).declared.links).toEqual([
+      { url: 'https://x.example.com', label: '  padded  ' },
+    ]);
+  });
 });
 
 describe('several metadata blocks in one body', () => {
@@ -321,6 +365,13 @@ async function expectAgreement(files: Record<string, string>, fqn = 'app'): Prom
 }
 
 const EDGE_CASES: Array<[string, Record<string, string>]> = [
+  [
+    'blank, padded and multi-line values and labels',
+    {
+      'base.c4': `${SPEC}model {\n  app = service {\n    link https://x.example.com '  padded  '\n    link https://y.example.com '   '\n    link https://z.example.com ''\n    link https://m.example.com '\n      one\n      two\n    '\n    metadata {\n      k '  x  '\n      empty ''\n      ws '   '\n      arr ['', 'x', '  y ']\n      ml '\n        line1\n          line2\n      '\n    }\n  }\n}\n`,
+      'ext.c4': `model {\n  extend app {\n    metadata { k 'x' arr ['y'] ws ' w ' }\n  }\n}\n`,
+    },
+  ],
   [
     'several metadata blocks in one body',
     {
