@@ -13,10 +13,20 @@
 - `getElement` / `listElements` return **effective** `tags`, `links` and `metadata`: the element body merged with every `extend` block of that element in all files, as LikeC4 1.59.4 does. Tags are a union (all comma-separated groups); links are concatenated and keep duplicates; metadata reads only the first `metadata { }` block of each body, values are dedented/trimmed and empty values dropped, then grouped per key (one value → string, several → array). Effective link labels are collapsed to one line. The declarative form is available as `ElementInfo.declared`, and each contributing block as `ElementInfo.extendedBy[]` (file, source range, contribution).
 - `updateElement` `tags` / `links` / `metadata` act on the effective value: new values go into the declaration; the patched tags, links or metadata keys are also removed from every `extend` block of exactly that element, in every file (empty `extend` blocks are left in place). A metadata `null` removes the key from every `metadata` block; an emptied first block is kept as `metadata { }` while later blocks still have attributes, so hidden blocks never become effective. The same multi-block metadata handling applies to `updateRelationship`.
 - `updateElement` returns `{ changedFiles: string[] }` instead of `void`.
+- `getRelationships` returns **effective** `tags`, `links` and `metadata`: the relationship merged with every `extend a -> b { … }` block that applies to it, as LikeC4 1.59.4 does (matched by resolved source / target, kind — an undeclared kind counts as none — title — an untitled relationship by its kind's spec title — and direction). Values are normalized as for elements; a link from a block is dropped when the same url and label are already present. New `RelationshipInfo.declared` and `RelationshipInfo.extendedBy`.
+- `updateRelationship` `tags` / `links` / `metadata` act on the effective value: patched tags, links and keys are also removed from every matching `extend a -> b` block in every file. A `label` that changes the title is written into those blocks. An update is rejected (nothing changes) when it would change a block shared with another relationship, or when a label change would move blocks onto another relationship or pull blocks of the new title onto this one. Label / tags / links / metadata updates are rejected while any file has syntax errors. Returns `{ changedFiles }` instead of `void`.
+- `getElement` / `listElements` / `getRelationships` report `title`, `summary`, `description` and `technology` normalized as LikeC4 reads them: dedented and trimmed, inline technology on one line, Markdown as its content; an empty Markdown title or technology is no value. An inline value overrides the body as in LikeC4 (title and technology whenever written, summary / description when non-empty); among repeated body declarations the last one counts.
+- A metadata patch edits the first `metadata` block attribute by attribute instead of rebuilding it: one-line blocks stay on one line, comments and untouched attributes keep their exact text.
 - A tags / links / metadata `updateElement` is rejected while any loaded file has syntax errors. Atomicity is in memory only; the CLI writes files one by one.
 - `fromFiles` / `WorkspaceIndex` reject two file names that denote the same path (e.g. `a.c4` and `./a.c4`).
 
 ### Bugfix
+- `ElementInfo.summary` is reported (it was missing); inline element summary / technology (`a = service 'T' 'S' 'K'`) and inline relationship description / technology (`a -> b 'T' 'D' 'K'`) are read, and updates replace them where they are written instead of writing a body value they override.
+- Updating `summary` / `description` / `technology` rewrites every declaration of the key; LikeC4 reads the last one, so editing only the first was a silent no-op.
+- Markdown (`'''…'''`) summary and description values are read; they were reported as undefined.
+- `RelationshipInfo.kind` reports the `.kind` form (`x .calls y`) and `matchKind` matches it.
+- Tags written on the relation line (`x -> y 'T' #a`) are read; `updateRelationship` replaces or clears them in place and removes body tags too.
+- `removeRelationship` / `removeElement` remove `extend a -> b` blocks that applied only to removed relationships or point at removed elements.
 - Tags written as comma-separated groups (`#a, #b #c`) are read completely; previously only the last group was returned (elements and relationships).
 - Links written as `link: url` are read for elements and relationships.
 - Replacing `links` no longer deletes properties declared between two `link` lines (elements and relationships).
@@ -37,6 +47,7 @@
 ### Added
 - `ElementInfo.declared` and `ElementInfo.extendedBy`; exported types `ElementDecorations`, `ExtendContribution`, `SourceRange`, `UpdateElementResult`, `WorkspaceDocument`, `WorkspaceDocumentAst`, `ExtendBlockRef`, `ExtendElementNode`. `WorkspaceIndex` accepts `{ file, ast }` documents and has `extendBlocks(fqn)`.
 - CLI `get-element` prints the `extend` blocks that contribute to an element.
+- `WorkspaceIndex.extendRelationBlocks()` / `effectiveIdentity()`; exported types `UpdateRelationshipResult`, `ExtendRelationBlockRef`, `ExtendRelationNode`, `RelationIdentity`.
 - `WorkspaceIndex` export (with `children(fqn)`) and an optional second parameter `new C4Query(ast, workspace?)` for cross-file reference resolution.
 
 ## [0.5.0] - 2026-10-07
