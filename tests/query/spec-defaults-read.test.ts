@@ -239,3 +239,36 @@ describe('kind declared more than once', () => {
     expect(x.fromSpecification?.file).toBe(file);
   });
 });
+
+// An element `extend` link that repeats a kind link is kept (LikeC4
+// `MergedExtends.applyExtended` concatenates element links), unlike a
+// relationship, where the duplicate is dropped.
+describe('element extend link repeating a kind link', () => {
+  const files = {
+    'spec.c4': `specification {
+  element service {
+    link https://example.com/kind 'Kind'
+  }
+}
+`,
+    'model.c4': `model {
+  s = service
+}
+`,
+    'ext.c4': `model {
+  extend s {
+    link https://example.com/kind 'Kind'
+  }
+}
+`,
+  };
+
+  it('keeps both the kind link and the repeated extend link', async () => {
+    const info = LikeC4Mutator.fromFiles(files).getElement('s')!;
+    expect(info.links).toEqual([
+      { url: 'https://example.com/kind', label: 'Kind' },
+      { url: 'https://example.com/kind', label: 'Kind' },
+    ]);
+    await expectAgreesWithLikeC4(files, 's', info);
+  });
+});
