@@ -153,7 +153,8 @@ export interface RelationshipInfo {
    * in the order LikeC4 merges them (files sorted as for
    * {@link ElementInfo.extendedBy}, then source order).  A block applies
    * when its endpoints (resolved to FQNs), kind, title and direction equal
-   * the relationship's: no kind matches no kind only; titles are compared
+   * the relationship's: no kind matches no kind only (a kind no
+   * specification declares counts as no kind); titles are compared
    * dedented and trimmed, a relationship without a title being compared with
    * the title of its kind's specification when that declares one; the
    * endpoints of a bidirectional relationship match in either order.  One

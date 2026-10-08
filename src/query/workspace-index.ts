@@ -172,6 +172,8 @@ export class WorkspaceIndex {
   private readonly ordered: IndexedDocument[];
   /** relationship kind → title of its specification (when it declares one) */
   private readonly kindTitles = new Map<string, string>();
+  /** relationship kinds declared in any specification */
+  private readonly relationshipKinds = new Set<string>();
   /** relation fingerprint → `extend a -> b` blocks, in merge order (built on first use) */
   private relationExtends: Map<string, ExtendRelationBlockRef[]> | undefined;
   private relationExtendList: Array<{ key: string; block: ExtendRelationBlockRef }> | undefined;
@@ -201,6 +203,7 @@ export class WorkspaceIndex {
       // declaration of a kind wins.
       const titles = new Map<string, string | undefined>();
       for (const kind of specificationRelationshipKinds(ast)) {
+        this.relationshipKinds.add(kind.name);
         if (!titles.has(kind.name)) titles.set(kind.name, kind.title);
       }
       for (const [name, title] of titles) {
@@ -246,14 +249,26 @@ export class WorkspaceIndex {
   }
 
   /**
-   * The relationship identity LikeC4 compares: an empty title is replaced by
-   * the title of the kind's specification, when it declares one
+   * The relationship identity LikeC4 compares: a kind no specification
+   * declares is no kind (the reference does not resolve); an empty title is
+   * replaced by the title of the kind's specification, when it declares one
    * (`MergedSpecification.toModelRelation`).
    */
   effectiveIdentity(relation: RelationIdentity): RelationIdentity {
-    if (relation.title !== '' || relation.kind === undefined) return relation;
-    const specTitle = this.kindTitles.get(relation.kind);
-    return specTitle === undefined ? relation : { ...relation, title: specTitle };
+    const resolved = this.resolvedKindIdentity(relation);
+    if (resolved.title !== '' || resolved.kind === undefined) return resolved;
+    const specTitle = this.kindTitles.get(resolved.kind);
+    return specTitle === undefined ? resolved : { ...resolved, title: specTitle };
+  }
+
+  /**
+   * `identity` with its kind as LikeC4 resolves the reference
+   * (`kind.ref?.name`): undefined when no specification declares it.
+   */
+  private resolvedKindIdentity(identity: RelationIdentity): RelationIdentity {
+    if (identity.kind === undefined || this.relationshipKinds.has(identity.kind)) return identity;
+    const { kind: _unresolved, ...rest } = identity;
+    return rest;
   }
 
   /**
@@ -268,13 +283,16 @@ export class WorkspaceIndex {
     const list: Array<{ key: string; block: ExtendRelationBlockRef }> = [];
     for (const { file, ast } of this.ordered) {
       for (const block of resolveExtendRelations(ast, this)) {
-        const key = relationFingerprint({
-          sourceFqn: block.sourceFqn,
-          targetFqn: block.targetFqn,
-          kind: relationKind(block.node),
-          title: removeIndent(block.node.title ?? ''),
-          isBidirectional: block.node.isBidirectional === true,
-        });
+        // The title of a block is compared as written (no specification title).
+        const key = relationFingerprint(
+          this.resolvedKindIdentity({
+            sourceFqn: block.sourceFqn,
+            targetFqn: block.targetFqn,
+            kind: relationKind(block.node),
+            title: removeIndent(block.node.title ?? ''),
+            isBidirectional: block.node.isBidirectional === true,
+          }),
+        );
         list.push({ key, block: file === undefined ? block : { file, ...block } });
       }
     }
