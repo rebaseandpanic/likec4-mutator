@@ -28,7 +28,7 @@ export interface ElementDecorations {
   metadata?: Record<string, string | string[]>;
 }
 
-/** One `extend X { ... }` block of an element. */
+/** One `extend X { ... }` block of an element, or `extend a -> b { ... }` block of a relationship. */
 export interface ExtendContribution extends ElementDecorations {
   /**
    * Name of the file that holds the block — the key passed to
@@ -103,6 +103,11 @@ export interface ElementInfo {
 
 /**
  * Information about a relationship between two elements.
+ *
+ * `tags`, `links` and `metadata` are the relationship's effective values:
+ * its own merged with every `extend a -> b { ... }` block that applies to
+ * it, the way LikeC4 builds its model.  `declared` and `extendedBy` tell
+ * where they come from.
  */
 export interface RelationshipInfo {
   /** FQN of the source element */
@@ -111,22 +116,47 @@ export interface RelationshipInfo {
   targetFqn: string;
   /** Optional relationship title */
   title?: string;
-  /** Optional explicit relationship-kind reference (e.g. `app -.calls.-> api`). */
+  /** Relationship kind as written: `app -[calls]-> api` or `app .calls api` */
   kind?: string;
   /** Optional technology label */
   technology?: string;
   /** Optional description */
   description?: string;
-  /** Tags declared on the relationship */
+  /**
+   * Effective tags: the relationship's own — those written on the relation
+   * line, or else those of its body — then those of each `extend` block in
+   * merge order (see {@link RelationshipInfo.extendedBy}), without
+   * duplicates.
+   */
   tags?: string[];
-  /** Hyperlinks declared on the relationship */
+  /**
+   * Effective links: the relationship's own, then those of each `extend`
+   * block in merge order — a block's link is skipped when a link with the
+   * same url and label is already present (the relationship's own
+   * duplicates are kept), as in LikeC4.  Labels are read as for
+   * {@link ElementInfo.links}.
+   */
   links?: Array<{ url: string; label?: string }>;
   /**
-   * Metadata key/value pairs declared in the relationship's first
-   * `metadata { ... }` block (the only one LikeC4 reads).  Each value is
-   * either a string or string[].
+   * Effective metadata, normalized and merged as for
+   * {@link ElementInfo.metadata}: the relationship's first `metadata { ... }`
+   * block, then the first block of each `extend` block in merge order.
    */
   metadata?: Record<string, string | string[]>;
+  /** Tags, links and metadata written in the relationship itself */
+  declared: ElementDecorations;
+  /**
+   * Every `extend a -> b { ... }` block that applies to this relationship,
+   * in the order LikeC4 merges them (files sorted as for
+   * {@link ElementInfo.extendedBy}, then source order).  A block applies
+   * when its endpoints (resolved to FQNs), kind, title and direction equal
+   * the relationship's: no kind matches no kind only; titles are compared
+   * dedented and trimmed, a relationship without a title being compared with
+   * the title of its kind's specification when that declares one; the
+   * endpoints of a bidirectional relationship match in either order.  One
+   * block applies to every relationship it matches.
+   */
+  extendedBy: ExtendContribution[];
   /** Position in source */
   sourceRange: {
     offset: number;

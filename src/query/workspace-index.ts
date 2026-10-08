@@ -29,6 +29,9 @@
  */
 import { compareNaturalHierarchically } from '@likec4/core/utils';
 import { forEachElementDeclaration, readStrictFqnRef, resolveFqnRef } from './fqn.js';
+import { removeIndent } from './likec4-text.js';
+import { relationKind } from './relation-node.js';
+import { relationFingerprint, type ExtendRelationNode, type RelationIdentity } from './relation-extends.js';
 
 /** Minimal structural view of an AST node used by this module. */
 interface AstNodeLike {
@@ -57,6 +60,7 @@ interface RefLike {
 /** Root AST of one parsed document, as far as this module reads it. */
 export interface WorkspaceDocumentAst {
   models?: Array<{ elements?: unknown[] }>;
+  specifications?: unknown[];
 }
 
 /** A document of the workspace together with the name of its file. */
@@ -112,6 +116,18 @@ export interface ExtendBlockRef {
   node: ExtendElementNode;
 }
 
+/** An `extend a -> b { ... }` block found by {@link WorkspaceIndex.extendRelationBlocks}. */
+export interface ExtendRelationBlockRef {
+  /** File of the block; undefined when the document was indexed without a name */
+  file?: string;
+  /** The `ExtendRelation` AST node */
+  node: ExtendRelationNode;
+  /** Absolute FQN of the source */
+  sourceFqn: string;
+  /** Absolute FQN of the target */
+  targetFqn: string;
+}
+
 /** A relation found in a document together with its resolved endpoints. */
 export interface ResolvedRelation {
   /** The raw `Relation` AST node. */
@@ -127,6 +143,8 @@ export interface ResolvedRelation {
   sourceText: string;
   /** Target reference text as written in the document. */
   targetText: string;
+  /** True when both endpoints resolved to declared elements. */
+  resolved: boolean;
 }
 
 /** Name → FQN map of one scope container. */
@@ -150,6 +168,12 @@ export class WorkspaceIndex {
 
   /** extended FQN → `extend` blocks targeting exactly it, in merge order */
   private readonly extendsOf = new Map<string, ExtendBlockRef[]>();
+  /** Documents in merge order */
+  private readonly ordered: IndexedDocument[];
+  /** relationship kind → title of its specification (when it declares one) */
+  private readonly kindTitles = new Map<string, string>();
+  /** relation fingerprint → `extend a -> b` blocks, in merge order (built on first use) */
+  private relationExtends: Map<string, ExtendRelationBlockRef[]> | undefined;
 
   /**
    * @param documents - Every document of the project: root ASTs, or
@@ -169,7 +193,21 @@ export class WorkspaceIndex {
         else push(this.roots, fqn, fqn);
       });
     }
-    for (const { file, ast } of mergeOrder(docs)) {
+    this.ordered = mergeOrder(docs);
+    for (const { ast } of this.ordered) {
+      // LikeC4 merges the specifications of all documents with
+      // `Object.assign` (a later document wins); within a document the first
+      // declaration of a kind wins.
+      const titles = new Map<string, string | undefined>();
+      for (const kind of specificationRelationshipKinds(ast)) {
+        if (!titles.has(kind.name)) titles.set(kind.name, kind.title);
+      }
+      for (const [name, title] of titles) {
+        if (title === undefined) this.kindTitles.delete(name);
+        else this.kindTitles.set(name, title);
+      }
+    }
+    for (const { file, ast } of this.ordered) {
       for (const model of ast.models ?? []) {
         for (const item of (model.elements ?? []) as AstNodeLike[]) {
           if (!isExtendElement(item)) continue;
@@ -188,6 +226,53 @@ export class WorkspaceIndex {
    */
   extendBlocks(fqn: string): readonly ExtendBlockRef[] {
     return this.extendsOf.get(fqn) ?? [];
+  }
+
+  /**
+   * The `extend a -> b { ... }` blocks that apply to a relationship, in the
+   * order LikeC4 merges their tags, links and metadata: by document (see the
+   * constructor), then in source order.  A block applies when its resolved
+   * endpoints, kind, title and direction equal the relationship's (LikeC4
+   * `relationFingerprint`); several relationships may share it.
+   *
+   * @param relation - The relationship.  `title` is its own title as LikeC4
+   *                   compares it (see `relationTitle`); when it is '' and
+   *                   the kind's specification declares a title, that title
+   *                   is compared instead, as LikeC4 does.
+   */
+  extendRelationBlocks(relation: RelationIdentity): readonly ExtendRelationBlockRef[] {
+    return this.relationExtendIndex().get(relationFingerprint(this.effectiveIdentity(relation))) ?? [];
+  }
+
+  /**
+   * The relationship identity LikeC4 compares: an empty title is replaced by
+   * the title of the kind's specification, when it declares one
+   * (`MergedSpecification.toModelRelation`).
+   */
+  effectiveIdentity(relation: RelationIdentity): RelationIdentity {
+    if (relation.title !== '' || relation.kind === undefined) return relation;
+    const specTitle = this.kindTitles.get(relation.kind);
+    return specTitle === undefined ? relation : { ...relation, title: specTitle };
+  }
+
+  /** Fingerprint → `extend a -> b` blocks of every document. */
+  private relationExtendIndex(): Map<string, ExtendRelationBlockRef[]> {
+    if (this.relationExtends) return this.relationExtends;
+    const index = new Map<string, ExtendRelationBlockRef[]>();
+    for (const { file, ast } of this.ordered) {
+      for (const block of resolveExtendRelations(ast, this)) {
+        const key = relationFingerprint({
+          sourceFqn: block.sourceFqn,
+          targetFqn: block.targetFqn,
+          kind: relationKind(block.node),
+          title: removeIndent(block.node.title ?? ''),
+          isBidirectional: block.node.isBidirectional === true,
+        });
+        push(index, key, file === undefined ? block : { file, ...block });
+      }
+    }
+    this.relationExtends = index;
+    return index;
   }
 
   /** True when at least one element with this FQN is declared. */
@@ -273,6 +358,60 @@ export function resolveRelations(
   return results;
 }
 
+/**
+ * Every `extend a -> b { ... }` block of `ast` whose endpoints both resolve
+ * (in the scope of its `model` block, like a model-level relation), in
+ * source order.
+ */
+function resolveExtendRelations(
+  ast: WorkspaceDocumentAst,
+  workspace: WorkspaceIndex,
+): ExtendRelationBlockRef[] {
+  const results: ExtendRelationBlockRef[] = [];
+  const models = ast.models ?? [];
+  const modelScopes = models.map((m) => computeLocalScope(m.elements ?? [], null).scope);
+  const resolver = new EndpointResolver(workspace, uniqueAcross(modelScopes));
+  models.forEach((model, i) => {
+    const chain: ScopeFrame[] = [{ scope: modelScopes[i] }];
+    for (const raw of model.elements ?? []) {
+      const item = raw as AstNodeLike;
+      if (item.$type !== 'ExtendRelation') continue;
+      const sourceFqn = resolver.resolveEndpoint(item.source as RefLike | undefined, chain);
+      const targetFqn = resolver.resolveEndpoint(item.target as RefLike | undefined, chain);
+      if (sourceFqn === undefined || targetFqn === undefined) continue;
+      results.push({ node: item as unknown as ExtendRelationNode, sourceFqn, targetFqn });
+    }
+  });
+  return results;
+}
+
+/** Relationship kinds declared in the specification blocks of `ast`, with their title. */
+function specificationRelationshipKinds(ast: WorkspaceDocumentAst): Array<{ name: string; title?: string }> {
+  const kinds: Array<{ name: string; title?: string }> = [];
+  for (const rawSpec of ast.specifications ?? []) {
+    const spec = rawSpec as {
+      relationships?: Array<{
+        kind?: { name?: string };
+        props?: Array<{ $type?: string; key?: string; value?: { text?: string; markdown?: string } }>;
+      }>;
+    };
+    for (const rel of spec.relationships ?? []) {
+      const name = rel.kind?.name;
+      if (!name) continue;
+      let title: string | undefined;
+      for (const prop of rel.props ?? []) {
+        if (prop.$type !== 'SpecificationRelationshipStringProperty' || prop.key !== 'title') continue;
+        const text = prop.value?.text ?? prop.value?.markdown;
+        if (text !== undefined) title = text;
+      }
+      // `parseBaseProps`: the title is dedented; an empty one is no title.
+      const normalized = title === undefined ? undefined : removeIndent(title);
+      kinds.push(normalized ? { name, title: normalized } : { name });
+    }
+  }
+  return kinds;
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -327,14 +466,23 @@ class EndpointResolver {
 
   private resolveRelation(rel: AstNodeLike, chain: ScopeFrame[], ownerFqn: string): ResolvedRelation {
     const targetText = resolveFqnRef(rel.target);
-    const targetFqn = this.resolveRef(rel.target as RefLike | undefined, chain) ?? targetText;
+    const resolvedTarget = this.resolveRef(rel.target as RefLike | undefined, chain);
+    const targetFqn = resolvedTarget ?? targetText;
     if (rel.source) {
       const sourceText = resolveFqnRef(rel.source);
-      const sourceFqn = this.resolveRef(rel.source as RefLike, chain) ?? sourceText;
-      return { node: rel, sourceFqn, targetFqn, sourceText, targetText };
+      const resolvedSource = this.resolveRef(rel.source as RefLike, chain);
+      const sourceFqn = resolvedSource ?? sourceText;
+      const resolved = resolvedSource !== undefined && resolvedTarget !== undefined;
+      return { node: rel, sourceFqn, targetFqn, sourceText, targetText, resolved };
     }
     // Sourceless relation: the owner of the enclosing body is the source.
-    return { node: rel, sourceFqn: ownerFqn, targetFqn, sourceText: ownerFqn, targetText };
+    const resolved = ownerFqn !== '' && resolvedTarget !== undefined;
+    return { node: rel, sourceFqn: ownerFqn, targetFqn, sourceText: ownerFqn, targetText, resolved };
+  }
+
+  /** Resolve a relation endpoint reference; undefined when unresolvable. */
+  resolveEndpoint(ref: RefLike | undefined, chain: ScopeFrame[]): string | undefined {
+    return this.resolveRef(ref, chain);
   }
 
   /** Resolve a (possibly qualified) reference; undefined when unresolvable. */

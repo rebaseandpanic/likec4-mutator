@@ -29,6 +29,8 @@ export interface LikeC4ModelRelation extends LikeC4ModelElement {
 export interface LikeC4ModelResult {
   /** `<file>:<line>: <message>` for every diagnostic LikeC4 reported. */
   diagnostics: string[];
+  /** The same for diagnostics of severity error only. */
+  errors: string[];
   /** Computed elements by FQN. */
   elements: Record<string, LikeC4ModelElement>;
   /** Computed relations, in the order of the model. */
@@ -63,15 +65,18 @@ export async function buildLikeC4Model(files: Record<string, string>): Promise<L
   });
   await services.shared.workspace.DocumentBuilder.build(documents, { validation: true });
 
-  const diagnostics = documents.flatMap((d) =>
-    (d.diagnostics ?? []).map(
-      (x) => `${d.uri.path.slice(`/test/workspace/src/`.length)}:${x.range.start.line + 1}: ${x.message}`,
-    ),
-  );
+  const format = (onlyErrors: boolean): string[] =>
+    documents.flatMap((d) =>
+      (d.diagnostics ?? [])
+        .filter((x) => !onlyErrors || x.severity === 1)
+        .map((x) => `${d.uri.path.slice(`/test/workspace/src/`.length)}:${x.range.start.line + 1}: ${x.message}`),
+    );
+  const diagnostics = format(false);
+  const errors = format(true);
   const model = await services.likec4.ModelBuilder.computeModel();
   const elements = (model?.$data?.elements ?? {}) as unknown as Record<string, LikeC4ModelElement>;
   const relations = Object.values(model?.$data?.relations ?? {}) as unknown as LikeC4ModelRelation[];
-  return { diagnostics, elements, relations };
+  return { diagnostics, errors, elements, relations };
 }
 
 /** Effective values of an element as the library reports them. */
@@ -124,7 +129,9 @@ export interface ReportedRelationship extends EffectiveValues {
 /**
  * Assert that the library reports the same relationships — endpoints, kind
  * and effective tags, links and metadata — as LikeC4 computes for `files`,
- * which must build without diagnostics.  Relationships are compared as a
+ * which must build without errors.  Warnings are allowed: LikeC4's validator
+ * warns about an `extend a -> b` block whose relationship takes its title from
+ * the kind's specification, although the model builder applies it.  Relationships are compared as a
  * multiset (the two sides list them in different orders); metadata key order
  * counts.  Titles are not compared: LikeC4 substitutes the title of a
  * relationship kind's specification, the library reports titles as written.
@@ -134,7 +141,7 @@ export async function expectRelationshipsAgreeWithLikeC4(
   actual: ReportedRelationship[],
 ): Promise<void> {
   const reference = await buildLikeC4Model(files);
-  expect(reference.diagnostics).toEqual([]);
+  expect(reference.errors).toEqual([]);
   const canonical = (r: {
     source: string;
     target: string;

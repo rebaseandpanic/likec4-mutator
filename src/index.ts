@@ -8,7 +8,9 @@ export type {
   WorkspaceDocumentAst,
   ExtendBlockRef,
   ExtendElementNode,
+  ExtendRelationBlockRef,
 } from './query/workspace-index.js';
+export type { ExtendRelationNode, RelationIdentity } from './query/relation-extends.js';
 export type {
   ElementDecorations,
   ElementInfo,

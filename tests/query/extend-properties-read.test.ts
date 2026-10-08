@@ -354,11 +354,11 @@ describe('comma-separated tags', () => {
     expect(el.extendedBy[0].tags).toEqual(['d', 'b']);
   });
 
-  it('reads every comma group of a relationship in source order', () => {
+  it('reports every comma group of a relationship as declared in source order', () => {
     const m = LikeC4Mutator.fromFiles({
       'base.c4': `${SPEC}model {\n  app = service\n  db = service\n  app -> db {\n    #a, #b #c\n  }\n}\n`,
     });
-    expect(m.getRelationships({ sourceFqn: 'app' })[0].tags).toEqual(['a', 'b', 'c']);
+    expect(m.getRelationships({ sourceFqn: 'app' })[0].declared.tags).toEqual(['a', 'b', 'c']);
   });
 });
 

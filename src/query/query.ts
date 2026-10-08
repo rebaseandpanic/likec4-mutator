@@ -1,5 +1,6 @@
 import { buildFqnIndex, type FqnEntry } from './fqn.js';
-import { WorkspaceIndex, resolveRelations } from './workspace-index.js';
+import { WorkspaceIndex, resolveRelations, type ResolvedRelation } from './workspace-index.js';
+import { mergeRelationContributions, relationTitle } from './relation-extends.js';
 import type { ElementInfo, ExtendContribution, RelationshipInfo, SourceRange, SpecificationInfo } from './types.js';
 import { mergeContributions, readContribution, readDeclared } from './extend-merge.js';
 import { relationDecorationSource, relationKind, type RelationNodeLike } from './relation-node.js';
@@ -97,7 +98,7 @@ export class C4Query {
    */
   getRelationships(opts?: { sourceFqn?: string; targetFqn?: string }): RelationshipInfo[] {
     const relations = resolveRelations(this.ast, this.workspace).map((r) =>
-      toRelationshipInfo(r.node, r.sourceFqn, r.targetFqn),
+      toRelationshipInfo(r, this.workspace),
     );
 
     return relations.filter((r) => {
@@ -223,8 +224,9 @@ export class C4Query {
  * Build the public {@link RelationshipInfo} for a `Relation` AST node whose
  * endpoints have already been resolved to FQNs.
  */
-function toRelationshipInfo(raw: unknown, sourceFqn: string, targetFqn: string): RelationshipInfo {
-  const item = raw as {
+function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceIndex): RelationshipInfo {
+  const { sourceFqn, targetFqn } = resolved;
+  const item = resolved.node as {
     title?: string;
     kind?: { $refText?: string };
     body?: { props?: unknown[]; [k: string]: unknown };
@@ -258,7 +260,29 @@ function toRelationshipInfo(raw: unknown, sourceFqn: string, targetFqn: string):
   }
 
   const kind = relationKind(item as RelationNodeLike);
-  const decorations = readDeclared(relationDecorationSource(item as RelationNodeLike));
+  const decorationSource = relationDecorationSource(item as RelationNodeLike);
+
+  // Tags / links / metadata: the relationship merged with every `extend`
+  // block that applies to it, as LikeC4 does.  A relationship with an
+  // unresolved endpoint is not part of LikeC4's model; nothing applies to it.
+  const blocks = resolved.resolved
+    ? workspace.extendRelationBlocks({
+        sourceFqn,
+        targetFqn,
+        kind,
+        title: relationTitle(item),
+        isBidirectional: (item as { isBidirectional?: boolean }).isBidirectional === true,
+      })
+    : [];
+  const effective = mergeRelationContributions(
+    readContribution(decorationSource),
+    blocks.map((b) => readContribution(b.node.body)),
+  );
+  const extendedBy = blocks.map((b): ExtendContribution => ({
+    ...(b.file !== undefined && { file: b.file }),
+    sourceRange: toSourceRange(b.node.$cstNode),
+    ...readDeclared(b.node.body),
+  }));
 
   return {
     sourceFqn,
@@ -267,9 +291,11 @@ function toRelationshipInfo(raw: unknown, sourceFqn: string, targetFqn: string):
     kind,
     technology,
     description,
-    tags: decorations.tags,
-    links: decorations.links,
-    metadata: decorations.metadata,
+    tags: effective.tags,
+    links: effective.links,
+    metadata: effective.metadata,
+    declared: readDeclared(decorationSource),
+    extendedBy,
     sourceRange: toSourceRange(cst),
   };
 }
