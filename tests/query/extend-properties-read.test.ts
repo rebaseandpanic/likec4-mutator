@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
 import { C4Query } from '../../src/query/query.js';
-import { buildLikeC4Model } from '../helpers/likec4-model.js';
+import { expectAgreesWithLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * `extend X { ... }` blocks add tags, links and metadata to X.  The element
@@ -317,19 +317,7 @@ describe('C4Query without a workspace', () => {
 
 /** Assert that the effective tags, links and metadata of `fqn` equal LikeC4's model. */
 async function expectAgreement(files: Record<string, string>, fqn = 'app'): Promise<void> {
-  const reference = await buildLikeC4Model(files);
-  expect(reference.diagnostics).toEqual([]);
-  const expected = reference.elements[fqn];
-  expect(expected).toBeDefined();
-
-  const actual = LikeC4Mutator.fromFiles(files).getElement(fqn)!;
-  expect(actual.tags).toEqual(expected.tags ?? undefined);
-  // LikeC4 names a link's label `title`.
-  expect(actual.links).toEqual(
-    expected.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title })),
-  );
-  expect(actual.metadata).toEqual(expected.metadata);
-  if (expected.metadata) expect(Object.keys(actual.metadata!)).toEqual(Object.keys(expected.metadata));
+  await expectAgreesWithLikeC4(files, fqn, LikeC4Mutator.fromFiles(files).getElement(fqn)!);
 }
 
 const EDGE_CASES: Array<[string, Record<string, string>]> = [

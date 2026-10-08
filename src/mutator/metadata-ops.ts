@@ -20,6 +20,7 @@ import { formatMetadataValue, generateMetadataBlock, validateMetadataKey } from 
 import {
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
+  buildRemovalEdit,
   type BodyOwnerNode,
 } from './cst-helpers.js';
 
@@ -152,34 +153,47 @@ export function collectMetadataUpserts(patch: MetadataPatch): MetadataMap {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a TextEdit that applies a metadata patch to a body-owning node
+ * Build the TextEdits that apply a metadata patch to a body-owning node
  * (element or relation).
+ *
+ * LikeC4 reads only the first `metadata { ... }` block of a body — even an
+ * empty one (`getMetadata(body.props.find(isMetadataProperty))`); later
+ * blocks are ignored.  The patch is therefore applied to that first block,
+ * and every patched key is also removed from the later blocks, so that no
+ * copy of it is left to resurface.
  *
  * Behaviour:
  *  - When the node has no `metadata { ... }` block and the patch only
- *    deletes keys, returns null (nothing to do).
+ *    deletes keys, returns no edit.
  *  - When the node has no metadata block but the patch has at least one
  *    upsert, a fresh block is inserted before the closing brace.
- *  - When a metadata block exists, it is rewritten attribute by attribute:
- *    attributes whose key the patch does not mention are copied verbatim
- *    from the source (any value form — string, markdown, boolean, array —
- *    with its original formatting); a patched key is regenerated at the
- *    position of its first occurrence or dropped when the patch maps it to
- *    `null`; new keys are appended in patch order.
- *  - When nothing remains, the existing block is deleted entirely (along
- *    with the surrounding newlines).
+ *  - When the first block holds a patched key or the patch has an upsert,
+ *    the first block is rewritten attribute by attribute: attributes whose
+ *    key the patch does not mention are copied verbatim from the source (any
+ *    value form — string, markdown, boolean, array — with its original
+ *    formatting); a patched key is regenerated at the position of its first
+ *    occurrence or dropped when the patch maps it to `null`; new keys are
+ *    appended in patch order.  Otherwise the first block is left as is.
+ *  - Later blocks lose the attributes with patched keys (see
+ *    {@link buildStripMetadataKeysEdits}); everything else in them stays
+ *    byte-for-byte.
+ *  - When nothing remains in the first block, it is deleted entirely (along
+ *    with the surrounding newlines) — unless a later block still has
+ *    attributes: then the first block stays, emptied, so that LikeC4 keeps
+ *    ignoring the later one.
  *
  * @param bodyOwner - Element or Relation AST node
  * @param fullText  - Full source text
  * @param indent    - Indent of the bodyOwner declaration line
  * @param patch     - Per-key upsert / null-delete map
+ * @returns Non-overlapping edits (empty when nothing changes)
  */
 export function buildReplaceMetadataEditOnNode(
   bodyOwner: BodyOwnerNode,
   fullText: string,
   indent: string,
   patch: MetadataPatch,
-): TextEdit | null {
+): TextEdit[] {
   const innerIndent = indent + '  ';
   const entryIndent = innerIndent + '  ';
 
@@ -194,25 +208,31 @@ export function buildReplaceMetadataEditOnNode(
       );
     }
   }
+  const hasUpserts = Object.keys(upserts).length > 0;
+  const isPatched = (key: string | undefined): boolean =>
+    key !== undefined && Object.prototype.hasOwnProperty.call(patch, key);
 
-  // Locate the existing MetadataBody.
-  const existingMeta = bodyOwner.body?.props?.find(
-    (p) => p.$type === 'MetadataBody',
-  ) as MetadataBodyShape | undefined;
+  const [first, ...later] = metadataBlocks(bodyOwner);
 
   // Case 1: no existing metadata block.  Pure deletes are no-ops.
-  if (!existingMeta?.$cstNode) {
-    if (Object.keys(upserts).length === 0) return null;
-    return buildInsertBodySnippet(bodyOwner, fullText, indent, (ii) =>
+  if (!first) {
+    if (!hasUpserts) return [];
+    const edit = buildInsertBodySnippet(bodyOwner, fullText, indent, (ii) =>
       generateMetadataBlock(upserts, ii),
     );
+    return edit ? [edit] : [];
   }
 
-  // Case 2: existing block — rewrite it attribute by attribute.
-  const isPatched = (key: string): boolean => Object.prototype.hasOwnProperty.call(patch, key);
+  const { edits, laterKeepAttributes } = stripLaterBlocks(later, fullText, isPatched);
+
+  // Case 2: the first block is untouched by the patch.
+  const firstAttrs = first.props ?? [];
+  if (!hasUpserts && !firstAttrs.some((attr) => isPatched(attr.key))) return edits;
+
+  // Case 3: rewrite the first block attribute by attribute.
   const regenerated = new Set<string>();
   const entries: string[] = [];
-  for (const attr of existingMeta.props ?? []) {
+  for (const attr of firstAttrs) {
     const key = attr.key;
     if (key !== undefined && isPatched(key)) {
       // Deleted, or a duplicate of a key already regenerated above.
@@ -229,20 +249,27 @@ export function buildReplaceMetadataEditOnNode(
     entries.push(`${key} ${formatMetadataValue(value, entryIndent)}`);
   }
 
-  // Nothing left → delete the entire block.  Pass `consumeTrailingNewline:
-  // false` so the trailing `\n` after the block stays intact — otherwise both
-  // surrounding newlines collapse and adjacent body content (e.g.
-  // `description 'd'` on the previous line, the body's closing `}` on the
-  // following line) ends up squashed onto a single line.
-  const cst = existingMeta.$cstNode;
+  const cst = first.$cstNode;
   if (entries.length === 0) {
+    if (laterKeepAttributes) {
+      // Keep the first block, emptied: LikeC4 then still ignores the later
+      // blocks instead of reading the next one.
+      edits.push(...removeAttributes(firstAttrs, fullText));
+      return edits;
+    }
+    // Nothing left → delete the entire block.  Pass `consumeTrailingNewline:
+    // false` so the trailing `\n` after the block stays intact — otherwise
+    // both surrounding newlines collapse and adjacent body content (e.g.
+    // `description 'd'` on the previous line, the body's closing `}` on the
+    // following line) ends up squashed onto a single line.
     const { offset, end } = expandRangeToConsumeSurroundingNewlines(
       fullText,
       cst.offset,
       cst.end,
       { consumeTrailingNewline: false },
     );
-    return { offset, end, newText: '' };
+    edits.push({ offset, end, newText: '' });
+    return edits;
   }
 
   let block = `\n${innerIndent}metadata {\n`;
@@ -252,5 +279,87 @@ export function buildReplaceMetadataEditOnNode(
   block += `${innerIndent}}\n`;
 
   const { offset, end } = expandRangeToConsumeSurroundingNewlines(fullText, cst.offset, cst.end);
-  return { offset, end, newText: block };
+  edits.push({ offset, end, newText: block });
+  return edits;
+}
+
+/**
+ * Build the TextEdits that remove every attribute whose key is in `keys`
+ * from every `metadata { ... }` block of a body, so that the body no longer
+ * contributes those keys.  Everything else keeps its exact text.
+ *
+ * A later block whose attributes all go is removed.  The first block — the
+ * only one LikeC4 reads — is removed when its attributes all go, unless a
+ * later block still has attributes: then it stays, emptied, so that LikeC4
+ * keeps ignoring the later block.
+ *
+ * @returns Non-overlapping edits (empty when no block holds such a key)
+ */
+export function buildStripMetadataKeysEdits(
+  bodyOwner: BodyOwnerNode,
+  fullText: string,
+  keys: ReadonlySet<string>,
+): TextEdit[] {
+  const isStripped = (key: string | undefined): boolean => key !== undefined && keys.has(key);
+  const [first, ...later] = metadataBlocks(bodyOwner);
+  if (!first) return [];
+  const { edits, laterKeepAttributes } = stripLaterBlocks(later, fullText, isStripped);
+
+  const attrs = first.props ?? [];
+  const removed = attrs.filter((attr) => isStripped(attr.key));
+  if (removed.length === 0) return edits;
+  if (removed.length === attrs.length && !laterKeepAttributes) {
+    const { offset, end, newText } = buildRemovalEdit(fullText, first.$cstNode.offset, first.$cstNode.end);
+    edits.push({ offset, end, newText });
+  } else {
+    edits.push(...removeAttributes(removed, fullText));
+  }
+  return edits;
+}
+
+/** A `metadata { ... }` block with a source position. */
+type PositionedMetadataBody = MetadataBodyShape & { $cstNode: { offset: number; end: number } };
+
+/** Every `metadata { ... }` block of the body that has a source position, in source order. */
+function metadataBlocks(bodyOwner: BodyOwnerNode): PositionedMetadataBody[] {
+  return (bodyOwner.body?.props ?? []).filter(
+    (p): p is typeof p & PositionedMetadataBody => p.$type === 'MetadataBody' && p.$cstNode !== undefined,
+  ) as PositionedMetadataBody[];
+}
+
+/**
+ * Remove the attributes `isRemoved` selects from blocks after the first: a
+ * block left without attributes is removed as a whole.
+ *
+ * @returns The edits, and whether any later block still has attributes.
+ */
+function stripLaterBlocks(
+  later: PositionedMetadataBody[],
+  fullText: string,
+  isRemoved: (key: string | undefined) => boolean,
+): { edits: TextEdit[]; laterKeepAttributes: boolean } {
+  const edits: TextEdit[] = [];
+  let laterKeepAttributes = false;
+  for (const block of later) {
+    const attrs = block.props ?? [];
+    const removed = attrs.filter((attr) => isRemoved(attr.key));
+    if (removed.length < attrs.length) laterKeepAttributes = true;
+    if (removed.length === 0) continue;
+    if (removed.length === attrs.length) {
+      const { offset, end, newText } = buildRemovalEdit(fullText, block.$cstNode.offset, block.$cstNode.end);
+      edits.push({ offset, end, newText });
+    } else {
+      edits.push(...removeAttributes(removed, fullText));
+    }
+  }
+  return { edits, laterKeepAttributes };
+}
+
+/** Removal edits for the given metadata attributes (whole lines when they stand alone). */
+function removeAttributes(attrs: MetadataAttributeShape[], fullText: string): TextEdit[] {
+  return attrs.flatMap((attr) => {
+    if (!attr.$cstNode) return [];
+    const { offset, end, newText } = buildRemovalEdit(fullText, attr.$cstNode.offset, attr.$cstNode.end);
+    return [{ offset, end, newText }];
+  });
 }

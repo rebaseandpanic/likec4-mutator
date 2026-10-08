@@ -272,13 +272,7 @@ export function updateRelationshipEdit(
     edits.push(...buildReplaceLinksEdit(rel as BodyOwnerNode, fullText, indent, patch.links));
   }
   if (patch.metadata !== undefined && Object.keys(patch.metadata).length > 0) {
-    const e = buildReplaceMetadataEditOnNode(
-      rel as BodyOwnerNode,
-      fullText,
-      indent,
-      patch.metadata,
-    );
-    if (e) edits.push(e);
+    edits.push(...buildReplaceMetadataEditOnNode(rel as BodyOwnerNode, fullText, indent, patch.metadata));
   }
   if (patch.style !== undefined && Object.keys(patch.style).length > 0) {
     const e = buildReplaceRelationStyleEdit(rel, fullText, indent, patch.style);

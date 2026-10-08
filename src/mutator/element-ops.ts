@@ -31,6 +31,7 @@ import {
 } from './cst-helpers.js';
 import {
   buildReplaceMetadataEditOnNode,
+  buildStripMetadataKeysEdits,
   collectMetadataUpserts,
   type MetadataPatch,
 } from './metadata-ops.js';
@@ -235,8 +236,7 @@ export function updateElementEdit(
   // (string / string[]) or deletes (null); keys absent from the patch are
   // preserved.  An empty patch is a no-op.
   if (props.metadata !== undefined && Object.keys(props.metadata).length > 0) {
-    const metaEdit = buildReplaceMetadataEdit(node, fullText, props.metadata);
-    if (metaEdit) edits.push(metaEdit);
+    edits.push(...buildReplaceMetadataEdit(node, fullText, props.metadata));
   }
 
   return edits;
@@ -361,7 +361,10 @@ export interface ExtendClearing {
   tags: boolean;
   /** Remove every `link` of the block */
   links: boolean;
-  /** Remove these metadata keys (the `metadata` block goes when it empties) */
+  /**
+   * Remove these metadata keys from every `metadata` block (see
+   * `buildStripMetadataKeysEdits` for when an emptied block goes)
+   */
   metadataKeys: string[];
 }
 
@@ -398,7 +401,7 @@ export function clearExtendContributionsEdits(
     edits.push(...buildReplaceLinksEdit(node, fullText, []));
   }
   if (clear.metadataKeys.length > 0) {
-    edits.push(...buildRemoveMetadataKeysEdits(node, fullText, new Set(clear.metadataKeys)));
+    edits.push(...buildStripMetadataKeysEdits(node, fullText, new Set(clear.metadataKeys)));
   }
   return edits;
 }
@@ -406,34 +409,6 @@ export function clearExtendContributionsEdits(
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Removal edits for every attribute whose key is in `keys`, in every
- * `metadata { ... }` block of the body.  A block whose attributes all go is
- * removed as a whole.
- */
-function buildRemoveMetadataKeysEdits(
-  node: AstElementNode,
-  fullText: string,
-  keys: ReadonlySet<string>,
-): TextEdit[] {
-  const edits: TextEdit[] = [];
-  for (const prop of node.body?.props ?? []) {
-    if (prop.$type !== 'MetadataBody' || !prop.$cstNode) continue;
-    const attrs = (prop.props ?? []) as Array<{ key?: string; $cstNode?: { offset: number; end: number } }>;
-    const removed = attrs.filter((a) => a.key !== undefined && keys.has(a.key));
-    if (removed.length === 0) continue;
-    const ranges =
-      removed.length === attrs.length
-        ? [prop.$cstNode]
-        : removed.flatMap((a) => (a.$cstNode ? [a.$cstNode] : []));
-    for (const range of ranges) {
-      const { offset, end, newText } = buildRemovalEdit(fullText, range.offset, range.end);
-      edits.push({ offset, end, newText });
-    }
-  }
-  return edits;
-}
 
 /**
  * Build the TextEdits that set the title of an element.
@@ -645,7 +620,7 @@ function buildReplaceMetadataEdit(
   node: AstElementNode,
   fullText: string,
   patch: MetadataPatch,
-): TextEdit | null {
+): TextEdit[] {
   const indent = getNodeIndent(node, fullText);
   return buildReplaceMetadataEditOnNode(node, fullText, indent, patch);
 }
