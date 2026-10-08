@@ -128,3 +128,59 @@ describe('inline element summary and technology', () => {
     expect(text(el['title'])).toBe('T');
   });
 });
+
+/**
+ * Body strings may be written as triple-quoted Markdown.  LikeC4 reads them
+ * (`{ md }`); the library reports their text instead of dropping them.
+ */
+const MARKDOWN = `specification { element service }
+model {
+  a = service {
+    summary '''
+      **S** md
+    '''
+    description '''
+      # D
+    '''
+  }
+  b = service 'T' '' {
+    summary 'plain'
+    summary '''
+      last md
+    '''
+  }
+  x = service
+  y = service
+  x -> y 'T' {
+    description '''
+      rel md
+    '''
+  }
+}
+`;
+
+type Md = { md?: string; txt?: string } | undefined;
+const content = (v: Md): string | undefined => v?.md ?? v?.txt;
+
+describe('Markdown body strings', () => {
+  it.each([
+    ['a', 'summary'],
+    ['a', 'description'],
+    ['b', 'summary'],
+  ] as const)('getElement(%s).%s reads the Markdown LikeC4 uses', async (fqn, key) => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': MARKDOWN });
+    const model = await buildLikeC4Model(m.serialize());
+    expect(model.errors).toEqual([]);
+    const expected = content((model.elements[fqn] as unknown as Record<string, Md>)[key]);
+    expect(expected).toBeDefined();
+    expect(m.getElement(fqn)?.[key]?.trim()).toBe(expected);
+  });
+
+  it('getRelationships reads a Markdown description', async () => {
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': MARKDOWN });
+    const model = await buildLikeC4Model(m.serialize());
+    const expected = content((model.relations[0] as unknown as Record<string, Md>)['description']);
+    expect(expected).toBeDefined();
+    expect(m.getRelationships({ sourceFqn: 'x' })[0]?.description?.trim()).toBe(expected);
+  });
+});

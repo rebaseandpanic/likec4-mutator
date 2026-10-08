@@ -327,13 +327,16 @@ function toSourceRange(
 
 /**
  * Extract the string value from a property node.
- * Body string properties store their value as `MarkdownOrString { text: string }`.
+ * Body string properties store their value as `MarkdownOrString`: a plain
+ * string in `text`, or a triple-quoted Markdown string in `markdown` (read as
+ * its content, as LikeC4 does).
  */
 function extractStringValue(prop: unknown): string | undefined {
-  const p = prop as { value?: string | { text?: string; value?: string } };
+  const p = prop as { value?: string | { text?: string; markdown?: string; value?: string } };
   if (typeof p.value === 'string') return p.value;
   if (typeof p.value === 'object' && p.value) {
     if (typeof p.value.text === 'string') return p.value.text;
+    if (typeof p.value.markdown === 'string') return p.value.markdown;
     if (typeof p.value.value === 'string') return p.value.value;
   }
   return undefined;
