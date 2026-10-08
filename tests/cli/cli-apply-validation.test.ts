@@ -136,7 +136,6 @@ describe('CLI apply validates the mutations file shape', () => {
       mutation: { op: 'removeRelationship', source: 'app', target: 'app.db', label: 'reads' },
       field: 'label',
     },
-    { name: 'includes on addView', mutation: { op: 'addView', id: 'v', type: 'element', includes: ['*'] }, field: 'includes' },
     { name: 'element style key colour', mutation: { ...validAdd, id: 'child', style: { colour: 'red' } }, field: 'colour' },
     {
       name: 'relationship style key shape',
@@ -226,7 +225,7 @@ describe('CLI apply validates the mutations file shape', () => {
           metadata: { sla: '99.99%', owners: null },
           style: { line: 'dotted', color: 'red' },
         },
-        { op: 'addView', id: 'apiView', type: 'element', target: 'app.api', title: 'API Overview' },
+        { op: 'addView', id: 'apiView', type: 'element', target: 'app.api', title: 'API Overview', includes: ['*'] },
         { op: 'removeRelationship', source: 'app', target: 'app.db' },
         { op: 'removeElement', fqn: 'app.api' },
       ],

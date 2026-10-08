@@ -9,7 +9,7 @@
  * misspelled field would otherwise be silently ignored) and reports the first
  * violation with its JSON path, e.g. `mutations[2].links[0].url`.
  */
-import type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
+import { viewIncludeExpression, type ElementStyle, type RelationshipStyle } from './mutator/codegen.js';
 import type { MetadataPatch } from './mutator/metadata-ops.js';
 
 export interface LinkSpec {
@@ -51,6 +51,8 @@ export interface AddViewMutation {
   type: 'element' | 'dynamic' | 'deployment';
   target?: string;
   title?: string;
+  /** Include rules, one `include` statement each; see `GenerateViewOpts.includes`. */
+  includes?: string[];
 }
 
 export interface UpdateElementMutation {
@@ -204,6 +206,23 @@ function optionalStringArray(obj: JsonObject, key: string, path: string): void {
   });
 }
 
+/**
+ * `includes` of addView: an array of strings, each holding an include
+ * expression once trimmed and stripped of one leading `include` keyword.
+ */
+function optionalViewIncludes(obj: JsonObject, path: string): void {
+  optionalStringArray(obj, 'includes', path);
+  const value = obj.includes as string[] | undefined;
+  value?.forEach((item, i) => {
+    if (viewIncludeExpression(item) === undefined) {
+      throw new MutationsFileError(
+        `${path}.includes[${i}]`,
+        `expected an include expression such as '*' or 'app.api', got ${JSON.stringify(item)}`,
+      );
+    }
+  });
+}
+
 const LINK_FIELDS = ['url', 'label'] as const;
 
 function optionalLinks(obj: JsonObject, path: string): void {
@@ -350,7 +369,7 @@ const MUTATION_FIELDS = {
     'style',
   ],
   removeRelationship: ['op', 'source', 'target'],
-  addView: ['op', 'id', 'type', 'target', 'title'],
+  addView: ['op', 'id', 'type', 'target', 'title', 'includes'],
 } as const satisfies { [Op in Mutation['op']]: ReadonlyArray<keyof Extract<Mutation, { op: Op }>> };
 
 /** Interface fields absent from {@link MUTATION_FIELDS}; must be `never`. */
@@ -444,6 +463,7 @@ function validateMutation(m: JsonObject, path: string): void {
       }
       optionalString(m, 'target', path);
       optionalString(m, 'title', path);
+      optionalViewIncludes(m, path);
       return;
     default:
       throw new MutationsFileError(

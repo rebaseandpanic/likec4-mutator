@@ -87,7 +87,7 @@ mutator.addView({
   type: 'element',    // 'element' | 'dynamic' | 'deployment'
   target: 'app',
   title: 'App Overview',
-  includes: ['*'],
+  includes: ['*'],     // one `include` rule per item; a leading `include` keyword is stripped
 });
 
 // Update element (only specified fields are changed).  tags / links / metadata
@@ -391,7 +391,7 @@ Removes a relationship between two elements (matched by absolute source and targ
 
 #### addView
 
-Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
+Adds a new view. Type can be `element`, `dynamic`, or `deployment`. Required: `op`, `id`, `type`; `target`, `title` and `includes` are optional.
 
 ```json
 {
@@ -399,9 +399,12 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
   "id": "apiView",
   "type": "element",
   "target": "app.api",
-  "title": "API Overview"
+  "title": "API Overview",
+  "includes": ["*", "app.db", "app.api -> app.db"]
 }
 ```
+
+`includes` is an array of strings; each item becomes one `include` rule of the view, in order. An item is what follows the keyword: one or more comma-separated predicates, as LikeC4 accepts them after `include` (`"*"`, `"app.db"`, `"app.*, app.api -> app.db"`). One leading `include` keyword is stripped, so `"include *"` writes `include *`, not `include include *`; surrounding whitespace is trimmed. An item that is empty or only `include` is rejected before any file is touched (exit code 1, path `mutations[i].includes[j]`); a predicate LikeC4 cannot parse makes the mutation fail without writing. Without `includes` (or with `[]`) an element view gets `include *` and other view types get no include rule. The library's `addView({ includes })` handles items the same way and throws on an empty item.
 
 ### Full batch example
 

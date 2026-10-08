@@ -260,7 +260,13 @@ export interface GenerateViewOpts {
   target?: string;
   /** Optional view title */
   title?: string;
-  /** Optional include expressions (each becomes an `include` statement) */
+  /**
+   * Optional include rules, one `include` statement per item.  An item is the
+   * part after the keyword: one or more comma-separated predicates (`'*'`,
+   * `'app.api'`, `'app.*, app -> db'`).  One leading `include` keyword is
+   * accepted and stripped (`'include *'` writes `include *`), see
+   * {@link viewIncludeExpression}.
+   */
   includes?: string[];
   /**
    * Layout algorithm directive.  Defaults to `'TopBottom'`.
@@ -270,18 +276,47 @@ export interface GenerateViewOpts {
 }
 
 /**
+ * The predicates of one view `include` rule given as `item`: trimmed, with one
+ * leading `include` keyword (followed by whitespace or nothing) removed, so
+ * that both `'*'` and `'include *'` give `'*'`.  Returns `undefined` when
+ * nothing remains (an empty item or a bare `include`).  The predicates
+ * themselves are not checked here; a malformed one is rejected when the
+ * edited file is reparsed.
+ */
+export function viewIncludeExpression(item: string): string | undefined {
+  const expression = item
+    .trim()
+    .replace(/^include(?=\s|$)/, '')
+    .trim();
+  return expression === '' ? undefined : expression;
+}
+
+/**
  * Generate a LikeC4 view declaration snippet.  By default an
  * `autoLayout TopBottom` directive is included; pass `autoLayout: ''`
  * to suppress it.
+ *
+ * @throws {Error} when an `includes` item is empty or a bare `include`
+ *   keyword (see {@link viewIncludeExpression})
  */
 export function generateView(opts: GenerateViewOpts): string {
   const { indent, id, type, target, title, includes, autoLayout = 'TopBottom' } = opts;
   const innerIndent = indent + '  ';
 
+  const expressions = includes?.map((item, i) => {
+    const expression = viewIncludeExpression(item);
+    if (expression === undefined) {
+      throw new Error(
+        `View '${id}': includes[${i}] has no include expression (got ${JSON.stringify(item)})`,
+      );
+    }
+    return expression;
+  });
+
   // Element views without explicit includes default to `include *` so that the
   // generated view is never empty — all real LikeC4 element views use this.
   const effectiveIncludes =
-    includes && includes.length > 0 ? includes : type === 'element' ? ['*'] : undefined;
+    expressions && expressions.length > 0 ? expressions : type === 'element' ? ['*'] : undefined;
 
   let header: string;
   if (type === 'element' && target) {

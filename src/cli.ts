@@ -476,6 +476,7 @@ program
               type: m.type,
               target: m.target,
               title: m.title,
+              includes: m.includes,
             });
             applied++;
             break;
