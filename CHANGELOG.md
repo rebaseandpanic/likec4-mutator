@@ -6,7 +6,9 @@
 - Relationship endpoints are reported and matched as absolute FQNs, resolved the way LikeC4 links references (relative names inside element bodies, `this` / `it`, sourceless `-> x`, `extend` bodies, elements declared in other files). `RelationshipInfo.sourceFqn` / `targetFqn` and the `getRelationships({ sourceFqn, targetFqn })` filters previously carried the reference text as written (e.g. `'api'` for `api -> db` inside `app`); they now return `'app.api'`. Model-level references that were already absolute resolve to the same value. Unresolvable (e.g. ambiguous) names stay as written.
 - `getElement().title` prefers the inline title over a body `title` property, as LikeC4 does.
 - Invalid tag names (anything LikeC4 does not lex as one identifier, including names starting with `true` / `false`) and invalid link URLs (whitespace, or not `scheme://…`, `/…`, `./…`, `../…`, `@alias/…`) now throw. Previously tags were written as-is and URLs were silently rewritten.
-- CLI `apply` validates the mutations file before touching any `.c4` file and fails with exit code 1 naming the mutation index and field (e.g. `mutations[0].tags: expected an array of strings, got a string`).
+- CLI `apply` validates the mutations file before touching any `.c4` file and fails with exit code 1 naming the location (e.g. `mutations[0].tags: expected an array of strings, got a string`). Unknown fields are rejected too — top-level keys other than `mutations`, fields an op does not accept, and unknown keys inside `style` objects and `links` entries — so a typo such as `tag` instead of `tags` now fails instead of being silently ignored.
+- Metadata keys must be valid LikeC4 identifiers (as the grammar's `Id` rule accepts them): keys such as `1abc`, `-x`, `_`, `true`, `true-x` or keywords like `title` and `metadata` now throw before any text is generated. Previously they produced text that failed to parse, or `generateElement` returned invalid DSL.
+- `getSpecification()` returns the merged specification of all files (names in first-declaration order, a name declared in several files listed once) instead of only the first file's.
 - Metadata maps returned by the library have a null prototype.
 
 ### Bugfix
@@ -17,13 +19,13 @@
 - `removeRelationship` searches all files, not only the first file with a `model` block, and matches by absolute FQN (falling back to the reference text as written).
 - Brace handling no longer misreads block comments, `'''…'''` strings or unquoted URLs such as `link https://…`: `validate()` no longer reports false brace errors and edits on such files are no longer rejected.
 - Properties added to an element whose first child sits on the `{` line are inserted before the child.
-- `getSpecification` recognises a specification that declares only relationship kinds.
 - Metadata keys named like `Object.prototype` members (`__proto__`, `constructor`) are kept as data.
 - Merging metadata keeps untouched attributes byte-for-byte, including boolean and markdown values; reads now include boolean (`'true'` / `'false'`) and markdown values.
 - Relationships declared inside `extend` blocks are now returned by `getRelationships`.
+- Elements declared inside `extend X { … }` blocks (in any file) are found by `getElement`, `listElements`, `getElementSource`, `updateElement`, `removeElement` and `addElement`, and appear in their parent's `children`. `removeElement` also deletes every `extend` block that targets the removed element or one of its descendants; relationships inside those blocks are listed in `removedRelationships`.
 
 ### Added
-- `WorkspaceIndex` export and an optional second parameter `new C4Query(ast, workspace?)` for cross-file reference resolution.
+- `WorkspaceIndex` export (with `children(fqn)`) and an optional second parameter `new C4Query(ast, workspace?)` for cross-file reference resolution.
 
 ## [0.5.0] - 2026-10-07
 
