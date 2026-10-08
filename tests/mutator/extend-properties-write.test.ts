@@ -117,6 +117,22 @@ describe('updateElement tags / links through extend blocks', () => {
   });
 });
 
+describe('updateElement tags written with commas', () => {
+  const base = `${SPEC}model {\n  app = system 'App' {\n    #a, #b #c\n    description 'd'\n  }\n}\n`;
+  const ext = `model {\n  extend app {\n    #d, #b\n    metadata { k 'v' }\n  }\n}\n`;
+
+  it.each([
+    ['replaces every comma group', ['z'], base.replace('    #a, #b #c\n', '    #z\n'), ['z']],
+    ['clears every comma group', [], base.replace('    #a, #b #c\n', ''), undefined],
+  ])('%s of the declaration and of extend blocks', (_name, tags, expectedBase, expectedTags) => {
+    const m = LikeC4Mutator.fromFiles({ 'base.c4': base, 'ext.c4': ext });
+    m.updateElement('app', { tags });
+    expect(m.serialize()).toEqual({ 'base.c4': expectedBase, 'ext.c4': ext.replace('    #d, #b\n', '') });
+    expect(m.getElement('app')!.tags).toEqual(expectedTags);
+    expect(m.validate()).toEqual([]);
+  });
+});
+
 describe('updateElement metadata through extend blocks', () => {
   it('null deletes the key everywhere and keeps every other key byte-for-byte', () => {
     const m = makeMutator();

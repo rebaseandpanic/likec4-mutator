@@ -511,7 +511,7 @@ app.extendedBy;  // [{ file: 'ext/ops.c4', sourceRange: {...}, tags: ['critical'
 Merge rules (LikeC4 1.59.4):
 
 - The declaration body comes first, then every `extend` block of exactly this element — files ordered by path the way LikeC4 orders documents (natural and segment by segment: `a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`; independent of the order passed to `fromFiles`), then source order within a file.
-- `tags`: union without duplicates.
+- `tags`: union without duplicates. Within one body, comma-separated groups (`#a, #b #c`) are taken last group first, as LikeC4 does (`['b', 'c', 'a']`); `declared` and `extendedBy` list them in source order.
 - `links`: concatenated; duplicates are kept.
 - `metadata`: every value of a key is collected (a key repeated inside one block too); when a key appears in more than one body, duplicate values are dropped. A key with one value maps to a string — also when written as `key ['v1']` — otherwise to an array. `declared` and `extendedBy` keep the form as written.
 - String values are reported as written (LikeC4 additionally dedents and trims them).

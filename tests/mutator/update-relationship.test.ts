@@ -195,6 +195,17 @@ views {
     expect(m.validate()).toHaveLength(0);
   });
 
+  it.each([
+    ['replaces', ['deprecated'], '    #deprecated\n'],
+    ['clears', [], ''],
+  ])('tags %s every comma-separated group', (_name, tags, written) => {
+    const source = `specification {\n  element service\n  tag internal\n  tag deprecated\n  tag x\n}\nmodel {\n  a = service 'A'\n  b = service 'B'\n  a -> b 'calls' {\n    #internal, #x\n    description 'd'\n  }\n}\n`;
+    const m = newMutator(source);
+    m.updateRelationship({ source: 'a', target: 'b' }, { tags });
+    expect(m.serialize()['model.c4']).toBe(source.replace('    #internal, #x\n', written));
+    expect(m.validate()).toHaveLength(0);
+  });
+
   it('links REPLACE and links=[] clears all links', () => {
     const sourceWithLinks = `specification {
   element service

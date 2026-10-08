@@ -23,15 +23,26 @@ export interface Decorations {
   metadata?: MetadataMap;
 }
 
+/**
+ * One comma-separated group of a `Tags` node.  LikeC4 grammar:
+ * `Tags: (values+=TagRef)+ ({infer Tags.prev=current} ',' (values+=TagRef)*)* ';'?`
+ * — the body holds the last group, each group links to the one before it
+ * through `prev`.
+ */
+interface TagsLike {
+  values?: Array<{ $cstNode?: { text?: string }; $refText?: string }>;
+  prev?: TagsLike;
+}
+
 /** Minimal structural view of an element or `extend` body. */
 interface BodyLike {
-  tags?: { values?: Array<{ $cstNode?: { text?: string }; $refText?: string }> };
+  tags?: TagsLike;
   props?: unknown[];
 }
 
 /**
  * Read the tags, links and metadata of one body as LikeC4 does before
- * merging: tags without duplicates, links in source order, metadata of the
+ * merging: tags of every comma group in LikeC4 order without duplicates, links in source order, metadata of the
  * first `metadata { ... }` block grouped per key.
  */
 export function readContribution(body: unknown): Decorations {
@@ -39,7 +50,7 @@ export function readContribution(body: unknown): Decorations {
   if (!body) return out;
   const b = body as BodyLike;
 
-  const tags = readTags(b);
+  const tags = readTagGroups(b).flat();
   if (tags.length > 0) out.tags = unique(tags);
 
   const links = readLinks(b);
@@ -57,15 +68,16 @@ export function readContribution(body: unknown): Decorations {
 
 /**
  * Read tags, links and metadata of one body as declared (see
- * `ElementDecorations`): tags and links in source order, metadata as written
- * — the last value of a repeated key, arrays kept as arrays.
+ * `ElementDecorations`): tags (of every comma group) and links in source
+ * order, metadata as written — the last value of a repeated key, arrays
+ * kept as arrays.
  */
 export function readDeclared(body: unknown): Decorations {
   const out: Decorations = {};
   if (!body) return out;
   const b = body as BodyLike;
 
-  const tags = readTags(b);
+  const tags = readTagGroups(b).reverse().flat();
   if (tags.length > 0) out.tags = tags;
 
   const links = readLinks(b);
@@ -127,16 +139,25 @@ function mergeMetadata(existing: MetadataMap, incoming: MetadataMap): MetadataMa
   return result;
 }
 
-function readTags(body: BodyLike): string[] {
-  // The standalone parser does not resolve cross-references, so tag names
-  // are recovered from the leading-`#` CST text of each TagRef.
-  const names: string[] = [];
-  for (const tagRef of body.tags?.values ?? []) {
-    const txt = tagRef?.$cstNode?.text ?? tagRef?.$refText;
-    if (typeof txt !== 'string') continue;
-    names.push(txt.startsWith('#') ? txt.slice(1) : txt);
+/**
+ * Tag names of every comma-separated group of the body, in the order LikeC4
+ * `parseTags` visits them: the last group first, then each earlier one.
+ * Reverse the result for source order.
+ */
+function readTagGroups(body: BodyLike): string[][] {
+  const groups: string[][] = [];
+  for (let group = body.tags; group; group = group.prev) {
+    // The standalone parser does not resolve cross-references, so tag names
+    // are recovered from the leading-`#` CST text of each TagRef.
+    const names: string[] = [];
+    for (const tagRef of group.values ?? []) {
+      const txt = tagRef?.$cstNode?.text ?? tagRef?.$refText;
+      if (typeof txt !== 'string') continue;
+      names.push(txt.startsWith('#') ? txt.slice(1) : txt);
+    }
+    groups.push(names);
   }
-  return names;
+  return groups;
 }
 
 function readLinks(body: BodyLike): LinkValue[] {

@@ -239,6 +239,43 @@ describe('effective metadata values', () => {
   });
 });
 
+describe('comma-separated tags', () => {
+  // LikeC4 grammar: `Tags: (values+=TagRef)+ (',' (values+=TagRef)*)*`; each
+  // comma starts a new group chained through `prev`.  LikeC4 reads the last
+  // group first, then the earlier ones (`parseTags`), without duplicates.
+  const COMMA_FILES = {
+    'base.c4': `${SPEC}model {\n  app = service {\n    #a, #b #c\n  }\n}\n`,
+    'ext.c4': `model {\n  extend app {\n    #d, #b\n  }\n}\n`,
+  };
+
+  it('reads every comma group in the order LikeC4 merges them', () => {
+    expect(LikeC4Mutator.fromFiles(COMMA_FILES).getElement('app')!.tags).toEqual(['b', 'c', 'a', 'd']);
+  });
+
+  it.each([
+    ['#a, #b, #c #d', ['c', 'd', 'b', 'a']],
+    ['#a, #b,', ['b', 'a']],
+  ])('reads %s as LikeC4 does', (tags, expected) => {
+    const el = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = service {\n    ${tags}\n  }\n}\n`,
+    }).getElement('app')!;
+    expect(el.tags).toEqual(expected);
+  });
+
+  it('reports declared and extend tags in source order', () => {
+    const el = LikeC4Mutator.fromFiles(COMMA_FILES).getElement('app')!;
+    expect(el.declared.tags).toEqual(['a', 'b', 'c']);
+    expect(el.extendedBy[0].tags).toEqual(['d', 'b']);
+  });
+
+  it('reads every comma group of a relationship in source order', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = service\n  db = service\n  app -> db {\n    #a, #b #c\n  }\n}\n`,
+    });
+    expect(m.getRelationships({ sourceFqn: 'app' })[0].tags).toEqual(['a', 'b', 'c']);
+  });
+});
+
 describe('C4Query without a workspace', () => {
   it('merges only the extend blocks of its own document and reports no file name', () => {
     const doc = new C4Parser().parse(
@@ -251,7 +288,38 @@ describe('C4Query without a workspace', () => {
   });
 });
 
+/** Assert that the effective tags, links and metadata of `fqn` equal LikeC4's model. */
+async function expectAgreement(files: Record<string, string>, fqn = 'app'): Promise<void> {
+  const reference = await buildLikeC4Model(files);
+  expect(reference.diagnostics).toEqual([]);
+  const expected = reference.elements[fqn];
+  expect(expected).toBeDefined();
+
+  const actual = LikeC4Mutator.fromFiles(files).getElement(fqn)!;
+  expect(actual.tags).toEqual(expected.tags ?? undefined);
+  // LikeC4 names a link's label `title`.
+  expect(actual.links).toEqual(
+    expected.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title })),
+  );
+  expect(actual.metadata).toEqual(expected.metadata);
+  if (expected.metadata) expect(Object.keys(actual.metadata!)).toEqual(Object.keys(expected.metadata));
+}
+
+const EDGE_CASES: Array<[string, Record<string, string>]> = [
+  [
+    'comma-separated tags',
+    {
+      'base.c4': `${SPEC}model {\n  app = service {\n    #a, #b #c\n  }\n}\n`,
+      'ext.c4': `model {\n  extend app {\n    #d, #b\n  }\n}\n`,
+    },
+  ],
+];
+
 describe('agreement with the LikeC4 model builder', () => {
+  it.each(EDGE_CASES)('agrees on %s', async (_name, files) => {
+    await expectAgreement(files);
+  });
+
   it('reports the tags, links and metadata LikeC4 computes for the same sources', async () => {
     const files: Record<string, string> = {
       'base.c4': BASE.replace("tag d\n", 'tag d\n  tag e\n'),
@@ -262,18 +330,6 @@ describe('agreement with the LikeC4 model builder', () => {
       'a/x.c4': `model {\n  extend app {\n    metadata { flag true }\n  }\n}\n`,
       'a.c4': `model {\n  extend app {\n    metadata { flag false }\n  }\n}\n`,
     };
-    const reference = await buildLikeC4Model(files);
-    expect(reference.diagnostics).toEqual([]);
-    const expected = reference.elements['app'];
-    expect(expected).toBeDefined();
-
-    const actual = LikeC4Mutator.fromFiles(files).getElement('app')!;
-    expect(actual.tags).toEqual(expected.tags ?? undefined);
-    // LikeC4 names a link's label `title`.
-    expect(actual.links).toEqual(
-      expected.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title })),
-    );
-    expect(actual.metadata).toEqual(expected.metadata);
-    expect(Object.keys(actual.metadata!)).toEqual(Object.keys(expected.metadata!));
+    await expectAgreement(files);
   });
 });
