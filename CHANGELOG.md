@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0] - 2026-10-08
+
+### Breaking
+- Effective values include the **specification defaults of the element / relationship kind**, applied as LikeC4 1.59.4 does, before `extend` blocks: `title`, `summary`, `description`, `technology`, `tags` and `links`.
+  - Tags are ordered kind, then own, then `extend` (duplicates dropped).
+  - Own links replace the kind's links; the kind's links apply only when there are none of its own.
+  - Elements: summary / description / technology fall back to the kind value when the element has none.
+  - Relationships: description / technology fall back to the kind value when absent; an own `''` overrides.
+- `ElementInfo.title` is always defined: the element's own title, else the kind title, else the element name (as LikeC4 computes it). The title as written stays available in `declared`.
+- `removeElement().removedRelationships[].title` and the CLI `list-elements` / `get-element` output show effective titles.
+- Writes never edit the specification: kind defaults are read-only. After `updateElement({ tags: T })` the effective tags are the kind's tags followed by `T`; `links: []` brings back the kind's links; `title: ''` / `label: ''` falls back to the kind title (elements: then the element name).
+
+### Added
+- `ElementInfo.fromSpecification` and `RelationshipInfo.fromSpecification` (kind, file, source range, the defaults the kind declares); exported type `KindDefaults`.
+- CLI `get-element` prints the location of the kind specification that contributes defaults.
+
+### Known gaps
+- Style / notation defaults, `multiple`, and technology derived from an icon (which depends on project configuration the library does not read) are not reported.
+
 ## [0.6.0] - 2026-10-08
 
 ### Breaking
