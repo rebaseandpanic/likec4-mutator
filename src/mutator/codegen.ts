@@ -5,6 +5,7 @@
  * into a document via a TextEdit.  The caller is responsible for supplying the
  * correct indentation strings.
  */
+import { isLikeC4Id } from '../parser/grammar.js';
 
 // ---------------------------------------------------------------------------
 // Element generation
@@ -379,15 +380,19 @@ export function formatLinkUrl(url: string): string {
 }
 
 /**
- * Validate a metadata key.  Keys must contain only alphanumeric characters,
- * underscores, or hyphens to be safe for direct emission into DSL output.
+ * Validate a metadata key for emission as the key of a `metadata { ... }`
+ * attribute and return it unchanged.  The grammar rule is
+ * `MetadataAttribute: key=Id ...`, so the key must be lexed by LikeC4 as one
+ * token the `Id` rule accepts (see {@link isLikeC4Id}).
  *
- * @throws {Error} when the key contains invalid characters
+ * @throws {Error} when the key is not such a token — e.g. `1abc`, `-x`,
+ *   `true`, or a keyword such as `title` — since the generated block would
+ *   otherwise not parse
  */
 export function validateMetadataKey(key: string): string {
-  if (!/^[\w-]+$/.test(key)) {
+  if (!isLikeC4Id(key)) {
     throw new Error(
-      `Invalid metadata key '${key}': must contain only alphanumeric, underscore, or hyphen characters`,
+      `Invalid metadata key ${JSON.stringify(key)}: a metadata key must be a LikeC4 identifier — start with a letter (or underscores followed by a letter or digit), contain only letters, digits, '_' or '-', not begin with the keyword true or false, and not be a reserved keyword such as 'title' or 'metadata'`,
     );
   }
   return key;

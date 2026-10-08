@@ -5,8 +5,9 @@
  * value of the wrong type (e.g. `"tags": "internal"` instead of an array) would
  * otherwise flow into the mutator and be misinterpreted — a string is iterable
  * and would become one tag per character.  {@link parseMutationsFile} checks
- * every field the `apply` command reads and reports the first violation with
- * its JSON path, e.g. `mutations[2].links[0].url`.
+ * every field the `apply` command reads, rejects fields it does not know (a
+ * misspelled field would otherwise be silently ignored) and reports the first
+ * violation with its JSON path, e.g. `mutations[2].links[0].url`.
  */
 import type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
 import type { MetadataPatch } from './mutator/metadata-ops.js';
@@ -131,6 +132,27 @@ function describeValue(value: unknown): string {
   return `a ${typeof value}`;
 }
 
+/**
+ * Reject every key of `obj` that is not in `allowed`.  A misspelled field
+ * (e.g. `tag` for `tags`) would otherwise be ignored and the mutation would
+ * silently do less than asked.
+ */
+function rejectUnknownFields(
+  obj: JsonObject,
+  allowed: ReadonlyArray<string>,
+  path: string,
+  owner: string,
+): void {
+  for (const key of Object.keys(obj)) {
+    if (!allowed.includes(key)) {
+      throw new MutationsFileError(
+        path === '' ? key : `${path}.${key}`,
+        `unknown field '${key}' for ${owner}; expected one of ${allowed.join(', ')}`,
+      );
+    }
+  }
+}
+
 function requireString(obj: JsonObject, key: string, path: string): void {
   const value = obj[key];
   if (typeof value !== 'string' || value === '') {
@@ -182,6 +204,8 @@ function optionalStringArray(obj: JsonObject, key: string, path: string): void {
   });
 }
 
+const LINK_FIELDS = ['url', 'label'] as const;
+
 function optionalLinks(obj: JsonObject, path: string): void {
   const value = obj.links;
   if (value === undefined) return;
@@ -199,6 +223,7 @@ function optionalLinks(obj: JsonObject, path: string): void {
         `expected a { url, label? } object, got ${describeValue(link)}`,
       );
     }
+    rejectUnknownFields(link, LINK_FIELDS, linkPath, 'a link');
     requireString(link, 'url', linkPath);
     optionalString(link, 'label', linkPath);
   });
@@ -248,15 +273,104 @@ function optionalStyle(obj: JsonObject, path: string, target: 'element' | 'relat
   if (!isObject(value)) {
     throw new MutationsFileError(stylePath, `expected an object, got ${describeValue(value)}`);
   }
-  const stringKeys =
-    target === 'element' ? ELEMENT_STYLE_STRING_KEYS : RELATIONSHIP_STYLE_STRING_KEYS;
-  for (const key of stringKeys) optionalString(value, key, stylePath);
-  if (target === 'element') optionalBoolean(value, 'multiple', stylePath);
+  if (target === 'element') {
+    rejectUnknownFields(
+      value,
+      [...ELEMENT_STYLE_STRING_KEYS, 'multiple'],
+      stylePath,
+      'an element style',
+    );
+    for (const key of ELEMENT_STYLE_STRING_KEYS) optionalString(value, key, stylePath);
+    optionalBoolean(value, 'multiple', stylePath);
+  } else {
+    rejectUnknownFields(value, RELATIONSHIP_STYLE_STRING_KEYS, stylePath, 'a relationship style');
+    for (const key of RELATIONSHIP_STYLE_STRING_KEYS) optionalString(value, key, stylePath);
+  }
 }
 
 const VIEW_TYPES: ReadonlyArray<AddViewMutation['type']> = ['element', 'dynamic', 'deployment'];
 
+/**
+ * Every field each op accepts.  The lists are tied to the mutation interfaces
+ * at compile time: `satisfies` rejects a name the interface does not have, and
+ * {@link FieldsNotListed} rejects an interface field missing from its list.
+ */
+const MUTATION_FIELDS = {
+  addElement: [
+    'op',
+    'parent',
+    'kind',
+    'id',
+    'title',
+    'summary',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'style',
+    'metadata',
+  ],
+  updateElement: [
+    'op',
+    'fqn',
+    'title',
+    'summary',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'style',
+    'metadata',
+  ],
+  removeElement: ['op', 'fqn'],
+  addRelationship: [
+    'op',
+    'source',
+    'target',
+    'label',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'metadata',
+    'style',
+  ],
+  updateRelationship: [
+    'op',
+    'source',
+    'target',
+    'matchKind',
+    'matchTitle',
+    'label',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'metadata',
+    'style',
+  ],
+  removeRelationship: ['op', 'source', 'target'],
+  addView: ['op', 'id', 'type', 'target', 'title'],
+} as const satisfies { [Op in Mutation['op']]: ReadonlyArray<keyof Extract<Mutation, { op: Op }>> };
+
+/** Interface fields absent from {@link MUTATION_FIELDS}; must be `never`. */
+type FieldsNotListed = {
+  [Op in Mutation['op']]: Exclude<
+    keyof Extract<Mutation, { op: Op }>,
+    (typeof MUTATION_FIELDS)[Op][number]
+  >;
+}[Mutation['op']];
+type AssertNever<T extends never> = T;
+type MutationFieldsAreExhaustive = AssertNever<FieldsNotListed>;
+
+const MUTATIONS_FILE_FIELDS = ['mutations'] as const satisfies ReadonlyArray<keyof MutationsFile>;
+
+function isKnownOp(op: unknown): op is Mutation['op'] {
+  return typeof op === 'string' && Object.prototype.hasOwnProperty.call(MUTATION_FIELDS, op);
+}
+
 function validateMutation(m: JsonObject, path: string): void {
+  if (isKnownOp(m.op)) rejectUnknownFields(m, MUTATION_FIELDS[m.op], path, `op '${m.op}'`);
   switch (m.op) {
     case 'addElement':
       for (const key of ['parent', 'kind', 'id', 'title']) requireString(m, key, path);
@@ -355,6 +469,7 @@ export function parseMutationsFile(data: unknown): MutationsFile {
       `expected an object with a "mutations" array, got ${describeValue(data)}`,
     );
   }
+  rejectUnknownFields(data, MUTATIONS_FILE_FIELDS, '', 'the mutations file');
   if (!Array.isArray(data.mutations)) {
     throw new MutationsFileError(
       'mutations',
