@@ -114,7 +114,10 @@ export interface RelationshipInfo {
   sourceFqn: string;
   /** FQN of the target element */
   targetFqn: string;
-  /** Optional relationship title */
+  /**
+   * Title as written: the one after the target (an empty `''` included),
+   * otherwise the body `title` property (the last one), as LikeC4 reads it
+   */
   title?: string;
   /** Relationship kind as written: `app -[calls]-> api` or `app .calls api` */
   kind?: string;

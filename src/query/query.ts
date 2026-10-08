@@ -234,8 +234,9 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
   };
   const cst = item.$cstNode;
 
-  // title is a direct string property on Relation
-  let title: string | undefined = item.title;
+  // The title written after the target (even an empty one), otherwise the
+  // body `title` (the last one), as LikeC4 `parseBaseProps` reads it.
+  let bodyTitle: string | undefined;
   let technology: string | undefined;
   let description: string | undefined;
 
@@ -253,11 +254,12 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
           description = value;
           break;
         case 'title':
-          if (!title) title = value;
+          if (value !== undefined) bodyTitle = value;
           break;
       }
     }
   }
+  const title = item.title ?? bodyTitle;
 
   const kind = relationKind(item as RelationNodeLike);
   const decorationSource = relationDecorationSource(item as RelationNodeLike);
