@@ -245,9 +245,13 @@ export function updateRelationshipEdit(
   //     that creates the body and includes all fields.
   //
   // Tags written on the relation line (`a -> b 'x' #t`) are what LikeC4
-  // reads; they are replaced there, and the body is left without tags.
+  // reads (`parseTags(relation) ?? parseTags(body)`); they are replaced
+  // there.  Tags also in the body (a LikeC4 error) are removed: they would
+  // become the relationship's tags once the line has none.
+  let clearBodyTags = false;
   if (patch.tags !== undefined && rel.tags?.$cstNode) {
     edits.push(buildReplaceHeaderTagsEdit(rel.tags.$cstNode, fullText, patch.tags));
+    clearBodyTags = rel.body?.tags?.$cstNode !== undefined;
     patch = { ...patch, tags: undefined };
   }
   const bodyTargeting =
@@ -273,8 +277,8 @@ export function updateRelationshipEdit(
     const e = buildRelationStringPropEdit(rel, fullText, indent, 'technology', patch.technology);
     if (e) edits.push(e);
   }
-  if (patch.tags !== undefined) {
-    const e = buildRelationReplaceTagsEdit(rel, fullText, indent, patch.tags);
+  if (patch.tags !== undefined || clearBodyTags) {
+    const e = buildRelationReplaceTagsEdit(rel, fullText, indent, patch.tags ?? []);
     if (e) edits.push(e);
   }
   if (patch.links !== undefined) {
