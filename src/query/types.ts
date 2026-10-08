@@ -121,9 +121,16 @@ export interface RelationshipInfo {
   title?: string;
   /** Relationship kind as written: `app -[calls]-> api` or `app .calls api` */
   kind?: string;
-  /** Optional technology label */
+  /**
+   * Technology as written: the one after the description
+   * (`a -> b 'title' 'description' 'technology'`, an empty one included),
+   * otherwise the body `technology` property, as LikeC4 reads it
+   */
   technology?: string;
-  /** Optional description */
+  /**
+   * Description as written: the one after the title when non-empty,
+   * otherwise the body `description` property, as LikeC4 reads it
+   */
   description?: string;
   /**
    * Effective tags: the relationship's own — those written on the relation

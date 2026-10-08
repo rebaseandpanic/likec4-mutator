@@ -320,7 +320,7 @@ Updates fields on an existing relationship.  Required: `op`, `source`, `target`,
 
 | Field | Semantics |
 | --- | --- |
-| `label`, `description`, `technology` | REPLACE |
+| `label`, `description`, `technology` | REPLACE.  A description or technology written after the title (`a -> b 'title' 'description' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty description no longer overrides the body and is written into the body as well. |
 | `tags` | REPLACE.  `[]` clears all tags. |
 | `links` | REPLACE.  `[]` clears all links. |
 | `metadata` | MERGE with `null`-deletion (same as `updateElement`). |
@@ -456,8 +456,8 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | Property | Type | addRelationship | updateRelationship | DSL syntax |
 |----------|------|:---------------:|:------------------:|------------|
 | label | string | yes | yes (replace) | `-> target 'label'` |
-| description | string | yes | yes (replace) | `description 'text'` |
-| technology | string | yes | yes (replace) | `technology 'text'` |
+| description | string | yes | yes (replace) | `description 'text'` or `-> target 'label' 'description'` |
+| technology | string | yes | yes (replace) | `technology 'text'` or `-> target 'label' 'description' 'technology'` |
 | tags | string[] | yes | yes (replace) | `#tagname` |
 | links | {url, label?}[] | yes | yes (replace) | `link url 'label'` |
 | metadata | `Record<string, string \| string[]>` | yes | yes (merge, `null` deletes a key) | `metadata { key 'val' }` or `metadata { key ['v1', 'v2'] }` |
