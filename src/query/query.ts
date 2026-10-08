@@ -2,6 +2,7 @@ import { buildFqnIndex, type FqnEntry } from './fqn.js';
 import { WorkspaceIndex, resolveRelations } from './workspace-index.js';
 import type { ElementInfo, ExtendContribution, RelationshipInfo, SourceRange, SpecificationInfo } from './types.js';
 import { mergeContributions, readContribution, readDeclared } from './extend-merge.js';
+import { relationDecorationSource, relationKind, type RelationNodeLike } from './relation-node.js';
 
 /**
  * Minimal structural shape of the parsed LikeC4 document AST consumed by
@@ -256,8 +257,8 @@ function toRelationshipInfo(raw: unknown, sourceFqn: string, targetFqn: string):
     }
   }
 
-  const kind: string | undefined = item.kind?.$refText ?? undefined;
-  const decorations = readDeclared(item.body);
+  const kind = relationKind(item as RelationNodeLike);
+  const decorations = readDeclared(relationDecorationSource(item as RelationNodeLike));
 
   return {
     sourceFqn,

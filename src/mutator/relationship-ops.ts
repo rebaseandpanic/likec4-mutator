@@ -4,6 +4,7 @@
 import type { ParsedDocument } from '../parser/types.js';
 import type { resolveFqnRef } from '../query/fqn.js';
 import { WorkspaceIndex, resolveRelations } from '../query/workspace-index.js';
+import { relationKind } from '../query/relation-node.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import {
@@ -241,6 +242,13 @@ export function updateRelationshipEdit(
   //   - If body exists, build an edit per field as usual.
   //   - If body is absent, build a single combined snippet and emit one edit
   //     that creates the body and includes all fields.
+  //
+  // Tags written on the relation line (`a -> b 'x' #t`) are what LikeC4
+  // reads; they are replaced there, and the body is left without tags.
+  if (patch.tags !== undefined && rel.tags?.$cstNode) {
+    edits.push(buildReplaceHeaderTagsEdit(rel.tags.$cstNode, fullText, patch.tags));
+    patch = { ...patch, tags: undefined };
+  }
   const bodyTargeting =
     patch.description !== undefined ||
     patch.technology !== undefined ||
@@ -301,6 +309,9 @@ interface RelationAstNode {
   target?: FqnRefLike;
   title?: string;
   kind?: { $refText?: string };
+  dotKind?: { kind?: { $refText?: string } };
+  /** Tags written on the relation line, after the title */
+  tags?: { $cstNode?: { offset: number; end: number } };
   body?: {
     $cstNode?: { offset: number; end: number };
     props?: Array<{
@@ -340,7 +351,7 @@ export function findMatchingRelations(
   const byText: RelationAstNode[] = [];
   for (const rel of resolved) {
     const r = rel.node as RelationAstNode;
-    if (matcher.matchKind !== undefined && r.kind?.$refText !== matcher.matchKind) continue;
+    if (matcher.matchKind !== undefined && relationKind(r) !== matcher.matchKind) continue;
     if (matcher.matchTitle !== undefined && r.title !== matcher.matchTitle) continue;
     if (rel.sourceFqn === matcher.source && rel.targetFqn === matcher.target) {
       byFqn.push(r);
@@ -378,7 +389,7 @@ function formatAmbiguousError(
 ): string {
   const found = matched
     .map((m) => {
-      const k = m.kind?.$refText ?? 'null';
+      const k = relationKind(m) ?? 'null';
       const t = m.title === undefined ? 'null' : `'${m.title}'`;
       return `[kind=${k} title=${t}]`;
     })
@@ -455,6 +466,24 @@ function buildRelationStringPropEdit(
     end: closingBrace,
     newText: `${innerIndent}${key} ${newValueText}\n`,
   };
+}
+
+/**
+ * Replace the tags written on the relation line (`a -> b 'x' #t1 #t2`) with
+ * `tags`, in place; an empty array removes them together with the blanks
+ * before them.
+ */
+function buildReplaceHeaderTagsEdit(
+  tagsCst: { offset: number; end: number },
+  fullText: string,
+  tags: string[],
+): TextEdit {
+  if (tags.length > 0) {
+    return { offset: tagsCst.offset, end: tagsCst.end, newText: tags.map((t) => formatTag(t)).join(' ') };
+  }
+  let start = tagsCst.offset;
+  while (start > 0 && (fullText[start - 1] === ' ' || fullText[start - 1] === '\t')) start--;
+  return { offset: start, end: tagsCst.end, newText: '' };
 }
 
 /**
