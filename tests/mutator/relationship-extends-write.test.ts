@@ -203,3 +203,65 @@ describe('updateRelationship — failures and declaration-only properties', () =
     expect(m.updateRelationship(MATCH, { technology: 'gRPC' }).changedFiles).toEqual(['base.c4']);
   });
 });
+
+describe('label change into a title another relationship or extend block already uses', () => {
+  // A new title moves the relationship's extend blocks to the new identity
+  // (LikeC4 `relationFingerprint`: endpoints, kind, title, direction).  There
+  // they would also apply to every relationship that already has it, and the
+  // blocks already there would apply to the renamed relationship.
+  const spec = `specification {\n  element service\n  relationship titled {\n    title 'U'\n  }\n  tag a\n  tag b\n}\n`;
+  const model = (body: string): Record<string, string> => ({
+    'model.c4': `${spec}model {\n  x = service\n  y = service\n${body}}\n`,
+  });
+  const T = { source: 'x', target: 'y', matchTitle: 'T' };
+
+  const tagsByTitle = (m: LikeC4Mutator) =>
+    m.getRelationships().map((r) => ({ title: r.title, tags: r.tags }));
+
+  it.each([
+    [
+      'both titles have blocks and relationships',
+      model(`  x -> y 'T'\n  x -> y 'U'\n  extend x -> y 'T' { #a }\n  extend x -> y 'U' { #b }\n`),
+      { label: 'U' },
+    ],
+    [
+      'only the renamed relationship has blocks',
+      model(`  x -> y 'T'\n  x -> y 'U'\n  extend x -> y 'T' {\n    #a\n    link https://old.example.com\n  }\n`),
+      { label: 'U' },
+    ],
+    [
+      'blocks of the new title match no relationship yet',
+      model(`  x -> y 'T'\n  extend x -> y 'U' { #b }\n`),
+      { label: 'U' },
+    ],
+    [
+      'blocks of the new title, renamed relationship without blocks, tags patched too',
+      model(`  x -> y 'T' #a\n  extend x -> y 'U' { #b }\n`),
+      { label: 'U', tags: ['a'] },
+    ],
+    [
+      "an empty label takes the kind's specification title, used by another relationship",
+      model(`  x -[titled]-> y 'T'\n  x -[titled]-> y\n  extend x -[titled]-> y 'T' { #a }\n`),
+      { label: '' },
+    ],
+  ])('rejects the update and changes nothing: %s', (_name, files, patch) => {
+    const m = make(files);
+    const before = tagsByTitle(m);
+    expect(() => m.updateRelationship(T, patch)).toThrow(/Cannot update relationship 'x -> y'/);
+    expect(m.serialize()).toEqual(files);
+    expect(tagsByTitle(m)).toEqual(before);
+  });
+
+  it.each([
+    ['another relationship has the new title, no blocks are involved', model(`  x -> y 'T'\n  x -> y 'U'\n`)],
+    [
+      'blocks of the old title move, nothing has the new title',
+      model(`  x -> y 'T'\n  x -> y 'V'\n  extend x -> y 'T' { #a }\n  extend x -> y 'V' { #b }\n`),
+    ],
+    ['an empty block of the new title', model(`  x -> y 'T' #a\n  x -> y 'U'\n  extend x -> y 'U' {\n  }\n`)],
+  ])('allows the label change when no block would change another relationship: %s', async (_name, files) => {
+    const m = make(files);
+    expect(m.updateRelationship(T, { label: 'U' }).changedFiles).toEqual(['model.c4']);
+    await expectRelationshipsAgreeWithLikeC4(m.serialize(), m.getRelationships());
+  });
+});
