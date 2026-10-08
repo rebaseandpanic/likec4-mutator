@@ -323,29 +323,19 @@ export function escapeString(s: string): string {
 }
 
 /**
- * LikeC4 `IdTerminal` — the token a tag name must form (`TagRef: '#' Id`).
- * Grammar keywords accepted by `Id` (e.g. `element`) match it too.
- */
-const TAG_NAME = /^(?:[a-zA-Z]|_+[a-zA-Z0-9])[-\w]*$/;
-/**
- * The lexer's BOOLEAN terminal (`/\b(true|false)\b/`) wins over identifiers, so
- * a name that starts with `true` / `false` followed by a non-word character
- * (or nothing) is not lexed as one identifier: `#true` and `#true-x` are not tags.
- */
-const BOOLEAN_PREFIX = /^(?:true|false)(?![A-Za-z0-9_])/;
-
-/**
  * Format a tag reference as `#name`.  One leading `#` supplied by the caller is
  * stripped (so both `'ok'` and `'#ok'` produce `#ok`).
  *
- * @throws {Error} when the name is not a valid LikeC4 identifier — it would
- *   otherwise not be a single token and its tail would become part of the model
+ * @throws {Error} when the name is not lexed as one token the `Id` rule
+ *   accepts — it would otherwise not form a tag and could leak into the model
  */
 export function formatTag(tag: string): string {
   const name = tag.startsWith('#') ? tag.slice(1) : tag;
-  if (!TAG_NAME.test(name) || BOOLEAN_PREFIX.test(name)) {
+  // `TagRef` is `#` followed by the grammar's `Id` rule — the same rule a tag
+  // is declared with in `specification`.
+  if (!isLikeC4Id(name)) {
     throw new Error(
-      `Invalid tag ${JSON.stringify(tag)}: a tag name must start with a letter (or underscores followed by a letter or digit) and contain only letters, digits, '_' or '-', and must not begin with the keyword true or false`,
+      `Invalid tag ${JSON.stringify(tag)}: a tag name must be a single LikeC4 identifier (letters, digits, '_' or '-', not starting with a digit or '-', and not a reserved keyword such as true, false or title)`,
     );
   }
   return `#${name}`;

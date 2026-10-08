@@ -73,6 +73,15 @@ describe('tag names are validated against LikeC4 tag syntax', () => {
     expect(() => generateElement({ indent: '', name: 'x', kind: 'service', tags: [tag] })).toThrow();
   });
 
+  // TagRef is `#` + Id: keywords the Id rule does not list are their own
+  // tokens, so `#title` or `#with` is not a tag.
+  it.each(['title', 'with', 'summary', 'technology', 'metadata', '#style'])(
+    'generateElement rejects the keyword %j as a tag name',
+    (tag) => {
+      expect(() => generateElement({ indent: '', name: 'x', kind: 'service', tags: [tag] })).toThrow();
+    },
+  );
+
   it.each(tagOperations)('$name accepts valid tag names (with or without a leading #)', ({ run }) => {
     const m = fresh();
     run(m, ['a-b', '_1', 'element', '#ok', 'trueish', 'false_x']);
