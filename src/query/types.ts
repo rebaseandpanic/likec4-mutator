@@ -55,11 +55,25 @@ export interface ElementInfo {
   name: string;
   /** Element kind reference text, e.g. 'service' */
   kind: string;
-  /** Title from positional props or explicit title property */
+  /**
+   * Title as LikeC4 reads it: the one written after the kind
+   * (`name = kind 'title'`, an empty one included), otherwise the body
+   * `title` property (the last one)
+   */
   title?: string;
-  /** Description text */
+  /**
+   * Summary as LikeC4 reads it: the one written after the title
+   * (`name = kind 'title' 'summary'`) when non-empty, otherwise the body
+   * `summary` property (the last one)
+   */
+  summary?: string;
+  /** Description: the body `description` property (the last one) */
   description?: string;
-  /** Technology text */
+  /**
+   * Technology as LikeC4 reads it: the one written after the summary
+   * (`name = kind 'title' 'summary' 'technology'`, an empty one included),
+   * otherwise the body `technology` property (the last one)
+   */
   technology?: string;
   /**
    * Effective tags: those of the declaration, then those of each `extend`

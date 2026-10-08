@@ -46,6 +46,8 @@ import {
  */
 interface AstElementNode extends BodyOwnerNode {
   $cstNode?: BodyOwnerNode['$cstNode'] & { content?: unknown[] };
+  /** Strings written after the kind: title, summary, technology */
+  props?: unknown[];
   kind?: {
     $refText?: string;
     /** Langium reference CST node — present when the reference resolved or carried any token. */
@@ -181,6 +183,21 @@ export function updateElementEdit(
     edits.push(...buildTitleEdits(node, props.title));
   }
 
+  // Summary and technology written after the title are what LikeC4 reads
+  // (`parseBaseProps` overrides): a technology whenever written, a summary
+  // when non-empty.  They are replaced there.  An empty summary no longer
+  // overrides the body, so it goes into the body too.
+  let patch = props;
+  const [, inlineSummary, inlineTechnology] = node.props ?? [];
+  if (patch.technology !== undefined && typeof inlineTechnology === 'string') {
+    edits.push(buildInlineElementStringEdit(node, INLINE_TECHNOLOGY, patch.technology));
+    patch = { ...patch, technology: undefined };
+  }
+  if (patch.summary !== undefined && typeof inlineSummary === 'string' && inlineSummary !== '') {
+    edits.push(buildInlineElementStringEdit(node, INLINE_SUMMARY, patch.summary));
+    if (patch.summary !== '') patch = { ...patch, summary: undefined };
+  }
+
   // For body-targeting fields, when the element has no body and the patch
   // touches multiple body fields, emit ONE combined snippet that creates the
   // body and includes every field (matches the strategy used in
@@ -188,16 +205,16 @@ export function updateElementEdit(
   // multi-edit bug where two body-creation edits could each emit `' { ... } '`
   // at the same offset and produce two adjacent body blocks.
   const bodyTargeting =
-    props.summary !== undefined ||
-    props.description !== undefined ||
-    props.technology !== undefined ||
-    props.tags !== undefined ||
-    props.links !== undefined ||
-    (props.style !== undefined && Object.keys(props.style).length > 0) ||
-    (props.metadata !== undefined && Object.keys(props.metadata).length > 0);
+    patch.summary !== undefined ||
+    patch.description !== undefined ||
+    patch.technology !== undefined ||
+    patch.tags !== undefined ||
+    patch.links !== undefined ||
+    (patch.style !== undefined && Object.keys(patch.style).length > 0) ||
+    (patch.metadata !== undefined && Object.keys(patch.metadata).length > 0);
 
   if (bodyTargeting && !node.body?.$cstNode) {
-    const insertEdit = buildCombinedBodyInsertElement(node, fullText, props);
+    const insertEdit = buildCombinedBodyInsertElement(node, fullText, patch);
     if (insertEdit) edits.push(insertEdit);
     return edits;
   }
@@ -206,39 +223,38 @@ export function updateElementEdit(
 
   // Handle body string properties: summary / description / technology
   for (const key of ['summary', 'description', 'technology'] as const) {
-    if (props[key] === undefined) continue;
-    const value = props[key] as string;
-    const propEdit = buildBodyPropEdit(node, fullText, key, value);
-    if (propEdit) edits.push(propEdit);
+    const value = patch[key];
+    if (value === undefined) continue;
+    edits.push(...buildBodyPropEdits(node, fullText, key, value));
   }
 
   // Handle tags — REPLACE semantics (v0.4.0 BREAKING change): every existing
   // tag in the body is removed, and the supplied set is inserted right after
   // the opening `{`.  An empty array clears all tags.
-  if (props.tags !== undefined) {
-    const tagEdit = buildReplaceTagsEdit(node, fullText, props.tags);
+  if (patch.tags !== undefined) {
+    const tagEdit = buildReplaceTagsEdit(node, fullText, patch.tags);
     if (tagEdit) edits.push(tagEdit);
   }
 
   // Handle links — replace ALL existing link lines, or insert if none exist.
   // Semantics: updateElement with links = "replace links entirely".
-  if (props.links !== undefined) {
-    edits.push(...buildReplaceLinksEdit(node, fullText, props.links));
+  if (patch.links !== undefined) {
+    edits.push(...buildReplaceLinksEdit(node, fullText, patch.links));
   }
 
   // Handle style — MERGE per-field (v0.4.0 BREAKING change): each provided
   // field overwrites the corresponding existing value; absent fields are
   // preserved.  An empty patch object is a no-op.
-  if (props.style !== undefined && Object.keys(props.style).length > 0) {
-    const styleEdit = buildReplaceStyleEdit(node, fullText, props.style);
+  if (patch.style !== undefined && Object.keys(patch.style).length > 0) {
+    const styleEdit = buildReplaceStyleEdit(node, fullText, patch.style);
     if (styleEdit) edits.push(styleEdit);
   }
 
   // Handle metadata — MERGE + null-deletion: each key in the patch upserts
   // (string / string[]) or deletes (null); keys absent from the patch are
   // preserved.  An empty patch is a no-op.
-  if (props.metadata !== undefined && Object.keys(props.metadata).length > 0) {
-    edits.push(...buildReplaceMetadataEdit(node, fullText, props.metadata));
+  if (patch.metadata !== undefined && Object.keys(patch.metadata).length > 0) {
+    edits.push(...buildReplaceMetadataEdit(node, fullText, patch.metadata));
   }
 
   return edits;
@@ -464,47 +480,59 @@ function buildTitleEdits(node: AstElementNode, newTitle: string): TextEdit[] {
   return edits;
 }
 
+/** Position of the summary among the strings written after the kind. */
+const INLINE_SUMMARY = 1;
+/** Position of the technology among the strings written after the kind. */
+const INLINE_TECHNOLOGY = 2;
+
 /**
- * Build a TextEdit that sets a body string property (summary / description / technology).
- * Replaces the existing value if present, otherwise appends before the closing `}`.
+ * Replace the `position`-th string written after the kind of an element
+ * (`name = kind 'title' 'summary' 'technology'`).  The caller guarantees the
+ * string is there (the AST node carries its value).
  */
-function buildBodyPropEdit(
+function buildInlineElementStringEdit(node: AstElementNode, position: number, value: string): TextEdit {
+  const kindCst = node.kind?.$refNode;
+  if (node.$cstNode && kindCst) {
+    let index = 0;
+    for (const leaf of collectLeaves(node.$cstNode)) {
+      if (leaf.offset < kindCst.end) continue;
+      if (leaf.text === '{') break;
+      if (!leaf.text.startsWith("'") && !leaf.text.startsWith('"')) continue;
+      if (index === position) return { offset: leaf.offset, end: leaf.end, newText: `'${escapeString(value)}'` };
+      index++;
+    }
+  }
+  throw new Error('internal: string written after the element kind not found');
+}
+
+/**
+ * Build the TextEdits that set a body string property (summary / description
+ * / technology).  A body may declare the property more than once and LikeC4
+ * reads the last declaration, so every declaration is rewritten.  When there
+ * is none, the property is inserted (creating the body when needed).
+ */
+function buildBodyPropEdits(
   node: AstElementNode,
   fullText: string,
   key: 'summary' | 'description' | 'technology',
   value: string,
-): TextEdit | null {
+): TextEdit[] {
   const newValueText = `'${escapeString(value)}'`;
 
-  // Check if the property already exists in body.props
-  const existingProp = node.body?.props?.find((p) => p.key === key);
-  if (existingProp) {
-    const v = existingProp.value as
-      | { $cstNode?: { offset: number; end: number } }
-      | string
-      | number
-      | boolean
-      | null
-      | undefined;
+  const replacements: TextEdit[] = [];
+  for (const prop of node.body?.props ?? []) {
+    if (prop.$type !== 'ElementStringProperty' || prop.key !== key) continue;
+    const v = prop.value;
     const valueCst =
       v && typeof v === 'object' ? (v as { $cstNode?: { offset: number; end: number } }).$cstNode : undefined;
-    if (valueCst) {
-      return { offset: valueCst.offset, end: valueCst.end, newText: newValueText };
-    }
+    if (valueCst) replacements.push({ offset: valueCst.offset, end: valueCst.end, newText: newValueText });
   }
+  if (replacements.length > 0) return replacements;
 
-  // Property does not exist — ensure the element has a body
   if (!node.body?.$cstNode) {
-    // The element has no body block at all; we need to add one.
-    // Find the end of the element's inline portion (after title / kind)
-    const cst = node.$cstNode;
-    if (!cst) return null;
-    const nodeEnd = cst.end;
-    const indent = getNodeIndent(node, fullText);
-    const innerIndent = indent + '  ';
-    const insertion =
-      ' {\n' + `${innerIndent}${key} ${newValueText}\n` + `${indent}}`;
-    return { offset: nodeEnd, end: nodeEnd, newText: insertion };
+    throw new Error(
+      'internal: buildBodyPropEdits called without body — caller should have routed via the combined-insert path',
+    );
   }
 
   // Body exists but property is missing — insert before the closing `}`
@@ -514,7 +542,7 @@ function buildBodyPropEdit(
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';
   const snippet = `${innerIndent}${key} ${newValueText}\n`;
-  return buildInsertBeforeChildrenEdit(node, fullText, closingBrace, snippet);
+  return [buildInsertBeforeChildrenEdit(node, fullText, closingBrace, snippet)];
 }
 
 /**

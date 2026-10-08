@@ -290,7 +290,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 
 | Field | Semantics |
 | --- | --- |
-| `title`, `summary`, `description`, `technology` | REPLACE |
+| `title`, `summary`, `description`, `technology` | REPLACE.  Every declaration is rewritten (a body may repeat a property; LikeC4 reads the last one).  A summary or technology written after the title (`name = kind 'title' 'summary' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty summary no longer overrides the body and is written into the body as well. |
 | `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags. |
 | `links` | REPLACE.  `[]` clears all links. |
 | `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting), and so are comments in the block: patched keys are edited in place, new keys added at the end of the block. |
@@ -320,7 +320,7 @@ Updates fields on an existing relationship.  Required: `op`, `source`, `target`,
 
 | Field | Semantics |
 | --- | --- |
-| `label`, `description`, `technology` | REPLACE.  A description or technology written after the title (`a -> b 'title' 'description' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty description no longer overrides the body and is written into the body as well. |
+| `label`, `description`, `technology` | REPLACE.  Every body declaration is rewritten (a body may repeat a property; LikeC4 reads the last one).  A description or technology written after the title (`a -> b 'title' 'description' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty description no longer overrides the body and is written into the body as well. |
 | `tags` | REPLACE.  `[]` clears all tags. |
 | `links` | REPLACE.  `[]` clears all links. |
 | `metadata` | MERGE with `null`-deletion (same as `updateElement`). |
@@ -426,9 +426,9 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | Property | Type | addElement | updateElement | DSL syntax |
 |----------|------|:----------:|:-------------:|------------|
 | title | string | yes | yes (replace) | `= kind 'Title'` |
-| summary | string | yes | yes (replace) | `summary 'text'` |
+| summary | string | yes | yes (replace) | `summary 'text'` or `= kind 'Title' 'summary'` |
 | description | string | yes | yes (replace) | `description 'text'` |
-| technology | string | yes | yes (replace) | `technology 'text'` |
+| technology | string | yes | yes (replace) | `technology 'text'` or `= kind 'Title' 'summary' 'technology'` |
 | tags | string[] | yes | yes (replace) | `#tagname` |
 | links | {url, label?}[] | yes | yes (replace) | `link url 'label'` |
 | style | ElementStyle | yes | yes (merge per-field) | `style { shape ... }` |

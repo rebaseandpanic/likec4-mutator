@@ -192,6 +192,7 @@ program
         process.stdout.write(`Name:        ${el.name}\n`);
         process.stdout.write(`Kind:        ${el.kind}\n`);
         if (el.title) process.stdout.write(`Title:       ${el.title}\n`);
+        if (el.summary) process.stdout.write(`Summary:     ${el.summary}\n`);
         if (el.description) process.stdout.write(`Description: ${el.description}\n`);
         if (el.technology) process.stdout.write(`Technology:  ${el.technology}\n`);
         if (el.parentFqn) process.stdout.write(`Parent:      ${el.parentFqn}\n`);

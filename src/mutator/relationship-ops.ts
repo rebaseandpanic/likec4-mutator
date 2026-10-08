@@ -283,12 +283,10 @@ export function updateRelationshipEdit(
 
   // Body exists — emit per-field edits.
   if (patch.description !== undefined) {
-    const e = buildRelationStringPropEdit(rel, fullText, indent, 'description', patch.description);
-    if (e) edits.push(e);
+    edits.push(...buildRelationStringPropEdits(rel, indent, 'description', patch.description));
   }
   if (patch.technology !== undefined) {
-    const e = buildRelationStringPropEdit(rel, fullText, indent, 'technology', patch.technology);
-    if (e) edits.push(e);
+    edits.push(...buildRelationStringPropEdits(rel, indent, 'technology', patch.technology));
   }
   if (patch.tags !== undefined || clearBodyTags) {
     const e = buildRelationReplaceTagsEdit(rel, fullText, indent, patch.tags ?? []);
@@ -501,43 +499,43 @@ function buildInlineStringEdit(rel: RelationAstNode, position: number, value: st
 }
 
 /**
- * Replace (or insert) a `description` / `technology` body string property on
- * a Relation.  Mirrors `buildBodyPropEdit` for elements.  Caller guarantees
- * that the relation has a body (no-body case is handled by the combined
- * insert path).
+ * Set a `description` / `technology` body string property on a Relation.  A
+ * body may declare the property more than once and LikeC4 reads the last
+ * declaration, so every declaration is rewritten; when there is none, the
+ * property is inserted.  Mirrors `buildBodyPropEdits` for elements.  Caller
+ * guarantees that the relation has a body (no-body case is handled by the
+ * combined insert path).
  */
-function buildRelationStringPropEdit(
+function buildRelationStringPropEdits(
   rel: RelationAstNode,
-  fullText: string,
   indent: string,
   key: 'description' | 'technology',
   value: string,
-): TextEdit | null {
+): TextEdit[] {
   const newValueText = `'${escapeString(value)}'`;
-  const existingProp = rel.body?.props?.find(
-    (p) => p.$type === 'RelationStringProperty' && p.key === key,
-  );
-  if (existingProp) {
-    const v = existingProp.value;
-    const valueCst = v && typeof v === 'object' && v !== null
-      ? (v as { $cstNode?: { offset: number; end: number } }).$cstNode
-      : undefined;
-    if (valueCst) {
-      return { offset: valueCst.offset, end: valueCst.end, newText: newValueText };
-    }
+  const replacements: TextEdit[] = [];
+  for (const prop of rel.body?.props ?? []) {
+    if (prop.$type !== 'RelationStringProperty' || prop.key !== key) continue;
+    const v = prop.value;
+    const valueCst =
+      v && typeof v === 'object' ? (v as { $cstNode?: { offset: number; end: number } }).$cstNode : undefined;
+    if (valueCst) replacements.push({ offset: valueCst.offset, end: valueCst.end, newText: newValueText });
   }
+  if (replacements.length > 0) return replacements;
   if (!rel.body?.$cstNode) {
     throw new Error(
-      'internal: buildRelationStringPropEdit called without body — caller should have routed via the combined-insert path',
+      'internal: buildRelationStringPropEdits called without body — caller should have routed via the combined-insert path',
     );
   }
   const innerIndent = indent + '  ';
   const closingBrace = findClosingBraceOffset(rel.body.$cstNode);
-  return {
-    offset: closingBrace,
-    end: closingBrace,
-    newText: `${innerIndent}${key} ${newValueText}\n`,
-  };
+  return [
+    {
+      offset: closingBrace,
+      end: closingBrace,
+      newText: `${innerIndent}${key} ${newValueText}\n`,
+    },
+  ];
 }
 
 /**

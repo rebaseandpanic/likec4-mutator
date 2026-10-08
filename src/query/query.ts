@@ -155,16 +155,21 @@ export class C4Query {
     const node = entry.node;
     const cst = node.$cstNode;
 
+    let summary: string | undefined;
     let description: string | undefined;
     let technology: string | undefined;
     let title: string | undefined;
 
-    // Named body properties (ElementStringProperty nodes)
+    // Named body properties (ElementStringProperty nodes).  LikeC4 folds them
+    // into an object, so of a repeated key the last declaration counts.
     if (node.body?.props) {
       for (const prop of node.body.props) {
         if (prop.$type !== 'ElementStringProperty') continue;
         const value = extractStringValue(prop);
         switch (prop.key) {
+          case 'summary':
+            summary = value;
+            break;
           case 'description':
             description = value;
             break;
@@ -178,13 +183,15 @@ export class C4Query {
       }
     }
 
-    // Positional props: first string is the inline title (e.g. `app = system 'My App'`).
-    // LikeC4 prefers it over a body `title`, which is only a fallback.
-    if (Array.isArray(node.props) && node.props.length > 0) {
-      const first = node.props[0];
-      if (typeof first === 'string') {
-        title = first;
-      }
+    // Positional props written after the kind: `name = kind 'title' 'summary'
+    // 'technology'`.  LikeC4 (`parseBaseProps`) prefers them over the body: a
+    // title and a technology whenever written (an empty one included), a
+    // summary when non-empty.
+    if (Array.isArray(node.props)) {
+      const [inlineTitle, inlineSummary, inlineTechnology] = node.props as unknown[];
+      if (typeof inlineTitle === 'string') title = inlineTitle;
+      if (typeof inlineSummary === 'string' && inlineSummary !== '') summary = inlineSummary;
+      if (typeof inlineTechnology === 'string') technology = inlineTechnology;
     }
 
     // Tags / links / metadata: the declaration merged with every `extend`
@@ -205,6 +212,7 @@ export class C4Query {
       name: entry.name,
       kind: node.kind?.$refText ?? '',
       title,
+      summary,
       description,
       technology,
       tags: effective.tags,
