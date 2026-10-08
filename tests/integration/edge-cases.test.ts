@@ -183,7 +183,10 @@ describe('Mutation error cases', () => {
       ).not.toThrow();
       const el = mutator.getElement('app.notitle');
       expect(el).not.toBeNull();
-      expect(el!.title).toBeUndefined();
+      // No title is written; as in LikeC4, the element (whose kind declares
+      // no title) then reads with its name as the title.
+      expect(mutator.getElementSource('app.notitle')).not.toContain("'");
+      expect(el!.title).toBe('notitle');
     });
   });
 

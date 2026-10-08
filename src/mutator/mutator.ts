@@ -263,6 +263,14 @@ export class LikeC4Mutator {
    * and relationships, comments — is kept, and a block that ends up empty
    * stays in place.
    *
+   * The defaults of the element's kind (see
+   * {@link ElementInfo.fromSpecification}) are never edited: the
+   * specification stays as it is and the effective value afterwards follows
+   * LikeC4's rules — `tags: T` reads as the kind tags then `T` (`[]` leaves
+   * the kind tags); `links: []` brings back the kind links; an empty `title`
+   * reads as the kind title, else the element name; a `summary` or
+   * `description` written as `''` in the body reads as `''`.
+   *
    * Because an `extend` block may hide in a file that does not parse, a
    * `tags`, `links` or `metadata` update is rejected — before anything is
    * changed — while any loaded file has syntax errors (as reported by
@@ -447,6 +455,12 @@ export class LikeC4Mutator {
    * target, kind, title and direction.  When such a block would change, the
    * update is rejected before anything changes: it would change the other
    * relationship as well.
+   *
+   * The defaults of the relationship's kind (see
+   * {@link RelationshipInfo.fromSpecification}) are never edited: `tags: T`
+   * reads as the kind tags then `T`; `links: []` brings back the kind links;
+   * an empty `label` reads as the kind title; a `description` or
+   * `technology` written as `''` reads as `''`.
    * A `label` that changes the identity is likewise rejected when the
    * relationship's blocks would then also apply to another relationship with
    * the new identity, or when blocks of the new identity contribute tags,

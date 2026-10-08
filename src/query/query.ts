@@ -1,10 +1,18 @@
 import { buildFqnIndex, type FqnEntry } from './fqn.js';
 import { WorkspaceIndex, resolveRelations, type ResolvedRelation } from './workspace-index.js';
 import { mergeRelationContributions, relationIdentity } from './relation-extends.js';
-import type { ElementInfo, ExtendContribution, RelationshipInfo, SourceRange, SpecificationInfo } from './types.js';
-import { mergeContributions, readContribution, readDeclared } from './extend-merge.js';
+import type { ElementInfo, ExtendContribution, RelationshipInfo, SpecificationInfo } from './types.js';
+import { applyKindDefaults, mergeContributions, readContribution, readDeclared } from './extend-merge.js';
 import { relationDecorationSource, relationKind, type RelationNodeLike } from './relation-node.js';
-import { removeIndent, toSingleLine } from './likec4-text.js';
+import {
+  markdownAsString,
+  markdownOrString,
+  readMarkdownOrString,
+  removeIndent,
+  toSingleLine,
+  type MarkdownOrString,
+} from './likec4-text.js';
+import { toSourceRange } from './source-range.js';
 
 /**
  * Minimal structural shape of the parsed LikeC4 document AST consumed by
@@ -171,20 +179,31 @@ export class C4Query {
     // title and a technology whenever written (an empty one included), a
     // summary when non-empty.  Values are normalized as LikeC4 does.
     const [inlineTitle, inlineSummary, inlineTechnology] = (Array.isArray(node.props) ? node.props : []) as unknown[];
-    const title = typeof inlineTitle === 'string' ? removeIndent(inlineTitle) : markdownAsString(body['title']);
-    const summary =
+    const ownTitle = typeof inlineTitle === 'string' ? removeIndent(inlineTitle) : markdownAsString(body['title']);
+    const ownSummary =
       typeof inlineSummary === 'string' && inlineSummary !== ''
         ? removeIndent(inlineSummary)
         : markdownOrString(body['summary']);
-    const description = markdownOrString(body['description']);
-    const technology =
+    const ownDescription = markdownOrString(body['description']);
+    const ownTechnology =
       typeof inlineTechnology === 'string' ? toSingleLine(inlineTechnology) : markdownAsString(body['technology']);
 
-    // Tags / links / metadata: the declaration merged with every `extend`
-    // block of the element, as LikeC4 does.
+    // Defaults of the element's kind (`MergedSpecification.toModelElement`):
+    // a summary, description or technology the element does not have; the
+    // kind title — else the element name — for an empty title.
+    const kindName = node.kind?.$refText ?? '';
+    const kind = this.workspace.elementKind(kindName);
+    const defaults = kind?.defaults;
+    const title = ownTitle || defaults?.title || entry.name;
+    const summary = ownSummary ?? defaults?.summary;
+    const description = ownDescription ?? defaults?.description;
+    const technology = ownTechnology ?? defaults?.technology;
+
+    // Tags / links / metadata: the kind's defaults, then the declaration,
+    // merged with every `extend` block of the element, as LikeC4 does.
     const blocks = this.workspace.extendBlocks(entry.fqn);
     const effective = mergeContributions(
-      readContribution(node.body),
+      applyKindDefaults(readContribution(node.body), kind?.contribution),
       blocks.map((b) => readContribution(b.node.body)),
     );
     const extendedBy = blocks.map((b): ExtendContribution => ({
@@ -196,7 +215,7 @@ export class C4Query {
     return {
       fqn: entry.fqn,
       name: entry.name,
-      kind: node.kind?.$refText ?? '',
+      kind: kindName,
       title,
       summary,
       description,
@@ -204,6 +223,7 @@ export class C4Query {
       tags: effective.tags,
       links: effective.links,
       metadata: effective.metadata,
+      ...(defaults && { fromSpecification: structuredClone(defaults) }),
       declared: readDeclared(node.body),
       extendedBy,
       // Children declared in `extend` blocks of other documents count too.
@@ -250,20 +270,30 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
   // after the title when non-empty, otherwise the body; the technology written
   // after the description whenever written, otherwise the body.  Values are
   // normalized as LikeC4 does.
-  const title = item.title !== undefined ? removeIndent(item.title) : markdownAsString(body['title']);
-  const description = item.description ? removeIndent(item.description) : markdownOrString(body['description']);
-  const technology =
+  const ownTitle = item.title !== undefined ? removeIndent(item.title) : markdownAsString(body['title']);
+  const ownDescription = item.description ? removeIndent(item.description) : markdownOrString(body['description']);
+  const ownTechnology =
     item.technology !== undefined ? toSingleLine(item.technology) : markdownAsString(body['technology']);
 
   const kind = relationKind(item as RelationNodeLike);
   const decorationSource = relationDecorationSource(item as RelationNodeLike);
 
-  // Tags / links / metadata: the relationship merged with every `extend`
-  // block that applies to it, as LikeC4 does.  A relationship with an
-  // unresolved endpoint is not part of LikeC4's model; nothing applies to it.
+  // Defaults of a declared kind (`MergedSpecification.toModelRelation`): a
+  // description or technology the relationship does not have (an empty own
+  // one included counts as present), the kind title for an empty title.
+  const kindSpec = kind === undefined ? undefined : workspace.relationshipKind(kind);
+  const defaults = kindSpec?.defaults;
+  const title = ownTitle ? ownTitle : (defaults?.title ?? ownTitle);
+  const description = ownDescription ?? defaults?.description;
+  const technology = ownTechnology ?? defaults?.technology;
+
+  // Tags / links / metadata: the kind's defaults, then the relationship's
+  // own, merged with every `extend` block that applies to it, as LikeC4
+  // does.  A relationship with an unresolved endpoint is not part of
+  // LikeC4's model; no block applies to it.
   const blocks = resolved.resolved ? workspace.extendRelationBlocks(relationIdentity(resolved)) : [];
   const effective = mergeRelationContributions(
-    readContribution(decorationSource),
+    applyKindDefaults(readContribution(decorationSource), kindSpec?.contribution),
     blocks.map((b) => readContribution(b.node.body)),
   );
   const extendedBy = blocks.map((b): ExtendContribution => ({
@@ -282,61 +312,9 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
     tags: effective.tags,
     links: effective.links,
     metadata: effective.metadata,
+    ...(defaults && { fromSpecification: structuredClone(defaults) }),
     declared: readDeclared(decorationSource),
     extendedBy,
     sourceRange: toSourceRange(cst),
   };
-}
-
-/** Source range of a CST node; all zero when the node has none. */
-function toSourceRange(
-  cst: { offset: number; end: number; range?: { start?: { line?: number; character?: number } } } | undefined,
-): SourceRange {
-  return cst
-    ? {
-        offset: cst.offset,
-        end: cst.end,
-        line: cst.range?.start?.line ?? 0,
-        column: cst.range?.start?.character ?? 0,
-      }
-    : { offset: 0, end: 0, line: 0, column: 0 };
-}
-
-/** A `MarkdownOrString` value: a plain string in `text` or a triple-quoted Markdown string in `markdown`. */
-interface MarkdownOrString {
-  text?: string;
-  markdown?: string;
-}
-
-/** The `MarkdownOrString` value of a body string property, if it has one. */
-function readMarkdownOrString(prop: unknown): MarkdownOrString | undefined {
-  const value = (prop as { value?: unknown }).value;
-  if (typeof value !== 'object' || value === null) return undefined;
-  const v = value as { text?: unknown; markdown?: unknown };
-  return {
-    ...(typeof v.text === 'string' && { text: v.text }),
-    ...(typeof v.markdown === 'string' && { markdown: v.markdown }),
-  };
-}
-
-/**
- * A body `title` / `technology` as LikeC4 reads it
- * (`removeIndent(parseMarkdownAsString(value))`): the Markdown content, or
- * the plain string when the Markdown string is empty or absent, without
- * indentation and trimmed.
- */
-function markdownAsString(value: MarkdownOrString | undefined): string | undefined {
-  const text = value?.markdown || value?.text;
-  return text === undefined ? undefined : removeIndent(text);
-}
-
-/**
- * A body `summary` / `description` as LikeC4 reads it
- * (`parseMarkdownOrString`): the Markdown content, otherwise the plain
- * string, without indentation and trimmed; the empty string for a value
- * that holds neither.
- */
-function markdownOrString(value: MarkdownOrString | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  return removeIndent(value.markdown ?? value.text ?? '');
 }

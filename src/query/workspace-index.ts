@@ -32,6 +32,7 @@ import { forEachElementDeclaration, readStrictFqnRef, resolveFqnRef } from './fq
 import { removeIndent } from './likec4-text.js';
 import { relationKind } from './relation-node.js';
 import { relationFingerprint, type ExtendRelationNode, type RelationIdentity } from './relation-extends.js';
+import { readKindSpec, specificationKinds, type KindSpec } from './kind-specs.js';
 
 /** Minimal structural view of an AST node used by this module. */
 interface AstNodeLike {
@@ -170,10 +171,10 @@ export class WorkspaceIndex {
   private readonly extendsOf = new Map<string, ExtendBlockRef[]>();
   /** Documents in merge order */
   private readonly ordered: IndexedDocument[];
-  /** relationship kind → title of its specification (when it declares one) */
-  private readonly kindTitles = new Map<string, string>();
-  /** relationship kinds declared in any specification */
-  private readonly relationshipKinds = new Set<string>();
+  /** element kind → the declaration LikeC4 uses */
+  private readonly elementKinds = new Map<string, KindSpec>();
+  /** relationship kind → the declaration LikeC4 uses */
+  private readonly relationshipKinds = new Map<string, KindSpec>();
   /** relation fingerprint → `extend a -> b` blocks, in merge order (built on first use) */
   private relationExtends: Map<string, ExtendRelationBlockRef[]> | undefined;
   private relationExtendList: Array<{ key: string; block: ExtendRelationBlockRef }> | undefined;
@@ -197,19 +198,21 @@ export class WorkspaceIndex {
       });
     }
     this.ordered = mergeOrder(docs);
-    for (const { ast } of this.ordered) {
+    for (const { file, ast } of this.ordered) {
       // LikeC4 merges the specifications of all documents with
-      // `Object.assign` (a later document wins); within a document the first
-      // declaration of a kind wins.
-      const titles = new Map<string, string | undefined>();
-      for (const kind of specificationRelationshipKinds(ast)) {
-        this.relationshipKinds.add(kind.name);
-        if (!titles.has(kind.name)) titles.set(kind.name, kind.title);
+      // `Object.assign` (a later document wins); within a document the last
+      // declaration of an element kind wins (`Object.assign`) and the first
+      // one of a relationship kind (later ones are skipped).
+      const kinds = specificationKinds(ast);
+      const elementKinds = new Map<string, KindSpec>();
+      for (const node of kinds.elements) elementKinds.set(node.kind!.name!, readKindSpec(node, file, false));
+      const relationshipKinds = new Map<string, KindSpec>();
+      for (const node of kinds.relationships) {
+        const name = node.kind!.name!;
+        if (!relationshipKinds.has(name)) relationshipKinds.set(name, readKindSpec(node, file, true));
       }
-      for (const [name, title] of titles) {
-        if (title === undefined) this.kindTitles.delete(name);
-        else this.kindTitles.set(name, title);
-      }
+      for (const [name, spec] of elementKinds) this.elementKinds.set(name, spec);
+      for (const [name, spec] of relationshipKinds) this.relationshipKinds.set(name, spec);
     }
     for (const { file, ast } of this.ordered) {
       for (const model of ast.models ?? []) {
@@ -249,16 +252,32 @@ export class WorkspaceIndex {
   }
 
   /**
+   * The specification declaration LikeC4 uses for an element kind (see
+   * `KindDefaults`); undefined when no specification declares it.
+   */
+  elementKind(kind: string): KindSpec | undefined {
+    return this.elementKinds.get(kind);
+  }
+
+  /**
+   * The specification declaration LikeC4 uses for a relationship kind (see
+   * `KindDefaults`); undefined when no specification declares it.
+   */
+  relationshipKind(kind: string): KindSpec | undefined {
+    return this.relationshipKinds.get(kind);
+  }
+
+  /**
    * The relationship identity LikeC4 compares: a kind no specification
    * declares is no kind (the reference does not resolve); an empty title is
-   * replaced by the title of the kind's specification, when it declares one
-   * (`MergedSpecification.toModelRelation`).
+   * replaced by the title of the kind's specification, when it declares a
+   * non-empty one (`MergedSpecification.toModelRelation`).
    */
   effectiveIdentity(relation: RelationIdentity): RelationIdentity {
     const resolved = this.resolvedKindIdentity(relation);
     if (resolved.title !== '' || resolved.kind === undefined) return resolved;
-    const specTitle = this.kindTitles.get(resolved.kind);
-    return specTitle === undefined ? resolved : { ...resolved, title: specTitle };
+    const specTitle = this.relationshipKinds.get(resolved.kind)?.defaults.title;
+    return specTitle ? { ...resolved, title: specTitle } : resolved;
   }
 
   /**
@@ -417,33 +436,6 @@ function resolveExtendRelations(
     }
   });
   return results;
-}
-
-/** Relationship kinds declared in the specification blocks of `ast`, with their title. */
-function specificationRelationshipKinds(ast: WorkspaceDocumentAst): Array<{ name: string; title?: string }> {
-  const kinds: Array<{ name: string; title?: string }> = [];
-  for (const rawSpec of ast.specifications ?? []) {
-    const spec = rawSpec as {
-      relationships?: Array<{
-        kind?: { name?: string };
-        props?: Array<{ $type?: string; key?: string; value?: { text?: string; markdown?: string } }>;
-      }>;
-    };
-    for (const rel of spec.relationships ?? []) {
-      const name = rel.kind?.name;
-      if (!name) continue;
-      let title: string | undefined;
-      for (const prop of rel.props ?? []) {
-        if (prop.$type !== 'SpecificationRelationshipStringProperty' || prop.key !== 'title') continue;
-        const text = prop.value?.text ?? prop.value?.markdown;
-        if (text !== undefined) title = text;
-      }
-      // `parseBaseProps`: the title is dedented; an empty one is no title.
-      const normalized = title === undefined ? undefined : removeIndent(title);
-      kinds.push(normalized ? { name, title: normalized } : { name });
-    }
-  }
-  return kinds;
 }
 
 // ---------------------------------------------------------------------------
