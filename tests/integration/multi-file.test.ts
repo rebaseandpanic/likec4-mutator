@@ -417,3 +417,37 @@ model {
     });
   });
 });
+
+describe('Multi-file: removeElement atomicity', () => {
+  // removeElement first removes dependent relationships in other files, then
+  // the element itself.  When a later step fails — here the element's file
+  // already has a syntax error (a stray `}`), so every edit to it is rejected —
+  // the relationship already removed from the other file must come back.
+  const BROKEN = `specification {
+  element system
+  element service
+}
+model {
+  app = system 'App' {
+    api = service 'API'
+  }
+}
+}
+`;
+  const DEPENDENT = `model {
+  web = system 'Web'
+  web -> app.api 'calls'
+}
+`;
+
+  it('leaves every file unchanged when removing the element itself fails', () => {
+    const mutator = LikeC4Mutator.fromFiles({ 'broken.c4': BROKEN, 'dependent.c4': DEPENDENT });
+    expect(mutator.getElement('app.api')).not.toBeNull();
+
+    expect(() => mutator.removeElement('app.api')).toThrow();
+
+    expect(mutator.serialize()).toEqual({ 'broken.c4': BROKEN, 'dependent.c4': DEPENDENT });
+    expect(mutator.getElement('app.api')).not.toBeNull();
+    expect(mutator.getRelationships().map((r) => [r.sourceFqn, r.targetFqn])).toEqual([['web', 'app.api']]);
+  });
+});
