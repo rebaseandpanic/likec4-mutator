@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1] - 2026-10-08
+
+### Bugfix
+- CLI `apply`: `addView` accepts `includes` (an array of strings, one `include` rule per item, in order) and passes it to the library. Before 0.6.0 the field was silently dropped; since 0.6.0 it was rejected as an unknown field.
+- `addView({ includes })` (library and CLI): one leading `include` keyword followed by whitespace is stripped, so `"include *"` writes `include *` instead of `include include *`. Each item must form exactly one `include` rule of the view's type — an empty item, a bare `include`, an item LikeC4 cannot parse, or one that would add another rule, a view property or another view (`"* exclude x"`, `"*\n autoLayout LeftRight"`) is rejected before anything is written (`apply`: exit code 1 with the path `mutations[i].includes[j]`; library: throws).
+- Without `includes` the behaviour is unchanged: an element view gets `include *`.
+
 ## [0.7.0] - 2026-10-08
 
 ### Breaking
