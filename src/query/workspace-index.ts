@@ -174,6 +174,7 @@ export class WorkspaceIndex {
   private readonly kindTitles = new Map<string, string>();
   /** relation fingerprint → `extend a -> b` blocks, in merge order (built on first use) */
   private relationExtends: Map<string, ExtendRelationBlockRef[]> | undefined;
+  private relationExtendList: Array<{ key: string; block: ExtendRelationBlockRef }> | undefined;
 
   /**
    * @param documents - Every document of the project: root ASTs, or
@@ -255,10 +256,16 @@ export class WorkspaceIndex {
     return specTitle === undefined ? relation : { ...relation, title: specTitle };
   }
 
-  /** Fingerprint → `extend a -> b` blocks of every document. */
-  private relationExtendIndex(): Map<string, ExtendRelationBlockRef[]> {
-    if (this.relationExtends) return this.relationExtends;
-    const index = new Map<string, ExtendRelationBlockRef[]>();
+  /**
+   * Every `extend a -> b { ... }` block of the workspace whose endpoints
+   * resolve, in merge order, with its fingerprint (`relationFingerprint` of
+   * a relationship it applies to).
+   *
+   * @internal
+   */
+  extendRelationBlockList(): ReadonlyArray<{ key: string; block: ExtendRelationBlockRef }> {
+    if (this.relationExtendList) return this.relationExtendList;
+    const list: Array<{ key: string; block: ExtendRelationBlockRef }> = [];
     for (const { file, ast } of this.ordered) {
       for (const block of resolveExtendRelations(ast, this)) {
         const key = relationFingerprint({
@@ -268,9 +275,18 @@ export class WorkspaceIndex {
           title: removeIndent(block.node.title ?? ''),
           isBidirectional: block.node.isBidirectional === true,
         });
-        push(index, key, file === undefined ? block : { file, ...block });
+        list.push({ key, block: file === undefined ? block : { file, ...block } });
       }
     }
+    this.relationExtendList = list;
+    return list;
+  }
+
+  /** Fingerprint → `extend a -> b` blocks of every document. */
+  private relationExtendIndex(): Map<string, ExtendRelationBlockRef[]> {
+    if (this.relationExtends) return this.relationExtends;
+    const index = new Map<string, ExtendRelationBlockRef[]>();
+    for (const { key, block } of this.extendRelationBlockList()) push(index, key, block);
     this.relationExtends = index;
     return index;
   }

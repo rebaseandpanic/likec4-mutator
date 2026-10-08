@@ -8,7 +8,13 @@
  */
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
-import { WorkspaceIndex, resolveRelations } from '../query/workspace-index.js';
+import {
+  WorkspaceIndex,
+  resolveRelations,
+  type ExtendRelationBlockRef,
+  type ResolvedRelation,
+} from '../query/workspace-index.js';
+import { buildRemovalEdit } from './cst-helpers.js';
 import { relationFingerprint, relationIdentity, type RelationIdentity } from '../query/relation-extends.js';
 import { removeIndent } from '../query/likec4-text.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
@@ -309,7 +315,10 @@ export class LikeC4Mutator {
    * Removed relationships are those whose source or target is the element or
    * one of its descendants — in any loaded file — plus those declared inside
    * the element's body or inside a removed `extend` block (which disappear
-   * with it).  The operation is atomic: when any step fails, no file is
+   * with it).  `extend a -> b { ... }` blocks whose source or target is in
+   * the subtree, and blocks that applied only to removed relationships, are
+   * removed too (see {@link removeRelationship}); they are not listed in the
+   * result.  The operation is atomic: when any step fails, no file is
    * changed.
    *
    * @param fqn - FQN of the element to remove
@@ -333,18 +342,32 @@ export class LikeC4Mutator {
       }
     }
 
+    // Fingerprints of the relationships that go and of those that stay, for
+    // the `extend a -> b` blocks below.
+    const removedNodes = new Set<unknown>();
+    for (const [file, doc] of this.documents) {
+      const ranges = this.removedRanges(fqn, filename, file);
+      for (const rel of resolveRelations(doc.ast, this.workspace)) {
+        const cst = (rel.node as { $cstNode?: { offset: number; end: number } }).$cstNode;
+        if (isDependent(rel) || (cst && ranges.some((range) => isWithin(cst, range)))) removedNodes.add(rel.node);
+      }
+    }
+    const keys = this.relationKeys((rel) => removedNodes.has(rel.node));
+
     const snapshot = this.snapshot();
     try {
       // Remove dependent relationships declared outside the removed ranges one
       // at a time (each removal reparses its file, so offsets stay valid),
-      // then the `extend` blocks of the subtree, then the element itself.
-      // Relationships inside the element's body or an `extend` block go along
-      // with it.
+      // then the `extend a -> b` blocks that lose their relationships or an
+      // endpoint (while the endpoints still resolve), then the `extend`
+      // blocks of the subtree, then the element itself.  Relationships inside
+      // the element's body or an `extend` block go along with it.
       for (;;) {
         const next = this.findRelationOutsideRemovedRanges(fqn, filename, isDependent);
         if (!next) break;
         this.applyEdit(next.filename, removeRelationNodeEdit(this.document(next.filename).fullText, next.node));
       }
+      this.removeOrphanedExtendRelations(keys, (endpoint) => isSameOrDescendant(endpoint, fqn));
 
       for (;;) {
         const next = this.findExtendBlock(fqn);
@@ -505,6 +528,12 @@ export class LikeC4Mutator {
    * searched; when several relationships match, the first one in file order
    * is removed.
    *
+   * `extend a -> b { ... }` blocks that applied to the removed relationship
+   * and apply to no remaining one are removed too, in every loaded file: they
+   * only decorated it (LikeC4 would warn that they match no relation).
+   * Blocks that matched nothing before are left alone.  The operation is
+   * atomic: when any step fails, no file is changed.
+   *
    * @param source - Source FQN (or reference text as written)
    * @param target - Target FQN (or reference text as written)
    */
@@ -512,10 +541,19 @@ export class LikeC4Mutator {
     const [filename] = this.locateRelations({ source, target });
     if (!filename) throw new Error(`Relationship '${source} -> ${target}' not found`);
 
-    const doc = this.documents.get(filename);
-    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+    const doc = this.document(filename);
     const edit = removeRelationshipEdit(doc, source, target, this.workspace);
-    this.applyEdit(filename, edit);
+    const [removed] = matchResolvedRelations(doc.ast, { source, target }, this.workspace);
+    const keys = this.relationKeys((rel) => rel.node === removed?.node);
+
+    const snapshot = this.snapshot();
+    try {
+      this.applyEdit(filename, edit);
+      this.removeOrphanedExtendRelations(keys, () => false);
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
   }
 
   /**
@@ -682,6 +720,46 @@ export class LikeC4Mutator {
       }
     }
     return count;
+  }
+
+  /**
+   * Fingerprints of the relationships (with resolved endpoints) of every
+   * loaded file, split by `isRemoved`.
+   */
+  private relationKeys(isRemoved: (rel: ResolvedRelation) => boolean): { removed: Set<string>; remaining: Set<string> } {
+    const removed = new Set<string>();
+    const remaining = new Set<string>();
+    for (const doc of this.documents.values()) {
+      for (const rel of resolveRelations(doc.ast, this.workspace)) {
+        if (!rel.resolved) continue;
+        const key = relationFingerprint(this.workspace.effectiveIdentity(relationIdentity(rel)));
+        (isRemoved(rel) ? removed : remaining).add(key);
+      }
+    }
+    return { removed, remaining };
+  }
+
+  /**
+   * Remove, one at a time, every `extend a -> b { ... }` block (endpoints
+   * resolved) that applied to a removed relationship and to no remaining
+   * one, or whose source or target satisfies `endpointRemoved`.
+   */
+  private removeOrphanedExtendRelations(
+    keys: { removed: Set<string>; remaining: Set<string> },
+    endpointRemoved: (fqn: string) => boolean,
+  ): void {
+    const isOrphaned = ({ key, block }: { key: string; block: ExtendRelationBlockRef }): boolean =>
+      endpointRemoved(block.sourceFqn) ||
+      endpointRemoved(block.targetFqn) ||
+      (keys.removed.has(key) && !keys.remaining.has(key));
+    for (;;) {
+      const next = this.workspace.extendRelationBlockList().find(isOrphaned);
+      if (!next) return;
+      const { file, node } = next.block;
+      if (file === undefined || !node.$cstNode) throw new Error('Internal error: extend block without file or position');
+      const { offset, end, newText } = buildRemovalEdit(this.document(file).fullText, node.$cstNode.offset, node.$cstNode.end);
+      this.applyEdit(file, { offset, end, newText });
+    }
   }
 
   /** Latest parsed document of `filename`. */

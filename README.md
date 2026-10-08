@@ -219,7 +219,7 @@ likec4-mutator remove-element --dir ./c4 --fqn app.api --output ./out
 
 ### remove-relationship
 
-Remove a relationship matched by source and target FQN (searched across all files).
+Remove a relationship matched by source and target FQN (searched across all files), together with `extend a -> b` blocks that applied only to it.
 
 ```bash
 likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db --output ./out
@@ -583,6 +583,7 @@ model {
 
 - The title identifies the relationship for its blocks, so a `label` that changes the title is written into every matching block as well (`extend api -[calls]-> db 'queries' { ... }`); otherwise they would stop applying.
 - A block applies to every relationship with the same identity (e.g. `a -> b 'x'` and `a -> b { title 'x' }`). When an update would change such a shared block, it is rejected before anything changes, because the other relationship would change too.
+- `removeRelationship` also removes the blocks that applied to the removed relationship and apply to no remaining one (they would match nothing). `removeElement` removes, besides those of the relationships it removes, every block whose source or target is in the removed subtree. Blocks that matched nothing before are left alone.
 
 ## How it works
 
