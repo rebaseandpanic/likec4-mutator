@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
 import { C4Query } from '../../src/query/query.js';
-import { buildLikeC4Model } from '../helpers/likec4-model.js';
+import { expectAgreesWithLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * `extend X { ... }` blocks add tags, links and metadata to X.  The element
@@ -175,10 +175,25 @@ describe('order of contributions', () => {
     expect(LikeC4Mutator.fromFiles(files).getElement('app')!.metadata).toEqual({ k: expected });
   });
 
-  it('rejects two file names that denote the same path', () => {
-    expect(() =>
-      LikeC4Mutator.fromFiles({ 'a.c4': 'model {\n}\n', './a.c4': 'model {\n}\n' }),
-    ).toThrow(/'a\.c4' and '\.\/a\.c4'/);
+  it.each([
+    ['a.c4', './a.c4'],
+    ['a.c4', 'sub/../a.c4'],
+    ['a/b.c4', 'a\\b.c4'],
+  ])('rejects %s and %s as the same path', (first, second) => {
+    expect(() => LikeC4Mutator.fromFiles({ [first]: 'model {\n}\n', [second]: 'model {\n}\n' })).toThrow(
+      `Files '${first}' and '${second}' denote the same path`,
+    );
+  });
+
+  it('orders a file by its normalized path and reports it under its own name', () => {
+    const el = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = system 'App'\n}\n`,
+      'm.c4': `model {\n  extend app {\n    metadata { k 'm' }\n  }\n}\n`,
+      // Normalizes to `a.c4`, which sorts before `m.c4`.
+      'z/../a.c4': `model {\n  extend app {\n    metadata { k 'a' }\n  }\n}\n`,
+    }).getElement('app')!;
+    expect(el.metadata).toEqual({ k: ['a', 'm'] });
+    expect(el.extendedBy.map((e) => e.file)).toEqual(['z/../a.c4', 'm.c4']);
   });
 });
 
@@ -237,6 +252,114 @@ describe('effective metadata values', () => {
   it('keeps the declarative form in declared', () => {
     expect(metadataOf(`metadata { k ['v1'] }`).declared.metadata).toEqual({ k: ['v1'] });
   });
+
+  // LikeC4 dedents and trims every value (`removeIndent`) and drops empty
+  // values before grouping (`getMetadata`).
+  it.each([
+    ['values are trimmed', `metadata { k '  x  ' }`, undefined, { k: 'x' }],
+    ['a value equal after trimming merges with another body', `metadata { k '  x  ' }`, `metadata { k 'x' }`, { k: 'x' }],
+    ['empty and blank values are dropped', `metadata { e '' b '   ' k 'v' }`, undefined, { k: 'v' }],
+    ['empty array members are dropped', `metadata { k ['', ' x ', '  '] }`, undefined, { k: 'x' }],
+    ['multi-line values are dedented', `metadata { k '\n      line1\n        line2\n    ' }`, undefined, { k: 'line1\n  line2' }],
+    ['a body with only empty values contributes nothing', `metadata { e '' }`, undefined, undefined],
+  ])('%s', (_name, body, extend, expected) => {
+    expect(metadataOf(body, extend).metadata).toEqual(expected);
+  });
+
+  it('keeps values as written in declared and extendedBy', () => {
+    const el = metadataOf(`metadata { k '  x  ' e '' }`, `metadata { k ' y ' }`);
+    expect(el.declared.metadata).toEqual({ k: '  x  ', e: '' });
+    expect(el.extendedBy[0].metadata).toEqual({ k: ' y ' });
+  });
+});
+
+describe('effective link labels', () => {
+  function linksOf(links: string) {
+    return LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = system 'App' {\n${links}\n  }\n}\n`,
+    }).getElement('app')!;
+  }
+
+  // LikeC4 reads a non-empty label with `toSingleLine` (dedent, trim, lines
+  // joined with a space) and drops an empty one.
+  it.each([
+    ['a padded label is trimmed', `link https://x.example.com '  padded  '`, [{ url: 'https://x.example.com', label: 'padded' }]],
+    ['a blank label reads as empty', `link https://x.example.com '   '`, [{ url: 'https://x.example.com', label: '' }]],
+    ['an empty label is dropped', `link https://x.example.com ''`, [{ url: 'https://x.example.com' }]],
+    ['a multi-line label becomes one line', `link https://x.example.com '\n      one\n      two\n    '`, [{ url: 'https://x.example.com', label: 'one two' }]],
+  ])('%s', (_name, links, expected) => {
+    expect(linksOf(links).links).toEqual(expected);
+  });
+
+  it('keeps labels as written in declared', () => {
+    expect(linksOf(`link https://x.example.com '  padded  '`).declared.links).toEqual([
+      { url: 'https://x.example.com', label: '  padded  ' },
+    ]);
+  });
+});
+
+describe('several metadata blocks in one body', () => {
+  // LikeC4 reads only the first `metadata { ... }` block of a body
+  // (`getMetadata(body.props.find(isMetadataProperty))`).
+  const TWO_BLOCKS = `metadata { k 'first' }\n    metadata { k 'second' other 'x' }`;
+  const files = {
+    'base.c4': `${SPEC}model {\n  app = service {\n    ${TWO_BLOCKS}\n  }\n}\n`,
+    'ext.c4': `model {\n  extend app {\n    metadata { e 'first' }\n    metadata { e 'second' }\n  }\n}\n`,
+  };
+
+  it('reads the first block of each body as effective metadata', () => {
+    expect(LikeC4Mutator.fromFiles(files).getElement('app')!.metadata).toEqual({ k: 'first', e: 'first' });
+  });
+
+  it('reports the first block of each body as declared', () => {
+    const el = LikeC4Mutator.fromFiles(files).getElement('app')!;
+    expect(el.declared.metadata).toEqual({ k: 'first' });
+    expect(el.extendedBy[0].metadata).toEqual({ e: 'first' });
+  });
+
+  it('reports the first block of a relationship', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = service\n  db = service\n  app -> db {\n    ${TWO_BLOCKS}\n  }\n}\n`,
+    });
+    expect(m.getRelationships({ sourceFqn: 'app' })[0].metadata).toEqual({ k: 'first' });
+  });
+});
+
+describe('comma-separated tags', () => {
+  // LikeC4 grammar: `Tags: (values+=TagRef)+ (',' (values+=TagRef)*)*`; each
+  // comma starts a new group chained through `prev`.  LikeC4 reads the last
+  // group first, then the earlier ones (`parseTags`), without duplicates.
+  const COMMA_FILES = {
+    'base.c4': `${SPEC}model {\n  app = service {\n    #a, #b #c\n  }\n}\n`,
+    'ext.c4': `model {\n  extend app {\n    #d, #b\n  }\n}\n`,
+  };
+
+  it('reads every comma group in the order LikeC4 merges them', () => {
+    expect(LikeC4Mutator.fromFiles(COMMA_FILES).getElement('app')!.tags).toEqual(['b', 'c', 'a', 'd']);
+  });
+
+  it.each([
+    ['#a, #b, #c #d', ['c', 'd', 'b', 'a']],
+    ['#a, #b,', ['b', 'a']],
+  ])('reads %s as LikeC4 does', (tags, expected) => {
+    const el = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = service {\n    ${tags}\n  }\n}\n`,
+    }).getElement('app')!;
+    expect(el.tags).toEqual(expected);
+  });
+
+  it('reports declared and extend tags in source order', () => {
+    const el = LikeC4Mutator.fromFiles(COMMA_FILES).getElement('app')!;
+    expect(el.declared.tags).toEqual(['a', 'b', 'c']);
+    expect(el.extendedBy[0].tags).toEqual(['d', 'b']);
+  });
+
+  it('reads every comma group of a relationship in source order', () => {
+    const m = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = service\n  db = service\n  app -> db {\n    #a, #b #c\n  }\n}\n`,
+    });
+    expect(m.getRelationships({ sourceFqn: 'app' })[0].tags).toEqual(['a', 'b', 'c']);
+  });
 });
 
 describe('C4Query without a workspace', () => {
@@ -251,7 +374,40 @@ describe('C4Query without a workspace', () => {
   });
 });
 
+/** Assert that the effective tags, links and metadata of `fqn` equal LikeC4's model. */
+async function expectAgreement(files: Record<string, string>, fqn = 'app'): Promise<void> {
+  await expectAgreesWithLikeC4(files, fqn, LikeC4Mutator.fromFiles(files).getElement(fqn)!);
+}
+
+const EDGE_CASES: Array<[string, Record<string, string>]> = [
+  [
+    'blank, padded and multi-line values and labels',
+    {
+      'base.c4': `${SPEC}model {\n  app = service {\n    link https://x.example.com '  padded  '\n    link https://y.example.com '   '\n    link https://z.example.com ''\n    link https://m.example.com '\n      one\n      two\n    '\n    metadata {\n      k '  x  '\n      empty ''\n      ws '   '\n      arr ['', 'x', '  y ']\n      ml '\n        line1\n          line2\n      '\n    }\n  }\n}\n`,
+      'ext.c4': `model {\n  extend app {\n    metadata { k 'x' arr ['y'] ws ' w ' }\n  }\n}\n`,
+    },
+  ],
+  [
+    'several metadata blocks in one body',
+    {
+      'base.c4': `${SPEC}model {\n  app = service {\n    metadata { k 'first' }\n    metadata { k 'second' other 'x' }\n  }\n}\n`,
+      'ext.c4': `model {\n  extend app {\n    metadata { }\n    metadata { e 'hidden' }\n  }\n  extend app {\n    metadata { e 'first' }\n    metadata { e 'second' }\n  }\n}\n`,
+    },
+  ],
+  [
+    'comma-separated tags',
+    {
+      'base.c4': `${SPEC}model {\n  app = service {\n    #a, #b #c\n  }\n}\n`,
+      'ext.c4': `model {\n  extend app {\n    #d, #b\n  }\n}\n`,
+    },
+  ],
+];
+
 describe('agreement with the LikeC4 model builder', () => {
+  it.each(EDGE_CASES)('agrees on %s', async (_name, files) => {
+    await expectAgreement(files);
+  });
+
   it('reports the tags, links and metadata LikeC4 computes for the same sources', async () => {
     const files: Record<string, string> = {
       'base.c4': BASE.replace("tag d\n", 'tag d\n  tag e\n'),
@@ -262,18 +418,6 @@ describe('agreement with the LikeC4 model builder', () => {
       'a/x.c4': `model {\n  extend app {\n    metadata { flag true }\n  }\n}\n`,
       'a.c4': `model {\n  extend app {\n    metadata { flag false }\n  }\n}\n`,
     };
-    const reference = await buildLikeC4Model(files);
-    expect(reference.diagnostics).toEqual([]);
-    const expected = reference.elements['app'];
-    expect(expected).toBeDefined();
-
-    const actual = LikeC4Mutator.fromFiles(files).getElement('app')!;
-    expect(actual.tags).toEqual(expected.tags ?? undefined);
-    // LikeC4 names a link's label `title`.
-    expect(actual.links).toEqual(
-      expected.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title })),
-    );
-    expect(actual.metadata).toEqual(expected.metadata);
-    expect(Object.keys(actual.metadata!)).toEqual(Object.keys(expected.metadata!));
+    await expectAgreement(files);
   });
 });

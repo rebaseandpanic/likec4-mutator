@@ -20,9 +20,10 @@ export interface ElementDecorations {
   /** Links in source order */
   links?: Array<{ url: string; label?: string }>;
   /**
-   * Metadata as declared: `key 'value'` reads as a string, `key ['v1', ...]`
-   * as an array (also with a single element); when a key is repeated, the
-   * last value is reported.
+   * Metadata as declared in the body's first `metadata { ... }` block (the
+   * only one LikeC4 reads): `key 'value'` reads as a string,
+   * `key ['v1', ...]` as an array (also with a single element); when a key
+   * is repeated inside the block, the last value is reported.
    */
   metadata?: Record<string, string | string[]>;
 }
@@ -68,16 +69,18 @@ export interface ElementInfo {
   tags?: string[];
   /**
    * Effective links: those of the declaration followed by those of each
-   * `extend` block in merge order.  Duplicates are kept, as in LikeC4.
+   * `extend` block in merge order.  Duplicates are kept, as in LikeC4.  A
+   * label is read as LikeC4 does: dedented, trimmed and joined into one
+   * line; an empty label is absent.
    */
   links?: Array<{ url: string; label?: string }>;
   /**
-   * Effective metadata, merged as LikeC4 does: every value of a key — from
-   * the declaration, then from each `extend` block in merge order — is
+   * Effective metadata, merged as LikeC4 does: every value is dedented and
+   * trimmed and empty values are dropped; every remaining value of a key —
+   * from the declaration, then from each `extend` block in merge order — is
    * collected; when a key occurs in more than one body, duplicate values are
    * dropped.  A key with a single value maps to a string (also when written
-   * as `key ['v1']`), otherwise to an array.  String contents are reported
-   * as written (LikeC4 additionally dedents and trims them).
+   * as `key ['v1']`), otherwise to an array.
    */
   metadata?: Record<string, string | string[]>;
   /** Tags, links and metadata written in the element's own declaration body */
@@ -119,7 +122,8 @@ export interface RelationshipInfo {
   /** Hyperlinks declared on the relationship */
   links?: Array<{ url: string; label?: string }>;
   /**
-   * Metadata key/value pairs declared on the relationship.  Each value is
+   * Metadata key/value pairs declared in the relationship's first
+   * `metadata { ... }` block (the only one LikeC4 reads).  Each value is
    * either a string or string[].
    */
   metadata?: Record<string, string | string[]>;

@@ -42,6 +42,11 @@ interface AstNodeLike {
   [k: string]: unknown;
 }
 
+/** True for an `extend X { ... }` node of a model block. */
+function isExtendElement(node: AstNodeLike): node is AstNodeLike & ExtendElementNode {
+  return node.$type === 'ExtendElement';
+}
+
 /** Shape of a `FqnRef` / `StrictFqnElementRef` node (linked list via `parent`). */
 interface RefLike {
   parent?: RefLike;
@@ -66,12 +71,45 @@ export interface WorkspaceDocument {
   ast: WorkspaceDocumentAst;
 }
 
+/** Source range of an AST node, as Langium's CST node exposes it. */
+interface CstRange {
+  offset: number;
+  end: number;
+  text?: string;
+  range?: { start?: { line?: number; character?: number } };
+}
+
+/**
+ * Structural view of an `extend X { ... }` AST node
+ * (`ExtendElement: 'extend' element=StrictFqnElementRef body=ExtendElementBody`),
+ * as far as the library reads it.
+ */
+export interface ExtendElementNode {
+  $type: 'ExtendElement';
+  $cstNode?: CstRange;
+  /** Reference to the extended element */
+  element?: unknown;
+  /** The block body: tags, properties (links, metadata) and nested elements / relations */
+  body?: {
+    $cstNode?: CstRange;
+    tags?: unknown;
+    props?: Array<{
+      $type?: string;
+      $cstNode?: CstRange;
+      key?: string;
+      value?: unknown;
+      props?: unknown[];
+    }>;
+    elements?: Array<{ $type?: string; $cstNode?: CstRange }>;
+  };
+}
+
 /** An `extend X { ... }` block found by {@link WorkspaceIndex.extendBlocks}. */
 export interface ExtendBlockRef {
   /** File of the block; undefined when the document was indexed without a name */
   file?: string;
   /** The `ExtendElement` AST node */
-  node: any;
+  node: ExtendElementNode;
 }
 
 /** A relation found in a document together with its resolved endpoints. */
@@ -134,7 +172,7 @@ export class WorkspaceIndex {
     for (const { file, ast } of mergeOrder(docs)) {
       for (const model of ast.models ?? []) {
         for (const item of (model.elements ?? []) as AstNodeLike[]) {
-          if (item.$type !== 'ExtendElement') continue;
+          if (!isExtendElement(item)) continue;
           const target = readStrictFqnRef(item.element);
           if (!target) continue;
           push(this.extendsOf, target, file === undefined ? { node: item } : { file, node: item });

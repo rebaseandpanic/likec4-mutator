@@ -511,10 +511,11 @@ app.extendedBy;  // [{ file: 'ext/ops.c4', sourceRange: {...}, tags: ['critical'
 Merge rules (LikeC4 1.59.4):
 
 - The declaration body comes first, then every `extend` block of exactly this element — files ordered by path the way LikeC4 orders documents (natural and segment by segment: `a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`; independent of the order passed to `fromFiles`), then source order within a file.
-- `tags`: union without duplicates.
+- `tags`: union without duplicates. Within one body, comma-separated groups (`#a, #b #c`) are taken last group first, as LikeC4 does (`['b', 'c', 'a']`); `declared` and `extendedBy` list them in source order.
 - `links`: concatenated; duplicates are kept.
 - `metadata`: every value of a key is collected (a key repeated inside one block too); when a key appears in more than one body, duplicate values are dropped. A key with one value maps to a string — also when written as `key ['v1']` — otherwise to an array. `declared` and `extendedBy` keep the form as written.
-- String values are reported as written (LikeC4 additionally dedents and trims them).
+- Only the first `metadata { ... }` block of a body counts, as in LikeC4 — for the effective values, `declared`, `extendedBy` and relationship metadata alike. Later blocks are ignored, even when the first block is empty.
+- Values are normalized as LikeC4 does: metadata values are dedented and trimmed and empty ones dropped (`k '  x  '` reads as `'x'`, `k ''` not at all); a link label is dedented, trimmed and joined into one line, an empty label is dropped. `declared` and `extendedBy` keep strings as written.
 - `getElementSource` and `sourceRange` still refer to the declaration; each `extendedBy` entry carries the range of its block. Blocks that only declare nested elements, or nothing, are listed too.
 - File names must denote distinct paths: `fromFiles({ 'a.c4': ..., './a.c4': ... })` throws.
 - A standalone `new C4Query(ast)` merges only the `extend` blocks of that document and reports them without `file`; pass a `WorkspaceIndex` built from `{ file, ast }` documents for the whole project.
@@ -543,6 +544,7 @@ mutator.updateElement('app', { tags: ['internal'], metadata: { owner: 'platform'
 
 - New values always go into the declaration; `extend` blocks only lose the patched properties / keys. Nested elements, relationships, comments and other keys in the blocks are kept; a block that ends up empty (`extend app { }`) stays in place — remove it by hand if you do not want it.
 - Extend blocks of descendants (`extend app.api`) are not touched by `updateElement('app', ...)`.
+- A body may hold several `metadata { ... }` blocks; LikeC4 reads only the first. A patched key is upserted into the first block and removed from every block of the declaration and of the `extend` blocks. A block left without attributes is removed — except a first block while a later block of the same body still has attributes: it stays as an empty `metadata { }`, so the later block does not start counting. `updateRelationship` handles a relationship's blocks the same way.
 - After the update, reading the element returns what LikeC4 makes of the written value: e.g. `metadata: { k: ['v1'] }` reads back as `k: 'v1'` (`declared` keeps `['v1']`).
 - `updateElement` returns `{ changedFiles }`: the files whose text changed, in load order (`[]` when nothing changed). It describes the in-memory state — use it to save only those files from `serialize()`.
 - An update of `tags`, `links` or `metadata` is rejected, before anything changes, while any loaded file has syntax errors (`validate()` is not empty): an `extend` block in that file could not be found reliably. Other properties can still be updated.

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { expectAgreesWithLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * `updateElement` applies the documented semantics — `tags` / `links`
@@ -117,6 +118,22 @@ describe('updateElement tags / links through extend blocks', () => {
   });
 });
 
+describe('updateElement tags written with commas', () => {
+  const base = `${SPEC}model {\n  app = system 'App' {\n    #a, #b #c\n    description 'd'\n  }\n}\n`;
+  const ext = `model {\n  extend app {\n    #d, #b\n    metadata { k 'v' }\n  }\n}\n`;
+
+  it.each([
+    ['replaces every comma group', ['z'], base.replace('    #a, #b #c\n', '    #z\n'), ['z']],
+    ['clears every comma group', [], base.replace('    #a, #b #c\n', ''), undefined],
+  ])('%s of the declaration and of extend blocks', (_name, tags, expectedBase, expectedTags) => {
+    const m = LikeC4Mutator.fromFiles({ 'base.c4': base, 'ext.c4': ext });
+    m.updateElement('app', { tags });
+    expect(m.serialize()).toEqual({ 'base.c4': expectedBase, 'ext.c4': ext.replace('    #d, #b\n', '') });
+    expect(m.getElement('app')!.tags).toEqual(expectedTags);
+    expect(m.validate()).toEqual([]);
+  });
+});
+
 describe('updateElement metadata through extend blocks', () => {
   it('null deletes the key everywhere and keeps every other key byte-for-byte', () => {
     const m = makeMutator();
@@ -161,6 +178,79 @@ describe('updateElement metadata through extend blocks', () => {
     expect(el.metadata!.port).toBe('1');
     expect(el.declared.metadata!.port).toEqual(['1']);
     expect(el.extendedBy.some((e) => e.metadata && 'port' in e.metadata)).toBe(false);
+  });
+});
+
+describe('updateElement metadata when a body has several metadata blocks', () => {
+  // LikeC4 reads only the first `metadata { ... }` block of a body, even an
+  // empty one.  A patched key is removed from every block; when the first
+  // block loses its last attribute while a later block keeps attributes, the
+  // first block stays as `metadata { }` so the later one does not become
+  // effective.
+  const decl = (blocks: string) => `${SPEC}model {\n  app = system 'App' {\n${blocks}  }\n}\n`;
+
+  it.each([
+    {
+      name: 'null removes a key repeated in later blocks and keeps the first block empty',
+      before: `    metadata { k 'first' }\n    metadata { k 'second' extra 'e' }\n`,
+      patch: { k: null },
+      after: `    metadata { }\n    metadata { extra 'e' }\n`,
+      metadata: undefined,
+    },
+    {
+      name: 'null removes every block that has nothing left',
+      before: `    metadata { k 'first' }\n    metadata { k 'second' }\n`,
+      patch: { k: null },
+      after: ``,
+      metadata: undefined,
+    },
+    {
+      name: 'an upsert goes into the first block and leaves no copy in later blocks',
+      before: `    metadata { k 'first' }\n    metadata { k 'second' extra 'e' }\n`,
+      patch: { k: 'new' },
+      after: `    metadata {\n      k 'new'\n    }\n    metadata { extra 'e' }\n`,
+      metadata: { k: 'new' },
+    },
+    {
+      name: 'a first block without the key stays byte-for-byte',
+      before: `    metadata { o 'x' }\n    metadata { k 'hidden' }\n`,
+      patch: { k: null },
+      after: `    metadata { o 'x' }\n`,
+      metadata: { o: 'x' },
+    },
+  ])('declaration: $name', async ({ before, patch, after, metadata }) => {
+    const m = LikeC4Mutator.fromFiles({ 'base.c4': decl(before) });
+    m.updateElement('app', { metadata: patch });
+    const files = m.serialize();
+    expect(files['base.c4']).toBe(decl(after));
+    const el = m.getElement('app')!;
+    expect(el.metadata).toEqual(metadata);
+    expect(m.validate()).toEqual([]);
+    await expectAgreesWithLikeC4(files, 'app', el);
+  });
+
+  it('extend block: null keeps the first block empty when a later one keeps attributes', async () => {
+    const ext = `model {\n  extend app {\n    metadata { port '1' }\n    metadata { extra 'e' port '2' }\n  }\n}\n`;
+    const m = LikeC4Mutator.fromFiles({ 'base.c4': decl(`    metadata { owner 'a' }\n`), 'ext.c4': ext });
+    m.updateElement('app', { metadata: { port: null } });
+    const files = m.serialize();
+    expect(files['ext.c4']).toBe(
+      `model {\n  extend app {\n    metadata { }\n    metadata { extra 'e' }\n  }\n}\n`,
+    );
+    const el = m.getElement('app')!;
+    expect(el.metadata).toEqual({ owner: 'a' });
+    await expectAgreesWithLikeC4(files, 'app', el);
+  });
+
+  it('relationship: null does not reveal a later block', () => {
+    const src = `${SPEC}model {\n  app = system\n  db = system\n  app -> db {\n    metadata { k 'first' }\n    metadata { k 'second' extra 'e' }\n  }\n}\n`;
+    const m = LikeC4Mutator.fromFiles({ 'base.c4': src });
+    m.updateRelationship({ source: 'app', target: 'db' }, { metadata: { k: null } });
+    expect(m.serialize()['base.c4']).toBe(
+      src.replace("metadata { k 'first' }", 'metadata { }').replace("k 'second' extra 'e'", "extra 'e'"),
+    );
+    expect(m.getRelationships({ sourceFqn: 'app' })[0].metadata).toBeUndefined();
+    expect(m.validate()).toEqual([]);
   });
 });
 

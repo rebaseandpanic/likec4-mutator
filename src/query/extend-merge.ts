@@ -3,12 +3,13 @@
  * extended by `extend X { ... }` blocks.
  *
  * Mirrors LikeC4 1.59.4: the language-server document parser reads each
- * body (`parseTags`: tags without duplicates; `parseLinks`: links as written;
- * `getMetadata`: values grouped per key), `MergedExtends.merge` accumulates
+ * body (`parseTags`: tags without duplicates; `parseLinks`: links with
+ * single-line labels; `getMetadata`: normalized values grouped per key), `MergedExtends.merge` accumulates
  * the `extend` contributions in document order and `MergedExtends.applyExtended`
  * merges them onto the declaration — the declaration always first.
  */
 import { readMetadataBlock, readMetadataGrouped, type MetadataMap } from '../mutator/metadata-ops.js';
+import { toSingleLine } from './likec4-text.js';
 
 /** Link as reported by the read API. */
 export interface LinkValue {
@@ -23,31 +24,46 @@ export interface Decorations {
   metadata?: MetadataMap;
 }
 
+/**
+ * One comma-separated group of a `Tags` node.  LikeC4 grammar:
+ * `Tags: (values+=TagRef)+ ({infer Tags.prev=current} ',' (values+=TagRef)*)* ';'?`
+ * — the body holds the last group, each group links to the one before it
+ * through `prev`.
+ */
+interface TagsLike {
+  values?: Array<{ $cstNode?: { text?: string }; $refText?: string }>;
+  prev?: TagsLike;
+}
+
 /** Minimal structural view of an element or `extend` body. */
 interface BodyLike {
-  tags?: { values?: Array<{ $cstNode?: { text?: string }; $refText?: string }> };
+  tags?: TagsLike;
   props?: unknown[];
 }
 
 /**
  * Read the tags, links and metadata of one body as LikeC4 does before
- * merging: tags without duplicates, links in source order, metadata of the
- * first `metadata { ... }` block grouped per key.
+ * merging: tags of every comma group in LikeC4 order without duplicates;
+ * links in source order, a label read as one line (`toSingleLine`), an
+ * empty one dropped; metadata of the first `metadata { ... }` block with
+ * values dedented and trimmed, empty values dropped, grouped per key.
  */
 export function readContribution(body: unknown): Decorations {
   const out: Decorations = {};
   if (!body) return out;
   const b = body as BodyLike;
 
-  const tags = readTags(b);
+  const tags = readTagGroups(b).flat();
   if (tags.length > 0) out.tags = unique(tags);
 
-  const links = readLinks(b);
+  // LikeC4 `parseLinks`: a non-empty label is read with `toSingleLine`, an
+  // empty one is dropped.
+  const links = readLinks(b).map(({ url, label }): LinkValue =>
+    label ? { url, label: toSingleLine(label) } : { url },
+  );
   if (links.length > 0) out.links = links;
 
-  const metaBody = (b.props ?? []).find(
-    (p) => (p as { $type?: string }).$type === 'MetadataBody',
-  ) as Parameters<typeof readMetadataGrouped>[0] | undefined;
+  const metaBody = firstMetadataBody(b);
   if (metaBody) {
     const metadata = readMetadataGrouped(metaBody);
     if (Object.keys(metadata).length > 0) out.metadata = metadata;
@@ -57,26 +73,38 @@ export function readContribution(body: unknown): Decorations {
 
 /**
  * Read tags, links and metadata of one body as declared (see
- * `ElementDecorations`): tags and links in source order, metadata as written
- * — the last value of a repeated key, arrays kept as arrays.
+ * `ElementDecorations`): tags (of every comma group) and links in source
+ * order, metadata of the first `metadata { ... }` block as written — the
+ * last value of a repeated key, arrays kept as arrays.
  */
 export function readDeclared(body: unknown): Decorations {
   const out: Decorations = {};
   if (!body) return out;
   const b = body as BodyLike;
 
-  const tags = readTags(b);
+  const tags = readTagGroups(b).reverse().flat();
   if (tags.length > 0) out.tags = tags;
 
   const links = readLinks(b);
   if (links.length > 0) out.links = links;
 
-  for (const prop of b.props ?? []) {
-    if ((prop as { $type?: string }).$type !== 'MetadataBody') continue;
-    const metadata = readMetadataBlock(prop as Parameters<typeof readMetadataBlock>[0]);
+  const metaBody = firstMetadataBody(b);
+  if (metaBody) {
+    const metadata = readMetadataBlock(metaBody);
     if (Object.keys(metadata).length > 0) out.metadata = metadata;
   }
   return out;
+}
+
+/**
+ * The first `metadata { ... }` block of a body — the only one LikeC4 reads
+ * (`getMetadata(body.props.find(isMetadataProperty))`); later blocks are
+ * ignored, even when the first one is empty.
+ */
+function firstMetadataBody(body: BodyLike): Parameters<typeof readMetadataBlock>[0] | undefined {
+  return (body.props ?? []).find((p) => (p as { $type?: string }).$type === 'MetadataBody') as
+    | Parameters<typeof readMetadataBlock>[0]
+    | undefined;
 }
 
 /**
@@ -127,16 +155,25 @@ function mergeMetadata(existing: MetadataMap, incoming: MetadataMap): MetadataMa
   return result;
 }
 
-function readTags(body: BodyLike): string[] {
-  // The standalone parser does not resolve cross-references, so tag names
-  // are recovered from the leading-`#` CST text of each TagRef.
-  const names: string[] = [];
-  for (const tagRef of body.tags?.values ?? []) {
-    const txt = tagRef?.$cstNode?.text ?? tagRef?.$refText;
-    if (typeof txt !== 'string') continue;
-    names.push(txt.startsWith('#') ? txt.slice(1) : txt);
+/**
+ * Tag names of every comma-separated group of the body, in the order LikeC4
+ * `parseTags` visits them: the last group first, then each earlier one.
+ * Reverse the result for source order.
+ */
+function readTagGroups(body: BodyLike): string[][] {
+  const groups: string[][] = [];
+  for (let group = body.tags; group; group = group.prev) {
+    // The standalone parser does not resolve cross-references, so tag names
+    // are recovered from the leading-`#` CST text of each TagRef.
+    const names: string[] = [];
+    for (const tagRef of group.values ?? []) {
+      const txt = tagRef?.$cstNode?.text ?? tagRef?.$refText;
+      if (typeof txt !== 'string') continue;
+      names.push(txt.startsWith('#') ? txt.slice(1) : txt);
+    }
+    groups.push(names);
   }
-  return names;
+  return groups;
 }
 
 function readLinks(body: BodyLike): LinkValue[] {

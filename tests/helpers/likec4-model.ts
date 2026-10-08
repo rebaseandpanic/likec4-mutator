@@ -7,6 +7,7 @@
  */
 import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
 import { URI } from 'langium';
+import { expect } from 'vitest';
 
 /** Element data of the computed LikeC4 model, as far as the tests read it. */
 export interface LikeC4ModelElement {
@@ -59,4 +60,36 @@ export async function buildLikeC4Model(files: Record<string, string>): Promise<L
   const model = await services.likec4.ModelBuilder.computeModel();
   const elements = (model?.$data?.elements ?? {}) as unknown as Record<string, LikeC4ModelElement>;
   return { diagnostics, elements };
+}
+
+/** Effective values of an element as the library reports them. */
+export interface EffectiveValues {
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  metadata?: Record<string, string | string[]>;
+}
+
+/**
+ * Assert that `actual` — the library's effective tags, links and metadata of
+ * `fqn` — equal what LikeC4 computes for `files`, which must build without
+ * diagnostics.  Only the API shape is mapped: LikeC4's link `title` is the
+ * library's `label`, LikeC4's `null` is an absent value.
+ */
+export async function expectAgreesWithLikeC4(
+  files: Record<string, string>,
+  fqn: string,
+  actual: EffectiveValues,
+): Promise<void> {
+  const reference = await buildLikeC4Model(files);
+  expect(reference.diagnostics).toEqual([]);
+  const expected = reference.elements[fqn];
+  expect(expected).toBeDefined();
+
+  expect(actual.tags).toEqual(expected!.tags ?? undefined);
+  expect(actual.links).toEqual(
+    expected!.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title })) ??
+      undefined,
+  );
+  expect(actual.metadata).toEqual(expected!.metadata);
+  if (expected!.metadata) expect(Object.keys(actual.metadata!)).toEqual(Object.keys(expected!.metadata));
 }

@@ -282,8 +282,9 @@ export class LikeC4Mutator {
     if (crossFile) {
       for (const block of this.workspace.extendBlocks(fqn)) {
         // The mutator indexes every document under its file name.
-        const file = block.file!;
-        addEdits(file, clearExtendContributionsEdits(this.document(file), block.node, clearing));
+        const { file, node } = block;
+        if (file === undefined) throw new Error(`Internal error: extend block of '${fqn}' has no file name`);
+        addEdits(file, clearExtendContributionsEdits(this.document(file), node, clearing));
       }
     }
 
