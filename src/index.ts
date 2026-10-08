@@ -30,6 +30,7 @@ export type {
   UpdateElementPatch,
   UpdateRelationshipMatcher,
   UpdateRelationshipPatch,
+  UpdateRelationshipResult,
 } from './mutator/mutator.js';
 export type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
 export type { MetadataMap, MetadataPatch } from './mutator/metadata-ops.js';

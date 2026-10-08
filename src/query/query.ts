@@ -1,6 +1,6 @@
 import { buildFqnIndex, type FqnEntry } from './fqn.js';
 import { WorkspaceIndex, resolveRelations, type ResolvedRelation } from './workspace-index.js';
-import { mergeRelationContributions, relationTitle } from './relation-extends.js';
+import { mergeRelationContributions, relationIdentity } from './relation-extends.js';
 import type { ElementInfo, ExtendContribution, RelationshipInfo, SourceRange, SpecificationInfo } from './types.js';
 import { mergeContributions, readContribution, readDeclared } from './extend-merge.js';
 import { relationDecorationSource, relationKind, type RelationNodeLike } from './relation-node.js';
@@ -265,15 +265,7 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
   // Tags / links / metadata: the relationship merged with every `extend`
   // block that applies to it, as LikeC4 does.  A relationship with an
   // unresolved endpoint is not part of LikeC4's model; nothing applies to it.
-  const blocks = resolved.resolved
-    ? workspace.extendRelationBlocks({
-        sourceFqn,
-        targetFqn,
-        kind,
-        title: relationTitle(item),
-        isBidirectional: (item as { isBidirectional?: boolean }).isBidirectional === true,
-      })
-    : [];
+  const blocks = resolved.resolved ? workspace.extendRelationBlocks(relationIdentity(resolved)) : [];
   const effective = mergeRelationContributions(
     readContribution(decorationSource),
     blocks.map((b) => readContribution(b.node.body)),

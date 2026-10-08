@@ -10,6 +10,7 @@
  */
 import type { Decorations, LinkValue } from './extend-merge.js';
 import { removeIndent } from './likec4-text.js';
+import { relationKind, type RelationNodeLike } from './relation-node.js';
 
 /** Source range of an AST node, as Langium's CST node exposes it. */
 interface CstRange {
@@ -100,6 +101,22 @@ export function relationTitle(node: RelationTitleSource): string {
     if (text !== undefined) bodyTitle = text;
   }
   return bodyTitle === undefined ? '' : removeIndent(bodyTitle);
+}
+
+/**
+ * Identity of a relationship whose endpoints are resolved (the title before
+ * the kind's specification is consulted, see
+ * `WorkspaceIndex.effectiveIdentity`).
+ */
+export function relationIdentity(relation: { sourceFqn: string; targetFqn: string; node: unknown }): RelationIdentity {
+  const node = relation.node as RelationNodeLike & RelationTitleSource & { isBidirectional?: boolean };
+  return {
+    sourceFqn: relation.sourceFqn,
+    targetFqn: relation.targetFqn,
+    kind: relationKind(node),
+    title: relationTitle(node),
+    isBidirectional: node.isBidirectional === true,
+  };
 }
 
 /**

@@ -107,7 +107,7 @@ const { changedFiles } = mutator.updateElement('app.db', {
   style: { color: 'red' },            // MERGE per-field (v0.4.0 BREAKING — was full replace)
 });
 
-// Update an existing relationship
+// Update an existing relationship (=> { changedFiles })
 mutator.updateRelationship(
   { source: 'app', target: 'app.db' },
   {
@@ -316,7 +316,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 
 #### updateRelationship
 
-Updates fields on an existing relationship.  Required: `op`, `source`, `target`, plus at least one update field.  When more than one relation matches `source`/`target`, supply `matchKind` and/or `matchTitle` to disambiguate.
+Updates fields on an existing relationship.  Required: `op`, `source`, `target`, plus at least one update field.  When more than one relation matches `source`/`target`, supply `matchKind` and/or `matchTitle` to disambiguate.  `label`, `tags`, `links` and `metadata` also apply to `extend a -> b { ... }` blocks of the relationship (see [Relationships](#relationships)).
 
 | Field | Semantics |
 | --- | --- |
@@ -578,6 +578,11 @@ model {
 - The relationship's own values come first — its tags are those written on the relation line (`a -> b 'x' #t`) or else those of its body — then every matching block in the order used for elements.
 - `tags` and `metadata` merge as for elements. `links` differ: a block's link is skipped when a link with the same url and label is already present; the relationship's own duplicates are kept.
 - Spec defaults of a relationship kind (its tags and links) are not merged, neither for relationships nor for elements.
+
+`updateRelationship` treats these blocks like `updateElement` treats `extend X` blocks — same table and rules (new values go into the relationship; patched tags, links and metadata keys leave every matching block in every file; empty blocks stay; rejected while a file has syntax errors; atomic in memory) — and returns `{ changedFiles }`. In addition:
+
+- The title identifies the relationship for its blocks, so a `label` that changes the title is written into every matching block as well (`extend api -[calls]-> db 'queries' { ... }`); otherwise they would stop applying.
+- A block applies to every relationship with the same identity (e.g. `a -> b 'x'` and `a -> b { title 'x' }`). When an update would change such a shared block, it is rejected before anything changes, because the other relationship would change too.
 
 ## How it works
 
