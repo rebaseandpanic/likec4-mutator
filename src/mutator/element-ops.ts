@@ -7,6 +7,7 @@
  */
 import type { ParsedDocument } from '../parser/types.js';
 import { buildFqnIndex, readStrictFqnRef } from '../query/fqn.js';
+import type { ExtendElementNode } from '../query/workspace-index.js';
 import type { TextEdit } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import {
@@ -376,7 +377,7 @@ export interface ExtendClearing {
  * stays in place.
  *
  * @param doc        - Parsed document holding the block
- * @param extendNode - The `ExtendElement` AST node
+ * @param node       - The `ExtendElement` AST node
  * @param clear      - What to remove
  * Every construct is removed with {@link buildRemovalEdit} (whole lines when
  * it stands alone on its lines), so the edits never overlap and everything
@@ -386,10 +387,9 @@ export interface ExtendClearing {
  */
 export function clearExtendContributionsEdits(
   doc: ParsedDocument,
-  extendNode: unknown,
+  node: ExtendElementNode,
   clear: ExtendClearing,
 ): TextEdit[] {
-  const node = extendNode as AstElementNode;
   const { fullText } = doc;
   const edits: TextEdit[] = [];
   if (!node.body?.$cstNode) return edits;

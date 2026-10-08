@@ -175,10 +175,25 @@ describe('order of contributions', () => {
     expect(LikeC4Mutator.fromFiles(files).getElement('app')!.metadata).toEqual({ k: expected });
   });
 
-  it('rejects two file names that denote the same path', () => {
-    expect(() =>
-      LikeC4Mutator.fromFiles({ 'a.c4': 'model {\n}\n', './a.c4': 'model {\n}\n' }),
-    ).toThrow(/'a\.c4' and '\.\/a\.c4'/);
+  it.each([
+    ['a.c4', './a.c4'],
+    ['a.c4', 'sub/../a.c4'],
+    ['a/b.c4', 'a\\b.c4'],
+  ])('rejects %s and %s as the same path', (first, second) => {
+    expect(() => LikeC4Mutator.fromFiles({ [first]: 'model {\n}\n', [second]: 'model {\n}\n' })).toThrow(
+      `Files '${first}' and '${second}' denote the same path`,
+    );
+  });
+
+  it('orders a file by its normalized path and reports it under its own name', () => {
+    const el = LikeC4Mutator.fromFiles({
+      'base.c4': `${SPEC}model {\n  app = system 'App'\n}\n`,
+      'm.c4': `model {\n  extend app {\n    metadata { k 'm' }\n  }\n}\n`,
+      // Normalizes to `a.c4`, which sorts before `m.c4`.
+      'z/../a.c4': `model {\n  extend app {\n    metadata { k 'a' }\n  }\n}\n`,
+    }).getElement('app')!;
+    expect(el.metadata).toEqual({ k: ['a', 'm'] });
+    expect(el.extendedBy.map((e) => e.file)).toEqual(['z/../a.c4', 'm.c4']);
   });
 });
 
