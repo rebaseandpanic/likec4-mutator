@@ -15,6 +15,7 @@ export type {
   ElementDecorations,
   ElementInfo,
   ExtendContribution,
+  KindDefaults,
   RelationshipInfo,
   SourceRange,
   SpecificationInfo,

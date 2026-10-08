@@ -127,6 +127,9 @@ export function relationIdentity(relation: { sourceFqn: string; targetFqn: strin
  * relationship's own duplicates stay); metadata per key, values of a key
  * present in more than one body without duplicates — a string when one value
  * remains, an array otherwise.
+ *
+ * @param own - The relationship's own contribution, with the defaults of its
+ *              kind applied (see `applyKindDefaults`)
  */
 export function mergeRelationContributions(own: Decorations, extensions: Decorations[]): Decorations {
   const tags = [...(own.tags ?? [])];

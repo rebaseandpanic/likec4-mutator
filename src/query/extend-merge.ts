@@ -108,9 +108,31 @@ function firstMetadataBody(body: BodyLike): Parameters<typeof readMetadataBlock>
 }
 
 /**
+ * The tags and links of an element or relationship once the defaults of its
+ * kind apply, before any `extend` block (`MergedSpecification.toModelElement`
+ * / `toModelRelation`): the kind's tags, then its own, without duplicates;
+ * its own links, or the kind's when it has none.  Metadata is its own (a
+ * kind declares none).
+ *
+ * @param own  - Contribution of the declaration (see {@link readContribution})
+ * @param kind - Contribution of the kind's specification; undefined when no
+ *               specification declares the kind
+ */
+export function applyKindDefaults(own: Decorations, kind: Decorations | undefined): Decorations {
+  if (!kind) return own;
+  const out: Decorations = { ...own };
+  if (kind.tags?.length) out.tags = own.tags ? unique([...kind.tags, ...own.tags]) : [...kind.tags];
+  if (!own.links && kind.links) out.links = kind.links.map((l) => ({ ...l }));
+  return out;
+}
+
+/**
  * Merge the contributions of `extend` blocks (in LikeC4 merge order) onto
  * the declaration's own contribution.  Port of `MergedExtends.merge` +
  * `applyExtended`.
+ *
+ * @param declaration - The declaration's contribution, with the defaults of
+ *                      its kind applied (see {@link applyKindDefaults})
  */
 export function mergeContributions(declaration: Decorations, extensions: Decorations[]): Decorations {
   // MergedExtends.merge: accumulate every extend block of the element.

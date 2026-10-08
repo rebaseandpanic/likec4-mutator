@@ -97,8 +97,8 @@ const { changedFiles } = mutator.updateElement('app.db', {
   summary: 'Updated summary',         // REPLACE
   description: 'Updated description', // REPLACE
   technology: 'PostgreSQL 17',        // REPLACE
-  tags: ['deprecated'],               // REPLACE (v0.4.0 BREAKING — was append). Empty [] clears all tags.
-  links: [{ url: 'https://new.link' }], // REPLACE.  Empty [] clears all links.
+  tags: ['deprecated'],               // REPLACE (v0.4.0 BREAKING — was append). Empty [] clears own and extend tags.
+  links: [{ url: 'https://new.link' }], // REPLACE.  Empty [] clears own and extend links.
   metadata: {                         // MERGE + null-deletion
     team: 'backend',                  //   upsert (string)
     keywords: ['core', 'critical'],   //   upsert (array)
@@ -291,8 +291,8 @@ Updates properties of an existing element.  Only specified fields are changed.  
 | Field | Semantics |
 | --- | --- |
 | `title`, `summary`, `description`, `technology` | REPLACE.  Every declaration is rewritten (a body may repeat a property; LikeC4 reads the last one).  A summary or technology written after the title (`name = kind 'title' 'summary' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty summary no longer overrides the body and is written into the body as well. |
-| `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags. |
-| `links` | REPLACE.  `[]` clears all links. |
+| `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags written for it (kind defaults still apply, see [Specification defaults](#specification-defaults)). |
+| `links` | REPLACE.  `[]` clears all links written for it (the kind links then apply). |
 | `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting), and so are comments in the block: patched keys are edited in place, new keys added at the end of the block. |
 | `style` | MERGE per-field (v0.4.0 BREAKING — was full replace).  Pass a complete style object to reproduce the old replace-all behaviour. |
 
@@ -321,8 +321,8 @@ Updates fields on an existing relationship.  Required: `op`, `source`, `target`,
 | Field | Semantics |
 | --- | --- |
 | `label`, `description`, `technology` | REPLACE.  Every body declaration is rewritten (a body may repeat a property; LikeC4 reads the last one).  A description or technology written after the title (`a -> b 'title' 'description' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty description no longer overrides the body and is written into the body as well. |
-| `tags` | REPLACE.  `[]` clears all tags. |
-| `links` | REPLACE.  `[]` clears all links. |
+| `tags` | REPLACE.  `[]` clears all tags written for it (kind defaults still apply, see [Specification defaults](#specification-defaults)). |
+| `links` | REPLACE.  `[]` clears all links written for it (the kind links then apply). |
 | `metadata` | MERGE with `null`-deletion (same as `updateElement`). |
 | `style` | MERGE per-field. |
 
@@ -474,6 +474,80 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | head | normal, onormal, diamond, odiamond, crow, open, vee, dot, odot, none |
 | tail | Same as head |
 
+## Specification defaults
+
+A kind declared in a `specification` block can carry defaults, and LikeC4 applies them to every element or relationship of that kind:
+
+```
+specification {
+  element service {
+    #backend
+    title 'Service'
+    technology 'Node'
+    link https://wiki.example.com/services 'Service guide'
+  }
+  relationship async {
+    #queue
+    title 'Asynchronous'
+    technology 'Kafka'
+  }
+  tag backend
+  tag queue
+  tag critical
+}
+model {
+  api = service {
+    #critical
+  }
+  db = service 'DB'
+  api -[async]-> db
+}
+```
+
+`getElement` / `listElements` / `getRelationships` report the values LikeC4 1.59.4 computes from them, and `fromSpecification` tells where they come from:
+
+```typescript
+const api = mutator.getElement('api')!;
+api.title;             // 'Service'
+api.technology;        // 'Node'
+api.tags;              // ['backend', 'critical']
+api.links;             // [{ url: 'https://wiki.example.com/services', label: 'Service guide' }]
+api.fromSpecification; // { kind: 'service', file: 'spec.c4', sourceRange: {...}, title: 'Service', technology: 'Node', tags: ['backend'], links: [...] }
+
+const [rel] = mutator.getRelationships({ sourceFqn: 'api', targetFqn: 'db' });
+rel.title;             // 'Asynchronous'
+rel.tags;              // ['queue']
+```
+
+Rules (LikeC4's own, applied before any `extend` block):
+
+| Property | Element | Relationship |
+| --- | --- | --- |
+| `title` | own when non-empty (after dedent and trim); else the kind's when non-empty; else the element **name** — so an element `title` is always defined | own when non-empty; else the kind's; else own (`''` or none) |
+| `summary` | own, else the kind's. An empty summary written after the title (`x = s 'T' ''`) is no summary; an empty body `summary ''` is a summary | — (a relationship kind has none) |
+| `description` | own (an empty body `description ''` included), else the kind's | own (an empty one in the body included; an empty one written after the title is none), else the kind's |
+| `technology` | own (`''` included), else the kind's | own (`''` included), else the kind's |
+| `tags` | the kind's, then own, then `extend` blocks — without duplicates | same |
+| `links` | own; the kind's only when the element has none of its own; then `extend` blocks | same, with the `extend` link rule for relationships |
+| `metadata` | not affected (a kind declares none) | not affected |
+
+- `fromSpecification` (`KindDefaults`) holds the kind name, its file and `sourceRange`, the strings normalized like the effective values, and tags and links as written. It is present whenever a specification declares the kind (also without defaults) and absent otherwise: an element of an undeclared kind (LikeC4 leaves it out of its model; the library still reports it, with its name as title), a relationship without a kind or with an undeclared one.
+- A kind declared more than once (a LikeC4 validation error the library does not report) is taken as LikeC4's model builder takes it: the declaration of the last file (ordered as for `extend` blocks); within a file the last one for an element kind, the first one for a relationship kind.
+- Not covered: `style` and `notation` defaults (no such fields are read), `multiple`, and the technology LikeC4 derives from an element's icon. With the project setting `inferTechnologyFromIcon` (on by default), LikeC4 replaces an element's missing or empty technology by one derived from its icon (`tech:postgresql` → `Postgresql`). The library does not read project settings and reports the technology as written or inherited from the kind: an own `technology ''` is reported as `''`.
+
+### Writing
+
+Kind defaults are read-only. `updateElement` and `updateRelationship` edit the declaration and its `extend` blocks as described below, never the specification. The patch is written as given, and the effective value afterwards follows the rules above:
+
+| Patch | Effective value after the update |
+| --- | --- |
+| `tags: T` | kind tags, then `T`, without duplicates — `tags: []` leaves the kind tags |
+| `links: L` | `L` when non-empty; `links: []` brings back the kind links |
+| element `title: ''` / relationship `label: ''` | the kind title; for an element of a kind without one, the element name |
+| element `summary: S` / `description: S` | `S`, `''` included when written in the body (an empty summary written after the title reads as the kind summary) |
+| element `technology: S`, relationship `description: S` / `technology: S` | `S`, `''` included (an empty relationship description written after the title reads as the kind description) |
+| `metadata` | as without kind defaults |
+
 ## `extend` blocks
 
 An element can get tags, links and metadata from `extend X { ... }` blocks, in the same or other files:
@@ -512,7 +586,7 @@ app.extendedBy;  // [{ file: 'ext/ops.c4', sourceRange: {...}, tags: ['critical'
 
 Merge rules (LikeC4 1.59.4):
 
-- The declaration body comes first, then every `extend` block of exactly this element — files ordered by path the way LikeC4 orders documents (natural and segment by segment: `a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`; independent of the order passed to `fromFiles`), then source order within a file.
+- The defaults of the element's kind come first (see [Specification defaults](#specification-defaults)), then the declaration body, then every `extend` block of exactly this element — files ordered by path the way LikeC4 orders documents (natural and segment by segment: `a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`; independent of the order passed to `fromFiles`), then source order within a file.
 - `tags`: union without duplicates. Within one body, comma-separated groups (`#a, #b #c`) are taken last group first, as LikeC4 does (`['b', 'c', 'a']`); `declared` and `extendedBy` list them in source order.
 - `links`: concatenated; duplicates are kept.
 - `metadata`: every value of a key is collected (a key repeated inside one block too); when a key appears in more than one body, duplicate values are dropped. A key with one value maps to a string — also when written as `key ['v1']` — otherwise to an array. `declared` and `extendedBy` keep the form as written.
@@ -577,9 +651,9 @@ model {
 `getRelationships()` reports effective `tags`, `links` and `metadata`, `declared` and `extendedBy`, as for elements. LikeC4 1.59.4 decides which relationships a block applies to, and merges, as follows:
 
 - A block applies to every relationship with the same source and target (resolved to FQNs), kind, title and direction. No kind matches only relationships without a kind (`-[calls]->` and `.calls` are the same kind); a kind no specification declares counts as no kind, as LikeC4 resolves it (`kind` in `getRelationships()` still reports it as written). Titles are compared dedented and trimmed; the title may be written after the target or as a `title` body property, and a relationship without a title is compared with the `title` of its kind's specification when that declares one. A bidirectional block (`extend b <-> a`) matches `a <-> b`; a directed block never matches a bidirectional relationship.
-- The relationship's own values come first — its tags are those written on the relation line (`a -> b 'x' #t`) or else those of its body — then every matching block in the order used for elements. `updateRelationship` replaces tags where the relationship has them: on the relation line when it has any there (body tags in the same relationship, which LikeC4 reports as an error, are removed so they cannot take over), otherwise in the body.
+- The defaults of the relationship's kind come first (see [Specification defaults](#specification-defaults)), then the relationship's own values — its tags are those written on the relation line (`a -> b 'x' #t`) or else those of its body — then every matching block in the order used for elements. `updateRelationship` replaces tags where the relationship has them: on the relation line when it has any there (body tags in the same relationship, which LikeC4 reports as an error, are removed so they cannot take over), otherwise in the body.
 - `tags` and `metadata` merge as for elements. `links` differ: a block's link is skipped when a link with the same url and label is already present; the relationship's own duplicates are kept.
-- Spec defaults of a relationship kind (its tags and links) are not merged, neither for relationships nor for elements.
+- The kind's tags and links take part as described in [Specification defaults](#specification-defaults): a block's link equal to a kind link is skipped too.
 
 `updateRelationship` treats these blocks like `updateElement` treats `extend X` blocks — same table and rules (new values go into the relationship; patched tags, links and metadata keys leave every matching block in every file; empty blocks stay; rejected while a file has syntax errors; atomic in memory) — and returns `{ changedFiles }`. In addition:
 

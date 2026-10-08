@@ -9,8 +9,20 @@ import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@li
 import { URI } from 'langium';
 import { expect } from 'vitest';
 
+/** A string value of the LikeC4 model: plain, or `{ md }` / `{ txt }` for Markdown-or-string properties. */
+export type LikeC4ModelString = string | { md?: string; txt?: string };
+
+/** The plain text of a LikeC4 model string value. */
+export function plainText(value: LikeC4ModelString | undefined): string | undefined {
+  return typeof value === 'object' ? (value.md ?? value.txt) : value;
+}
+
 /** Element data of the computed LikeC4 model, as far as the tests read it. */
 export interface LikeC4ModelElement {
+  title?: string;
+  summary?: LikeC4ModelString;
+  description?: LikeC4ModelString;
+  technology?: string;
   tags?: readonly string[] | null;
   links?: ReadonlyArray<{ url: string; title?: string }> | null;
   metadata?: Record<string, string | string[]>;
@@ -20,7 +32,6 @@ export interface LikeC4ModelElement {
 export interface LikeC4ModelRelation extends LikeC4ModelElement {
   source: { model: string };
   target: { model: string };
-  title?: string;
   kind?: string;
   isBidirectional?: boolean;
 }
@@ -81,16 +92,22 @@ export async function buildLikeC4Model(files: Record<string, string>): Promise<L
 
 /** Effective values of an element as the library reports them. */
 export interface EffectiveValues {
+  title?: string;
+  summary?: string;
+  description?: string;
+  technology?: string;
   tags?: string[];
   links?: Array<{ url: string; label?: string }>;
   metadata?: Record<string, string | string[]>;
 }
 
 /**
- * Assert that `actual` — the library's effective tags, links and metadata of
- * `fqn` — equal what LikeC4 computes for `files`, which must build without
- * diagnostics.  Only the API shape is mapped: LikeC4's link `title` is the
- * library's `label`, LikeC4's `null` is an absent value.
+ * Assert that `actual` — the library's effective title, summary,
+ * description, technology, tags, links and metadata of `fqn` — equal what
+ * LikeC4 computes for `files`, which must build without diagnostics.  Only
+ * the API shape is mapped: LikeC4's link `title` is the library's `label`,
+ * LikeC4's `null` is an absent value, a `{ md }` / `{ txt }` value is its
+ * text.
  */
 export async function expectAgreesWithLikeC4(
   files: Record<string, string>,
@@ -105,11 +122,15 @@ export async function expectAgreesWithLikeC4(
 }
 
 /**
- * Assert that `actual` — the library's effective tags, links and metadata of
- * one relationship — equal `expected`, a relation (or element) of the LikeC4
- * model, with the API shape mapped as for {@link expectAgreesWithLikeC4}.
+ * Assert that `actual` — the library's effective values of one element —
+ * equal `expected`, an element of the LikeC4 model, with the API shape
+ * mapped as for {@link expectAgreesWithLikeC4}.
  */
 export function expectSameValues(actual: EffectiveValues, expected: LikeC4ModelElement): void {
+  expect(actual.title).toBe(expected.title);
+  expect(actual.summary).toBe(plainText(expected.summary));
+  expect(actual.description).toBe(plainText(expected.description));
+  expect(actual.technology).toBe(expected.technology);
   expect(actual.tags).toEqual(expected.tags ?? undefined);
   expect(actual.links).toEqual(
     expected.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title })) ??
@@ -127,14 +148,15 @@ export interface ReportedRelationship extends EffectiveValues {
 }
 
 /**
- * Assert that the library reports the same relationships — endpoints, kind
- * and effective tags, links and metadata — as LikeC4 computes for `files`,
+ * Assert that the library reports the same relationships — endpoints, kind,
+ * effective title, description, technology, tags, links and metadata — as
+ * LikeC4 computes for `files`,
  * which must build without errors.  Warnings are allowed: LikeC4's validator
  * warns about an `extend a -> b` block whose relationship takes its title from
  * the kind's specification, although the model builder applies it.  Relationships are compared as a
  * multiset (the two sides list them in different orders); metadata key order
- * counts.  Titles are not compared: LikeC4 substitutes the title of a
- * relationship kind's specification, the library reports titles as written.
+ * counts.  A relationship without a title has the title '' in LikeC4's
+ * model and none in the library's: both compare as ''.
  */
 export async function expectRelationshipsAgreeWithLikeC4(
   files: Record<string, string>,
@@ -146,16 +168,32 @@ export async function expectRelationshipsAgreeWithLikeC4(
     source: string;
     target: string;
     kind?: string;
+    title?: string;
+    description?: string;
+    technology?: string;
     tags?: readonly string[] | null;
     links?: ReadonlyArray<{ url: string; label?: string }> | null;
     metadata?: Record<string, string | string[]>;
   }): string =>
-    JSON.stringify([r.source, r.target, r.kind ?? null, r.tags ?? null, r.links ?? null, r.metadata ?? null]);
+    JSON.stringify([
+      r.source,
+      r.target,
+      r.kind ?? null,
+      r.title ?? '',
+      r.description ?? null,
+      r.technology ?? null,
+      r.tags ?? null,
+      r.links ?? null,
+      r.metadata ?? null,
+    ]);
   const expected = reference.relations.map((r) =>
     canonical({
       source: r.source.model,
       target: r.target.model,
       kind: r.kind,
+      title: r.title,
+      description: plainText(r.description),
+      technology: r.technology,
       tags: r.tags,
       links: r.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title })),
       metadata: r.metadata,

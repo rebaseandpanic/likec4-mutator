@@ -116,12 +116,13 @@ describe('element string values', () => {
     expect(m.getElement('e')?.description).toBe('');
   });
 
-  it('an empty Markdown title after another one leaves no title', () => {
+  it('an empty Markdown title after another one is no title: the title is the element name, as in LikeC4', async () => {
     // parseBaseProps reads a body title as `markdown || text`, so the last
-    // declaration gives no title (LikeC4's model then falls back to the
-    // element name, which the library does not report as a title).
+    // declaration gives no title; LikeC4's model then falls back to the
+    // element name (the kind declares no title).
     const m = LikeC4Mutator.fromFiles({ 'm.c4': SOURCE });
-    expect(m.getElement('h')?.title).toBeUndefined();
+    expect(((await model()).elements['h'] as Record<string, ModelValue>)['title']).toBe('h');
+    expect(m.getElement('h')?.title).toBe('h');
   });
 });
 
