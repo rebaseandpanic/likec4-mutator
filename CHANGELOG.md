@@ -10,8 +10,15 @@
 - Metadata keys must be valid LikeC4 identifiers (as the grammar's `Id` rule accepts them): keys such as `1abc`, `-x`, `_`, `true`, `true-x` or keywords like `title` and `metadata` now throw before any text is generated. Previously they produced text that failed to parse, or `generateElement` returned invalid DSL.
 - `getSpecification()` returns the merged specification of all files (names in first-declaration order, a name declared in several files listed once) instead of only the first file's.
 - Metadata maps returned by the library have a null prototype.
+- `getElement` / `listElements` return **effective** `tags`, `links` and `metadata`: the element body merged with every `extend` block of that element in all files, as LikeC4 1.59.4 does. Tags are a union (all comma-separated groups); links are concatenated and keep duplicates; metadata reads only the first `metadata { }` block of each body, values are dedented/trimmed and empty values dropped, then grouped per key (one value → string, several → array). Effective link labels are collapsed to one line. The declarative form is available as `ElementInfo.declared`, and each contributing block as `ElementInfo.extendedBy[]` (file, source range, contribution).
+- `updateElement` `tags` / `links` / `metadata` act on the effective value: new values go into the declaration; the patched tags, links or metadata keys are also removed from every `extend` block of exactly that element, in every file (empty `extend` blocks are left in place). A metadata `null` removes the key from every `metadata` block; an emptied first block is kept as `metadata { }` while later blocks still have attributes, so hidden blocks never become effective. The same multi-block metadata handling applies to `updateRelationship`.
+- `updateElement` returns `{ changedFiles: string[] }` instead of `void`.
+- A tags / links / metadata `updateElement` is rejected while any loaded file has syntax errors. Atomicity is in memory only; the CLI writes files one by one.
+- `fromFiles` / `WorkspaceIndex` reject two file names that denote the same path (e.g. `a.c4` and `./a.c4`).
 
 ### Bugfix
+- Tags written as comma-separated groups (`#a, #b #c`) are read completely; previously only the last group was returned (elements and relationships).
+- Links written as `link: url` are read for elements and relationships.
 - Replacing `links` no longer deletes properties declared between two `link` lines (elements and relationships).
 - `removeElement` now actually removes relationships whose source or target is the removed element or one of its descendants, in every file; `removedRelationships` lists exactly what was removed. All files are restored if a step fails.
 - Removing an element or relationship no longer joins neighbouring lines or pulls the next line into a trailing `//` comment.
@@ -24,7 +31,12 @@
 - Relationships declared inside `extend` blocks are now returned by `getRelationships`.
 - Elements declared inside `extend X { … }` blocks (in any file) are found by `getElement`, `listElements`, `getElementSource`, `updateElement`, `removeElement` and `addElement`, and appear in their parent's `children`. `removeElement` also deletes every `extend` block that targets the removed element or one of its descendants; relationships inside those blocks are listed in `removedRelationships`.
 
+### Dependencies
+- `@likec4/core` `^1.59.4` (LikeC4's path ordering) and `strip-indent` `^4.1.1` (LikeC4's value dedenting) are direct runtime dependencies; both were already installed through `@likec4/language-server`.
+
 ### Added
+- `ElementInfo.declared` and `ElementInfo.extendedBy`; exported types `ElementDecorations`, `ExtendContribution`, `SourceRange`, `UpdateElementResult`, `WorkspaceDocument`, `WorkspaceDocumentAst`, `ExtendBlockRef`, `ExtendElementNode`. `WorkspaceIndex` accepts `{ file, ast }` documents and has `extendBlocks(fqn)`.
+- CLI `get-element` prints the `extend` blocks that contribute to an element.
 - `WorkspaceIndex` export (with `children(fqn)`) and an optional second parameter `new C4Query(ast, workspace?)` for cross-file reference resolution.
 
 ## [0.5.0] - 2026-10-07
