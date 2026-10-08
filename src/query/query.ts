@@ -228,14 +228,19 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
   const { sourceFqn, targetFqn } = resolved;
   const item = resolved.node as {
     title?: string;
+    /** Description written after the title */
+    description?: string;
+    /** Technology written after the description */
+    technology?: string;
     kind?: { $refText?: string };
     body?: { props?: unknown[]; [k: string]: unknown };
     $cstNode?: { offset: number; end: number; range?: { start?: { line?: number; character?: number } } };
   };
   const cst = item.$cstNode;
 
-  // title is a direct string property on Relation
-  let title: string | undefined = item.title;
+  // The title written after the target (even an empty one), otherwise the
+  // body `title` (the last one), as LikeC4 `parseBaseProps` reads it.
+  let bodyTitle: string | undefined;
   let technology: string | undefined;
   let description: string | undefined;
 
@@ -253,11 +258,17 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
           description = value;
           break;
         case 'title':
-          if (!title) title = value;
+          if (value !== undefined) bodyTitle = value;
           break;
       }
     }
   }
+  const title = item.title ?? bodyTitle;
+  // Description and technology written after the title take precedence over
+  // the body (`parseBaseProps` overrides): a description when non-empty, a
+  // technology whenever written.
+  if (item.description) description = item.description;
+  if (item.technology !== undefined) technology = item.technology;
 
   const kind = relationKind(item as RelationNodeLike);
   const decorationSource = relationDecorationSource(item as RelationNodeLike);

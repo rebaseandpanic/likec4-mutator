@@ -237,6 +237,19 @@ export function updateRelationshipEdit(
     if (labelEdit) edits.push(labelEdit);
   }
 
+  // Description and technology written after the title are what LikeC4
+  // reads (`parseBaseProps` overrides): a technology whenever written, a
+  // description when non-empty.  They are replaced there.  An empty
+  // description no longer overrides the body, so it goes into the body too.
+  if (patch.technology !== undefined && rel.technology !== undefined) {
+    edits.push(buildInlineStringEdit(rel, INLINE_TECHNOLOGY, patch.technology));
+    patch = { ...patch, technology: undefined };
+  }
+  if (patch.description !== undefined && rel.description) {
+    edits.push(buildInlineStringEdit(rel, INLINE_DESCRIPTION, patch.description));
+    if (patch.description !== '') patch = { ...patch, description: undefined };
+  }
+
   // For body-targeting fields, when the relation has no body and we have
   // multiple body-touching patch fields, we want to insert ONE combined body
   // block (not several conflicting body-creation snippets).  The strategy:
@@ -245,9 +258,13 @@ export function updateRelationshipEdit(
   //     that creates the body and includes all fields.
   //
   // Tags written on the relation line (`a -> b 'x' #t`) are what LikeC4
-  // reads; they are replaced there, and the body is left without tags.
+  // reads (`parseTags(relation) ?? parseTags(body)`); they are replaced
+  // there.  Tags also in the body (a LikeC4 error) are removed: they would
+  // become the relationship's tags once the line has none.
+  let clearBodyTags = false;
   if (patch.tags !== undefined && rel.tags?.$cstNode) {
     edits.push(buildReplaceHeaderTagsEdit(rel.tags.$cstNode, fullText, patch.tags));
+    clearBodyTags = rel.body?.tags?.$cstNode !== undefined;
     patch = { ...patch, tags: undefined };
   }
   const bodyTargeting =
@@ -273,8 +290,8 @@ export function updateRelationshipEdit(
     const e = buildRelationStringPropEdit(rel, fullText, indent, 'technology', patch.technology);
     if (e) edits.push(e);
   }
-  if (patch.tags !== undefined) {
-    const e = buildRelationReplaceTagsEdit(rel, fullText, indent, patch.tags);
+  if (patch.tags !== undefined || clearBodyTags) {
+    const e = buildRelationReplaceTagsEdit(rel, fullText, indent, patch.tags ?? []);
     if (e) edits.push(e);
   }
   if (patch.links !== undefined) {
@@ -309,6 +326,10 @@ interface RelationAstNode {
   source?: FqnRefLike;
   target?: FqnRefLike;
   title?: string;
+  /** Description written after the title */
+  description?: string;
+  /** Technology written after the description */
+  technology?: string;
   kind?: { $refText?: string };
   dotKind?: { kind?: { $refText?: string } };
   /** Tags written on the relation line, after the title */
@@ -451,6 +472,32 @@ function buildLabelEdit(rel: RelationAstNode, newLabel: string): TextEdit | null
   }
   // No existing title — insert right after the target reference.
   return { offset: afterTarget, end: afterTarget, newText: ` '${escapeString(newLabel)}'` };
+}
+
+/** Position of the description among the strings written after the target. */
+const INLINE_DESCRIPTION = 1;
+/** Position of the technology among the strings written after the target. */
+const INLINE_TECHNOLOGY = 2;
+
+/**
+ * Replace the `position`-th string written after the target of a relation
+ * (`a -> b 'title' 'description' 'technology'`).  The caller guarantees the
+ * string is there (the AST node carries its value).
+ */
+function buildInlineStringEdit(rel: RelationAstNode, position: number, value: string): TextEdit {
+  const cst = rel.$cstNode;
+  const targetCst = rel.target?.$cstNode;
+  if (cst && targetCst) {
+    let index = 0;
+    for (const leaf of collectLeaves(cst)) {
+      if (leaf.offset < targetCst.end) continue;
+      if (leaf.text === '{' || leaf.text.startsWith('#')) break;
+      if (!leaf.text.startsWith("'") && !leaf.text.startsWith('"')) continue;
+      if (index === position) return { offset: leaf.offset, end: leaf.end, newText: `'${escapeString(value)}'` };
+      index++;
+    }
+  }
+  throw new Error('internal: string written after the relation target not found');
 }
 
 /**

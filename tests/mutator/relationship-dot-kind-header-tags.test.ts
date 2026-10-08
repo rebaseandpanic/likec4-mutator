@@ -58,6 +58,10 @@ describe('relationship tags written on the relation line', () => {
     ["x -> y 'T' #a #b", [], "  x -> y 'T'\n"],
     ["x -> y 'T' #a {\n    description 'd'\n  }", ['b', 'c'], "  x -> y 'T' #b #c {\n    description 'd'\n  }\n"],
     ["x -> y 'T' #a {\n    description 'd'\n  }", [], "  x -> y 'T' {\n    description 'd'\n  }\n"],
+    // Tags in both places (a LikeC4 error): the body tags, ignored while the
+    // line has tags, would become the relationship's tags once those go.
+    ["x -> y 'T' #a {\n    #b\n    description 'd'\n  }", ['c'], "  x -> y 'T' #c {\n    description 'd'\n  }\n"],
+    ["x -> y 'T' #a {\n    #b\n    description 'd'\n  }", [], "  x -> y 'T' {\n    description 'd'\n  }\n"],
   ])('REPLACE tags of `%s` with %j in place', async (line, tags, expectedLine) => {
     const m = LikeC4Mutator.fromFiles(files(`  ${line}\n`));
     m.updateRelationship({ source: 'x', target: 'y' }, { tags });

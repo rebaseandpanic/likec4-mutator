@@ -114,13 +114,23 @@ export interface RelationshipInfo {
   sourceFqn: string;
   /** FQN of the target element */
   targetFqn: string;
-  /** Optional relationship title */
+  /**
+   * Title as written: the one after the target (an empty `''` included),
+   * otherwise the body `title` property (the last one), as LikeC4 reads it
+   */
   title?: string;
   /** Relationship kind as written: `app -[calls]-> api` or `app .calls api` */
   kind?: string;
-  /** Optional technology label */
+  /**
+   * Technology as written: the one after the description
+   * (`a -> b 'title' 'description' 'technology'`, an empty one included),
+   * otherwise the body `technology` property, as LikeC4 reads it
+   */
   technology?: string;
-  /** Optional description */
+  /**
+   * Description as written: the one after the title when non-empty,
+   * otherwise the body `description` property, as LikeC4 reads it
+   */
   description?: string;
   /**
    * Effective tags: the relationship's own — those written on the relation
@@ -150,7 +160,8 @@ export interface RelationshipInfo {
    * in the order LikeC4 merges them (files sorted as for
    * {@link ElementInfo.extendedBy}, then source order).  A block applies
    * when its endpoints (resolved to FQNs), kind, title and direction equal
-   * the relationship's: no kind matches no kind only; titles are compared
+   * the relationship's: no kind matches no kind only (a kind no
+   * specification declares counts as no kind); titles are compared
    * dedented and trimmed, a relationship without a title being compared with
    * the title of its kind's specification when that declares one; the
    * endpoints of a bidirectional relationship match in either order.  One

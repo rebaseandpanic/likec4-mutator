@@ -3,7 +3,7 @@ import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
 import { C4Query } from '../../src/query/query.js';
 import type { RelationshipInfo } from '../../src/query/types.js';
-import { expectRelationshipsAgreeWithLikeC4 } from '../helpers/likec4-model.js';
+import { buildLikeC4Model, expectRelationshipsAgreeWithLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * `extend a -> b { ... }` blocks add tags, links and metadata to existing
@@ -213,5 +213,64 @@ describe('C4Query without a workspace', () => {
     expect(r.tags).toEqual(['a', 'b']);
     expect(r.extendedBy).toHaveLength(1);
     expect(r.extendedBy[0].file).toBeUndefined();
+  });
+});
+
+describe('title written as an empty string after the target', () => {
+  // LikeC4 `parseBaseProps`: `override.title ?? bodyTitle` — an empty title
+  // after the target is the title; the body `title` is not read.
+  const FILES = {
+    'model.c4': `${SPEC}model {
+  x = service
+  y = service
+  x -> y '' {
+    title 'Body'
+  }
+  extend x -> y 'Body' { #a }
+  extend x -> y '' { #b }
+}
+`,
+  };
+
+  it('is reported as the title, consistently with the extend blocks that apply', async () => {
+    const [rel] = LikeC4Mutator.fromFiles(FILES).getRelationships();
+    expect(rel.title).toBe('');
+    expect(rel.tags).toEqual(['b']);
+    const reference = await buildLikeC4Model(FILES);
+    expect(reference.relations.map((r) => r.title)).toEqual(['']);
+    await expectRelationshipsAgreeWithLikeC4(FILES, [rel]);
+  });
+});
+
+describe('relationship kind the specification does not declare', () => {
+  // LikeC4 resolves the kind reference (`kind.ref?.name`): an undeclared kind
+  // does not resolve (a linking error) and the relationship and block count as
+  // without kind (`default`) when LikeC4 builds the model.
+  const model = (body: string) => ({
+    'model.c4': `${SPEC}model {\n  x = service\n  y = service\n${body}}\n`,
+  });
+
+  it.each([
+    ['relationship with -[kind]->', `  x -[unknown]-> y 'T'\n  extend x -> y 'T' { #a }\n`],
+    ['relationship with .kind', `  x .unknown y 'T'\n  extend x -> y 'T' { #a }\n`],
+    ['extend block', `  x -> y 'T'\n  extend x -[unknown]-> y 'T' { #a }\n`],
+    ['both', `  x -[unknown]-> y 'T'\n  extend x -[other]-> y 'T' { #a }\n`],
+  ])('matches like no kind: %s', async (_name, body) => {
+    const files = model(body);
+    const [rel] = LikeC4Mutator.fromFiles(files).getRelationships();
+    expect(rel.tags).toEqual(['a']);
+    const reference = await buildLikeC4Model(files);
+    expect(reference.errors.every((e) => /Could not resolve reference to RelationshipKind/.test(e))).toBe(true);
+    expect(reference.relations.map((r) => r.tags)).toEqual([['a']]);
+  });
+
+  it('a kind declared in another file still matches only that kind', async () => {
+    const files = {
+      'model.c4': `${SPEC}model {\n  x = service\n  y = service\n  x -[extra]-> y 'T'\n  extend x -> y 'T' { #a }\n  extend x -[extra]-> y 'T' { #b }\n}\n`,
+      'spec.c4': `specification {\n  relationship extra\n}\n`,
+    };
+    const rels = LikeC4Mutator.fromFiles(files).getRelationships();
+    expect(rels.map((r) => r.tags)).toEqual([['b']]);
+    await expectRelationshipsAgreeWithLikeC4(files, rels);
   });
 });

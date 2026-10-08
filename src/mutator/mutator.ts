@@ -17,6 +17,7 @@ import {
 import { buildRemovalEdit } from './cst-helpers.js';
 import { relationFingerprint, relationIdentity, type RelationIdentity } from '../query/relation-extends.js';
 import { removeIndent } from '../query/likec4-text.js';
+import { readContribution, type Decorations } from '../query/extend-merge.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, type TextEdit } from './text-edit.js';
@@ -446,6 +447,10 @@ export class LikeC4Mutator {
    * target, kind, title and direction.  When such a block would change, the
    * update is rejected before anything changes: it would change the other
    * relationship as well.
+   * A `label` that changes the identity is likewise rejected when the
+   * relationship's blocks would then also apply to another relationship with
+   * the new identity, or when blocks of the new identity contribute tags,
+   * links or metadata (they would start applying to this relationship).
    *
    * A `label`, `tags`, `links` or `metadata` update is rejected — before
    * anything is changed — while any loaded file has syntax errors (as
@@ -493,7 +498,9 @@ export class LikeC4Mutator {
     // no `extend` block applies to it.
     if (crossFile && relation.resolved) {
       const identity = relationIdentity(relation);
-      const newTitle = patch.label === undefined ? undefined : this.extendTitleAfterLabel(identity, patch.label);
+      const label = patch.label;
+      const newTitle = label === undefined ? undefined : this.extendTitleAfterLabel(identity, label);
+      const oldKey = relationFingerprint(this.workspace.effectiveIdentity(identity));
       const changedBlockFiles: string[] = [];
       for (const { file, node } of this.workspace.extendRelationBlocks(identity)) {
         // The mutator indexes every document under its file name.
@@ -504,13 +511,40 @@ export class LikeC4Mutator {
         changedBlockFiles.push(file);
         addEditGroup(editsByFile, file, blockEdits);
       }
+      const blockFiles = (files: string[]): string => [...new Set(files)].join(', ');
       if (changedBlockFiles.length > 0) {
-        const others = this.countRelationsSharing(identity, relation.node);
+        const others = this.countRelationsSharing(oldKey, relation.node);
         if (others > 0) {
           throw new Error(
-            `Cannot update relationship ${name}: its extend blocks (${[...new Set(changedBlockFiles)].join(', ')}) ` +
+            `Cannot update relationship ${name}: its extend blocks (${blockFiles(changedBlockFiles)}) ` +
               `would change, and each also applies to ${others} other relationship(s) with the same source, ` +
               `target, kind, title and direction`,
+          );
+        }
+      }
+      if (label !== undefined && newTitle !== undefined) {
+        // The new title gives the relationship another identity.  Its blocks
+        // move there and would also apply to the relationships that already
+        // have it; the blocks already there would apply to this one.
+        const newKey = relationFingerprint(
+          this.workspace.effectiveIdentity({ ...identity, title: removeIndent(label) }),
+        );
+        const others = this.countRelationsSharing(newKey, relation.node);
+        if (changedBlockFiles.length > 0 && others > 0) {
+          throw new Error(
+            `Cannot update relationship ${name}: its extend blocks (${blockFiles(changedBlockFiles)}) ` +
+              `would take the new title and also apply to ${others} other relationship(s) with the same ` +
+              `source, target, kind, title and direction`,
+          );
+        }
+        const destinationFiles = this.workspace
+          .extendRelationBlockList()
+          .filter(({ key, block }) => key === newKey && hasContributions(readContribution(block.node.body)))
+          .map(({ block }) => block.file ?? '');
+        if (destinationFiles.length > 0) {
+          throw new Error(
+            `Cannot update relationship ${name}: extend blocks (${blockFiles(destinationFiles)}) of the new ` +
+              `title would apply to it and change its tags, links or metadata`,
           );
         }
       }
@@ -707,11 +741,11 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Number of relationships, other than `node`, in any loaded file that the
-   * `extend` blocks of `identity` apply to as well.
+   * Number of relationships, other than `node`, in any loaded file whose
+   * effective fingerprint is `key`: the `extend` blocks of that fingerprint
+   * apply to them as well.
    */
-  private countRelationsSharing(identity: RelationIdentity, node: unknown): number {
-    const key = relationFingerprint(this.workspace.effectiveIdentity(identity));
+  private countRelationsSharing(key: string, node: unknown): number {
     let count = 0;
     for (const doc of this.documents.values()) {
       for (const rel of resolveRelations(doc.ast, this.workspace)) {
@@ -924,3 +958,7 @@ function isWithin(
   return inner.offset >= outer.offset && inner.end <= outer.end;
 }
 
+/** True when a body contributes tags, links or metadata. */
+function hasContributions(contribution: Decorations): boolean {
+  return contribution.tags !== undefined || contribution.links !== undefined || contribution.metadata !== undefined;
+}

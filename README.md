@@ -320,7 +320,7 @@ Updates fields on an existing relationship.  Required: `op`, `source`, `target`,
 
 | Field | Semantics |
 | --- | --- |
-| `label`, `description`, `technology` | REPLACE |
+| `label`, `description`, `technology` | REPLACE.  A description or technology written after the title (`a -> b 'title' 'description' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty description no longer overrides the body and is written into the body as well. |
 | `tags` | REPLACE.  `[]` clears all tags. |
 | `links` | REPLACE.  `[]` clears all links. |
 | `metadata` | MERGE with `null`-deletion (same as `updateElement`). |
@@ -456,8 +456,8 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | Property | Type | addRelationship | updateRelationship | DSL syntax |
 |----------|------|:---------------:|:------------------:|------------|
 | label | string | yes | yes (replace) | `-> target 'label'` |
-| description | string | yes | yes (replace) | `description 'text'` |
-| technology | string | yes | yes (replace) | `technology 'text'` |
+| description | string | yes | yes (replace) | `description 'text'` or `-> target 'label' 'description'` |
+| technology | string | yes | yes (replace) | `technology 'text'` or `-> target 'label' 'description' 'technology'` |
 | tags | string[] | yes | yes (replace) | `#tagname` |
 | links | {url, label?}[] | yes | yes (replace) | `link url 'label'` |
 | metadata | `Record<string, string \| string[]>` | yes | yes (merge, `null` deletes a key) | `metadata { key 'val' }` or `metadata { key ['v1', 'v2'] }` |
@@ -574,8 +574,8 @@ model {
 
 `getRelationships()` reports effective `tags`, `links` and `metadata`, `declared` and `extendedBy`, as for elements. LikeC4 1.59.4 decides which relationships a block applies to, and merges, as follows:
 
-- A block applies to every relationship with the same source and target (resolved to FQNs), kind, title and direction. No kind matches only relationships without a kind (`-[calls]->` and `.calls` are the same kind). Titles are compared dedented and trimmed; the title may be written after the target or as a `title` body property, and a relationship without a title is compared with the `title` of its kind's specification when that declares one. A bidirectional block (`extend b <-> a`) matches `a <-> b`; a directed block never matches a bidirectional relationship.
-- The relationship's own values come first — its tags are those written on the relation line (`a -> b 'x' #t`) or else those of its body — then every matching block in the order used for elements.
+- A block applies to every relationship with the same source and target (resolved to FQNs), kind, title and direction. No kind matches only relationships without a kind (`-[calls]->` and `.calls` are the same kind); a kind no specification declares counts as no kind, as LikeC4 resolves it (`kind` in `getRelationships()` still reports it as written). Titles are compared dedented and trimmed; the title may be written after the target or as a `title` body property, and a relationship without a title is compared with the `title` of its kind's specification when that declares one. A bidirectional block (`extend b <-> a`) matches `a <-> b`; a directed block never matches a bidirectional relationship.
+- The relationship's own values come first — its tags are those written on the relation line (`a -> b 'x' #t`) or else those of its body — then every matching block in the order used for elements. `updateRelationship` replaces tags where the relationship has them: on the relation line when it has any there (body tags in the same relationship, which LikeC4 reports as an error, are removed so they cannot take over), otherwise in the body.
 - `tags` and `metadata` merge as for elements. `links` differ: a block's link is skipped when a link with the same url and label is already present; the relationship's own duplicates are kept.
 - Spec defaults of a relationship kind (its tags and links) are not merged, neither for relationships nor for elements.
 
@@ -583,6 +583,7 @@ model {
 
 - The title identifies the relationship for its blocks, so a `label` that changes the title is written into every matching block as well (`extend api -[calls]-> db 'queries' { ... }`); otherwise they would stop applying.
 - A block applies to every relationship with the same identity (e.g. `a -> b 'x'` and `a -> b { title 'x' }`). When an update would change such a shared block, it is rejected before anything changes, because the other relationship would change too.
+- A `label` that changes the identity is rejected, before anything changes, when the relationship's blocks would then also apply to another relationship that already has the new identity, or when blocks of the new identity with tags, links or metadata exist (even if no relationship has it yet): they would start applying to the renamed relationship.
 - `removeRelationship` also removes the blocks that applied to the removed relationship and apply to no remaining one (they would match nothing). `removeElement` removes, besides those of the relationships it removes, every block whose source or target is in the removed subtree. Blocks that matched nothing before are left alone.
 
 ## How it works
