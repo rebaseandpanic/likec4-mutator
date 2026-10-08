@@ -58,21 +58,33 @@ export interface ElementInfo {
   /**
    * Title as LikeC4 reads it: the one written after the kind
    * (`name = kind 'title'`, an empty one included), otherwise the body
-   * `title` property (the last one)
+   * `title` property (the last one).  Normalized as LikeC4 does (see
+   * {@link ElementInfo.technology})
    */
   title?: string;
   /**
    * Summary as LikeC4 reads it: the one written after the title
    * (`name = kind 'title' 'summary'`) when non-empty, otherwise the body
-   * `summary` property (the last one)
+   * `summary` property (the last one).  Normalized as LikeC4 does (see
+   * {@link ElementInfo.technology})
    */
   summary?: string;
-  /** Description: the body `description` property (the last one) */
+  /**
+   * Description: the body `description` property (the last one).  Normalized
+   * as LikeC4 does (see {@link ElementInfo.technology})
+   */
   description?: string;
   /**
    * Technology as LikeC4 reads it: the one written after the summary
    * (`name = kind 'title' 'summary' 'technology'`, an empty one included),
-   * otherwise the body `technology` property (the last one)
+   * otherwise the body `technology` property (the last one).
+   *
+   * `title`, `summary`, `description` and `technology` are plain strings
+   * normalized as LikeC4 normalizes them: common indentation removed and
+   * trimmed (a technology written after the summary is also joined into one
+   * line), a Markdown string (`'''...'''`) read as its content, so a
+   * whitespace-only Markdown summary or description reads as `''`.  An empty
+   * Markdown `title` or `technology` is no value.
    */
   technology?: string;
   /**
@@ -129,21 +141,24 @@ export interface RelationshipInfo {
   /** FQN of the target element */
   targetFqn: string;
   /**
-   * Title as written: the one after the target (an empty `''` included),
-   * otherwise the body `title` property (the last one), as LikeC4 reads it
+   * Title: the one after the target (an empty `''` included), otherwise the
+   * body `title` property (the last one), as LikeC4 reads it.  Normalized as
+   * for {@link ElementInfo.title}
    */
   title?: string;
   /** Relationship kind as written: `app -[calls]-> api` or `app .calls api` */
   kind?: string;
   /**
-   * Technology as written: the one after the description
-   * (`a -> b 'title' 'description' 'technology'`, an empty one included),
-   * otherwise the body `technology` property, as LikeC4 reads it
+   * Technology: the one after the description
+   * (`a -> b 'title' 'description' 'technology'`, an empty one included,
+   * joined into one line), otherwise the body `technology` property, as
+   * LikeC4 reads it.  Normalized as for {@link ElementInfo.technology}
    */
   technology?: string;
   /**
-   * Description as written: the one after the title when non-empty,
-   * otherwise the body `description` property, as LikeC4 reads it
+   * Description: the one after the title when non-empty, otherwise the body
+   * `description` property, as LikeC4 reads it.  Normalized as for
+   * {@link ElementInfo.description}
    */
   description?: string;
   /**

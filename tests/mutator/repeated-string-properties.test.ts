@@ -173,7 +173,7 @@ describe('Markdown body strings', () => {
     expect(model.errors).toEqual([]);
     const expected = content((model.elements[fqn] as unknown as Record<string, Md>)[key]);
     expect(expected).toBeDefined();
-    expect(m.getElement(fqn)?.[key]?.trim()).toBe(expected);
+    expect(m.getElement(fqn)?.[key]).toBe(expected);
   });
 
   it('getRelationships reads a Markdown description', async () => {
@@ -181,6 +181,6 @@ describe('Markdown body strings', () => {
     const model = await buildLikeC4Model(m.serialize());
     const expected = content((model.relations[0] as unknown as Record<string, Md>)['description']);
     expect(expected).toBeDefined();
-    expect(m.getRelationships({ sourceFqn: 'x' })[0]?.description?.trim()).toBe(expected);
+    expect(m.getRelationships({ sourceFqn: 'x' })[0]?.description).toBe(expected);
   });
 });

@@ -434,6 +434,8 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | style | ElementStyle | yes | yes (merge per-field) | `style { shape ... }` |
 | metadata | `Record<string, string \| string[]>` | yes | yes (merge, `null` deletes a key) | `metadata { key 'val' }` or `metadata { key ['v1', 'v2'] }` |
 
+`getElement`, `listElements` and `getRelationships` report `title`, `summary`, `description` and `technology` as LikeC4 reads them: common indentation removed and trimmed, a technology written inline (`= kind 'Title' 'summary' 'technology'`, `-> target 'label' 'description' 'technology'`) joined into one line, a Markdown string (`'''...'''`) as its content. `summary '  text  '` reads as `'text'`; a whitespace-only Markdown summary or description reads as `''`; an empty Markdown `title` or `technology` is no value.
+
 ### Element style properties
 
 | Property | Values |

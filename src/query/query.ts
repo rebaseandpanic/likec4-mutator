@@ -4,6 +4,7 @@ import { mergeRelationContributions, relationIdentity } from './relation-extends
 import type { ElementInfo, ExtendContribution, RelationshipInfo, SourceRange, SpecificationInfo } from './types.js';
 import { mergeContributions, readContribution, readDeclared } from './extend-merge.js';
 import { relationDecorationSource, relationKind, type RelationNodeLike } from './relation-node.js';
+import { removeIndent, toSingleLine } from './likec4-text.js';
 
 /**
  * Minimal structural shape of the parsed LikeC4 document AST consumed by
@@ -155,44 +156,29 @@ export class C4Query {
     const node = entry.node;
     const cst = node.$cstNode;
 
-    let summary: string | undefined;
-    let description: string | undefined;
-    let technology: string | undefined;
-    let title: string | undefined;
-
     // Named body properties (ElementStringProperty nodes).  LikeC4 folds them
     // into an object, so of a repeated key the last declaration counts.
+    const body: Partial<Record<string, MarkdownOrString>> = {};
     if (node.body?.props) {
       for (const prop of node.body.props) {
         if (prop.$type !== 'ElementStringProperty') continue;
-        const value = extractStringValue(prop);
-        switch (prop.key) {
-          case 'summary':
-            summary = value;
-            break;
-          case 'description':
-            description = value;
-            break;
-          case 'technology':
-            technology = value;
-            break;
-          case 'title':
-            title = value;
-            break;
-        }
+        body[prop.key as string] = readMarkdownOrString(prop);
       }
     }
 
     // Positional props written after the kind: `name = kind 'title' 'summary'
     // 'technology'`.  LikeC4 (`parseBaseProps`) prefers them over the body: a
     // title and a technology whenever written (an empty one included), a
-    // summary when non-empty.
-    if (Array.isArray(node.props)) {
-      const [inlineTitle, inlineSummary, inlineTechnology] = node.props as unknown[];
-      if (typeof inlineTitle === 'string') title = inlineTitle;
-      if (typeof inlineSummary === 'string' && inlineSummary !== '') summary = inlineSummary;
-      if (typeof inlineTechnology === 'string') technology = inlineTechnology;
-    }
+    // summary when non-empty.  Values are normalized as LikeC4 does.
+    const [inlineTitle, inlineSummary, inlineTechnology] = (Array.isArray(node.props) ? node.props : []) as unknown[];
+    const title = typeof inlineTitle === 'string' ? removeIndent(inlineTitle) : markdownAsString(body['title']);
+    const summary =
+      typeof inlineSummary === 'string' && inlineSummary !== ''
+        ? removeIndent(inlineSummary)
+        : markdownOrString(body['summary']);
+    const description = markdownOrString(body['description']);
+    const technology =
+      typeof inlineTechnology === 'string' ? toSingleLine(inlineTechnology) : markdownAsString(body['technology']);
 
     // Tags / links / metadata: the declaration merged with every `extend`
     // block of the element, as LikeC4 does.
@@ -246,37 +232,28 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
   };
   const cst = item.$cstNode;
 
-  // The title written after the target (even an empty one), otherwise the
-  // body `title` (the last one), as LikeC4 `parseBaseProps` reads it.
-  let bodyTitle: string | undefined;
-  let technology: string | undefined;
-  let description: string | undefined;
-
-  // Named properties live in body.props as RelationStringProperty nodes
+  // Named properties live in body.props as RelationStringProperty nodes; of a
+  // repeated key the last declaration counts.
+  const body: Partial<Record<string, MarkdownOrString>> = {};
   if (item.body?.props) {
     for (const rawProp of item.body.props) {
       const prop = rawProp as { $type?: string; key?: string; value?: unknown };
-      if (prop.$type !== 'RelationStringProperty') continue;
-      const value = extractStringValue(prop);
-      switch (prop.key) {
-        case 'technology':
-          technology = value;
-          break;
-        case 'description':
-          description = value;
-          break;
-        case 'title':
-          if (value !== undefined) bodyTitle = value;
-          break;
-      }
+      if (prop.$type !== 'RelationStringProperty' || prop.key === undefined) continue;
+      const value = readMarkdownOrString(prop);
+      // A body title without a value does not replace an earlier one.
+      if (prop.key === 'title' && value === undefined) continue;
+      body[prop.key] = value;
     }
   }
-  const title = item.title ?? bodyTitle;
-  // Description and technology written after the title take precedence over
-  // the body (`parseBaseProps` overrides): a description when non-empty, a
-  // technology whenever written.
-  if (item.description) description = item.description;
-  if (item.technology !== undefined) technology = item.technology;
+  // As LikeC4 `parseBaseProps` reads them: the title written after the target
+  // (even an empty one), otherwise the body `title`; the description written
+  // after the title when non-empty, otherwise the body; the technology written
+  // after the description whenever written, otherwise the body.  Values are
+  // normalized as LikeC4 does.
+  const title = item.title !== undefined ? removeIndent(item.title) : markdownAsString(body['title']);
+  const description = item.description ? removeIndent(item.description) : markdownOrString(body['description']);
+  const technology =
+    item.technology !== undefined ? toSingleLine(item.technology) : markdownAsString(body['technology']);
 
   const kind = relationKind(item as RelationNodeLike);
   const decorationSource = relationDecorationSource(item as RelationNodeLike);
@@ -325,19 +302,41 @@ function toSourceRange(
     : { offset: 0, end: 0, line: 0, column: 0 };
 }
 
+/** A `MarkdownOrString` value: a plain string in `text` or a triple-quoted Markdown string in `markdown`. */
+interface MarkdownOrString {
+  text?: string;
+  markdown?: string;
+}
+
+/** The `MarkdownOrString` value of a body string property, if it has one. */
+function readMarkdownOrString(prop: unknown): MarkdownOrString | undefined {
+  const value = (prop as { value?: unknown }).value;
+  if (typeof value !== 'object' || value === null) return undefined;
+  const v = value as { text?: unknown; markdown?: unknown };
+  return {
+    ...(typeof v.text === 'string' && { text: v.text }),
+    ...(typeof v.markdown === 'string' && { markdown: v.markdown }),
+  };
+}
+
 /**
- * Extract the string value from a property node.
- * Body string properties store their value as `MarkdownOrString`: a plain
- * string in `text`, or a triple-quoted Markdown string in `markdown` (read as
- * its content, as LikeC4 does).
+ * A body `title` / `technology` as LikeC4 reads it
+ * (`removeIndent(parseMarkdownAsString(value))`): the Markdown content, or
+ * the plain string when the Markdown string is empty or absent, without
+ * indentation and trimmed.
  */
-function extractStringValue(prop: unknown): string | undefined {
-  const p = prop as { value?: string | { text?: string; markdown?: string; value?: string } };
-  if (typeof p.value === 'string') return p.value;
-  if (typeof p.value === 'object' && p.value) {
-    if (typeof p.value.text === 'string') return p.value.text;
-    if (typeof p.value.markdown === 'string') return p.value.markdown;
-    if (typeof p.value.value === 'string') return p.value.value;
-  }
-  return undefined;
+function markdownAsString(value: MarkdownOrString | undefined): string | undefined {
+  const text = value?.markdown || value?.text;
+  return text === undefined ? undefined : removeIndent(text);
+}
+
+/**
+ * A body `summary` / `description` as LikeC4 reads it
+ * (`parseMarkdownOrString`): the Markdown content, otherwise the plain
+ * string, without indentation and trimmed; the empty string for a value
+ * that holds neither.
+ */
+function markdownOrString(value: MarkdownOrString | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return removeIndent(value.markdown ?? value.text ?? '');
 }
