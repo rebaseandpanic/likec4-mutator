@@ -471,6 +471,55 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`.
 | head | normal, onormal, diamond, odiamond, crow, open, vee, dot, odot, none |
 | tail | Same as head |
 
+## `extend` blocks
+
+An element can get tags, links and metadata from `extend X { ... }` blocks, in the same or other files:
+
+```
+// base.c4
+model {
+  app = service 'App' {
+    #internal
+    metadata { owner 'team-a' }
+  }
+}
+
+// ext/ops.c4
+model {
+  extend app {
+    #critical
+    link https://runbooks.example.com/app 'Runbook'
+    metadata { owner 'ops' }
+  }
+}
+```
+
+### Reading
+
+`getElement` / `listElements` report the **effective** `tags`, `links` and `metadata` — what LikeC4 itself builds for the element — plus their provenance:
+
+```typescript
+const app = mutator.getElement('app')!;
+app.tags;        // ['internal', 'critical']
+app.links;       // [{ url: 'https://runbooks.example.com/app', label: 'Runbook' }]
+app.metadata;    // { owner: ['team-a', 'ops'] }
+app.declared;    // { tags: ['internal'], metadata: { owner: 'team-a' } } — the declaration body only
+app.extendedBy;  // [{ file: 'ext/ops.c4', sourceRange: {...}, tags: ['critical'], links: [...], metadata: { owner: 'ops' } }]
+```
+
+Merge rules (LikeC4 1.59.4):
+
+- The declaration body comes first, then every `extend` block of exactly this element — files ordered by path the way LikeC4 orders documents (natural and segment by segment: `a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`; independent of the order passed to `fromFiles`), then source order within a file.
+- `tags`: union without duplicates.
+- `links`: concatenated; duplicates are kept.
+- `metadata`: every value of a key is collected (a key repeated inside one block too); when a key appears in more than one body, duplicate values are dropped. A key with one value maps to a string — also when written as `key ['v1']` — otherwise to an array. `declared` and `extendedBy` keep the form as written.
+- String values are reported as written (LikeC4 additionally dedents and trims them).
+- `getElementSource` and `sourceRange` still refer to the declaration; each `extendedBy` entry carries the range of its block. Blocks that only declare nested elements, or nothing, are listed too.
+- File names must denote distinct paths: `fromFiles({ 'a.c4': ..., './a.c4': ... })` throws.
+- A standalone `new C4Query(ast)` merges only the `extend` blocks of that document and reports them without `file`; pass a `WorkspaceIndex` built from `{ file, ast }` documents for the whole project.
+- A workspace with syntax errors is read best effort: what the parser recovers is merged.
+- `extend a -> b { ... }` (extending a relationship) is not merged into `getRelationships()` yet.
+
 ## How it works
 
 1. **Parse** — `.c4` source → AST + CST via `@likec4/language-server` (Langium standalone, no LSP)

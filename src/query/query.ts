@@ -1,7 +1,7 @@
 import { buildFqnIndex, type FqnEntry } from './fqn.js';
 import { WorkspaceIndex, resolveRelations } from './workspace-index.js';
-import type { ElementInfo, RelationshipInfo, SpecificationInfo } from './types.js';
-import { readMetadataBlock } from '../mutator/metadata-ops.js';
+import type { ElementInfo, ExtendContribution, RelationshipInfo, SourceRange, SpecificationInfo } from './types.js';
+import { mergeContributions, readContribution, readDeclared } from './extend-merge.js';
 
 /**
  * Minimal structural shape of the parsed LikeC4 document AST consumed by
@@ -27,10 +27,13 @@ export class C4Query {
 
   /**
    * @param ast       - Root AST of the document to query
-   * @param workspace - Index of every document of the project, used to
-   *                    resolve relationship endpoints that refer to elements
-   *                    declared in other files.  Defaults to an index of
-   *                    `ast` alone.
+   * @param workspace - Index of every document of the project (must include
+   *                    `ast`), used to resolve relationship endpoints that
+   *                    refer to elements declared in other files and to merge
+   *                    the `extend` blocks of other files into element
+   *                    properties.  Defaults to an index of `ast` alone: then
+   *                    only the `extend` blocks of `ast` are merged and
+   *                    `ElementInfo.extendedBy[].file` is absent.
    */
   constructor(ast: LikeC4DocumentAst, workspace?: WorkspaceIndex) {
     this.ast = ast;
@@ -182,8 +185,18 @@ export class C4Query {
       }
     }
 
-    // Body-level decorations: tags / links / metadata
-    const decorations = extractBodyDecorations(node.body);
+    // Tags / links / metadata: the declaration merged with every `extend`
+    // block of the element, as LikeC4 does.
+    const blocks = this.workspace.extendBlocks(entry.fqn);
+    const effective = mergeContributions(
+      readContribution(node.body),
+      blocks.map((b) => readContribution(b.node.body)),
+    );
+    const extendedBy = blocks.map((b): ExtendContribution => ({
+      ...(b.file !== undefined && { file: b.file }),
+      sourceRange: toSourceRange(b.node.$cstNode),
+      ...readDeclared(b.node.body),
+    }));
 
     return {
       fqn: entry.fqn,
@@ -192,20 +205,15 @@ export class C4Query {
       title,
       description,
       technology,
-      tags: decorations.tags,
-      links: decorations.links,
-      metadata: decorations.metadata,
+      tags: effective.tags,
+      links: effective.links,
+      metadata: effective.metadata,
+      declared: readDeclared(node.body),
+      extendedBy,
       // Children declared in `extend` blocks of other documents count too.
       children: this.workspace.children(entry.fqn),
       parentFqn: entry.parentFqn,
-      sourceRange: cst
-        ? {
-            offset: cst.offset as number,
-            end: cst.end as number,
-            line: (cst.range?.start?.line ?? 0) as number,
-            column: (cst.range?.start?.character ?? 0) as number,
-          }
-        : { offset: 0, end: 0, line: 0, column: 0 },
+      sourceRange: toSourceRange(cst),
     };
   }
 }
@@ -249,7 +257,7 @@ function toRelationshipInfo(raw: unknown, sourceFqn: string, targetFqn: string):
   }
 
   const kind: string | undefined = item.kind?.$refText ?? undefined;
-  const decorations = extractBodyDecorations(item.body);
+  const decorations = readDeclared(item.body);
 
   return {
     sourceFqn,
@@ -261,90 +269,22 @@ function toRelationshipInfo(raw: unknown, sourceFqn: string, targetFqn: string):
     tags: decorations.tags,
     links: decorations.links,
     metadata: decorations.metadata,
-    sourceRange: cst
-      ? {
-          offset: cst.offset,
-          end: cst.end,
-          line: cst.range?.start?.line ?? 0,
-          column: cst.range?.start?.character ?? 0,
-        }
-      : { offset: 0, end: 0, line: 0, column: 0 },
+    sourceRange: toSourceRange(cst),
   };
 }
 
-/**
- * Extract body-level decorations (tags / links / metadata) from an element or
- * relation body node.  Returns undefined for fields that are absent so that
- * the caller can omit them from the resulting Info object.
- */
-function extractBodyDecorations(body: unknown): {
-  tags?: string[];
-  links?: Array<{ url: string; label?: string }>;
-  metadata?: Record<string, string | string[]>;
-} {
-  const out: {
-    tags?: string[];
-    links?: Array<{ url: string; label?: string }>;
-    metadata?: Record<string, string | string[]>;
-  } = {};
-  if (!body) return out;
-  const b = body as {
-    tags?: { values?: Array<{ $cstNode?: { text?: string }; $refText?: string }> };
-    props?: unknown[];
-  };
-
-  // Tags live on body.tags as a single Tags { values: TagRef[] } node.  The
-  // standalone parser does not resolve cross-references, so tag names are
-  // recovered from the leading-`#` CST text of each TagRef.
-  const tagsNode = b.tags;
-  if (tagsNode && Array.isArray(tagsNode.values) && tagsNode.values.length > 0) {
-    const tagNames: string[] = [];
-    for (const tagRef of tagsNode.values) {
-      const txt: string | undefined = tagRef?.$cstNode?.text ?? tagRef?.$refText;
-      if (typeof txt !== 'string') continue;
-      tagNames.push(txt.startsWith('#') ? txt.slice(1) : txt);
-    }
-    if (tagNames.length > 0) out.tags = tagNames;
-  }
-
-  // Links and metadata live on body.props
-  const links: Array<{ url: string; label?: string }> = [];
-  for (const rawProp of b.props ?? []) {
-    const prop = rawProp as {
-      $type?: string;
-      url?: string;
-      value?: { text?: string; value?: string };
-      $cstNode?: { text?: string };
-      title?: string | { text?: string; value?: string };
-      label?: string;
-    };
-    if (prop.$type === 'LinkProperty') {
-      const url: string | undefined = prop.url ?? prop.value?.text ?? prop.value?.value;
-      // Try CST text fallback when AST shape does not expose url directly:
-      let resolvedUrl = url;
-      if (!resolvedUrl && prop.$cstNode?.text) {
-        // CST text is "link <url> ['label']"
-        const m = /^link\s+(\S+)/.exec(prop.$cstNode.text);
-        if (m) resolvedUrl = m[1];
+/** Source range of a CST node; all zero when the node has none. */
+function toSourceRange(
+  cst: { offset: number; end: number; range?: { start?: { line?: number; character?: number } } } | undefined,
+): SourceRange {
+  return cst
+    ? {
+        offset: cst.offset,
+        end: cst.end,
+        line: cst.range?.start?.line ?? 0,
+        column: cst.range?.start?.character ?? 0,
       }
-      if (!resolvedUrl) continue;
-      const label: string | undefined =
-        (typeof prop.title === 'object' ? prop.title?.text ?? prop.title?.value : prop.title) ??
-        prop.label;
-      const linkEntry: { url: string; label?: string } = { url: resolvedUrl };
-      if (typeof label === 'string') linkEntry.label = label;
-      links.push(linkEntry);
-    }
-    if (prop.$type === 'MetadataBody') {
-      const metadata = readMetadataBlock(prop as Parameters<typeof readMetadataBlock>[0]);
-      if (Object.keys(metadata).length > 0) {
-        out.metadata = metadata;
-      }
-    }
-  }
-  if (links.length > 0) out.links = links;
-
-  return out;
+    : { offset: 0, end: 0, line: 0, column: 0 };
 }
 
 /**

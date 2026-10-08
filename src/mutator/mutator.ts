@@ -463,8 +463,9 @@ export class LikeC4Mutator {
    * are rebuilt together.
    */
   private rebuildQueries(): void {
-    const docs = [...this.documents.values()];
-    this.workspace = new WorkspaceIndex(docs.map((d) => d.ast));
+    this.workspace = new WorkspaceIndex(
+      [...this.documents].map(([file, doc]) => ({ file, ast: doc.ast })),
+    );
     this.queries = new Map();
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));

@@ -197,6 +197,11 @@ program
         if (el.parentFqn) process.stdout.write(`Parent:      ${el.parentFqn}\n`);
         if (el.children.length > 0) process.stdout.write(`Children:    ${el.children.join(', ')}\n`);
         if (el.tags && el.tags.length > 0) process.stdout.write(`Tags:        ${el.tags.join(', ')}\n`);
+        if (el.extendedBy.length > 0) {
+          // 1-based line of each `extend` block that contributes to the element.
+          const places = el.extendedBy.map((e) => `${e.file ?? '<unnamed>'}:${e.sourceRange.line + 1}`);
+          process.stdout.write(`Extended by: ${places.join(', ')}\n`);
+        }
       }
       process.exit(0);
     } catch (err) {
