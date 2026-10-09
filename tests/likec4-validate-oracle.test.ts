@@ -3,15 +3,20 @@
  * must reject exactly what `likec4 validate` of LikeC4 1.59.4 rejects, so
  * that a mutation result checked with it is known to pass the command.
  *
- * Each case is a small project.  The expected `<file>:<line>` locations (1-based)
- * of the errors were taken from running `likec4 validate --json` of the
- * `likec4@1.59.4` npm package on the same sources; an empty list means the
- * command exited with 0.  Cases cover valid sources, warnings only, syntax
- * errors, unresolved references, duplicates, view predicates and
- * `navigateTo`, dynamic and deployment views.
+ * Each case is a small project.  The expected `<file>:<line>` location (1-based)
+ * of every error, one entry per error, was taken from running
+ * `likec4 validate --json` of the `likec4@1.59.4` npm package (layout
+ * validation on) on the same sources; an empty list means the command exited
+ * with 0.  A line with two errors is listed twice, so losing one of them
+ * fails.  The messages are not compared (LikeC4's wording is not a contract
+ * of this library).  The locations are a snapshot of 1.59.4: when the
+ * `@likec4/language-server` dependency moves, re-run the command of the new
+ * version on these sources and update them.  Cases cover valid sources,
+ * warnings only, syntax errors, unresolved references, duplicates, view
+ * predicates and `navigateTo`, dynamic and deployment views.
  */
 import { describe, expect, it } from 'vitest';
-import { expectValidLikeC4, validateLikeC4 } from '../helpers/likec4-model.js';
+import { expectValidLikeC4, validateLikeC4 } from './helpers/likec4-model.js';
 
 const spec = `specification {
   element actor
@@ -272,12 +277,12 @@ model {
   },
 };
 
-/** Error locations `likec4 validate --json` reported per sample (lines converted to 1-based). */
+/** Error locations `likec4 validate --json` reported per sample, one per error (lines converted to 1-based). */
 const cliErrorLocations: Record<string, readonly string[]> = {
   'valid': [],
   'empty-file': [],
   'syntax-error': ['model.c4:21'],
-  'unresolved-relation-target': ['model.c4:20'],
+  'unresolved-relation-target': ['model.c4:20', 'model.c4:20'],
   'duplicate-element-name': ['model.c4:11', 'model.c4:20'],
   'duplicate-element-name-two-files': ['a.c4:11', 'b.c4:2'],
   'unknown-element-kind': ['model.c4:20'],
@@ -289,12 +294,12 @@ const cliErrorLocations: Record<string, readonly string[]> = {
   'extend-unknown-element': ['model.c4:20'],
   'duplicate-view-id': ['model.c4:20', 'model.c4:23'],
   'view-of-unknown-element': ['model.c4:20'],
-  'view-predicate-unknown-element': ['model.c4:21'],
-  'view-predicate-unknown-relation-endpoint': ['model.c4:21'],
+  'view-predicate-unknown-element': ['model.c4:21', 'model.c4:21'],
+  'view-predicate-unknown-relation-endpoint': ['model.c4:21', 'model.c4:21'],
   'navigate-to-unknown-view': ['model.c4:22'],
   'navigate-to-existing-view': [],
   'dynamic-view-valid': [],
-  'dynamic-view-unknown-element': ['model.c4:21'],
+  'dynamic-view-unknown-element': ['model.c4:21', 'model.c4:21'],
   'dynamic-view-step-without-model-relation': [],
   'dynamic-view-parent-child-step': ['model.c4:21'],
   'deployment-valid': [],
@@ -303,8 +308,8 @@ const cliErrorLocations: Record<string, readonly string[]> = {
   'deployment-instance-of-unknown': ['model.c4:21'],
   'deployment-unknown-node-kind': ['model.c4:20'],
   'deployment-duplicate-node-name': ['model.c4:20', 'model.c4:21'],
-  'deployment-view-includes-model-element-ref': ['model.c4:26'],
-  'deployment-relation-unknown': ['model.c4:23'],
+  'deployment-view-includes-model-element-ref': ['model.c4:26', 'model.c4:26'],
+  'deployment-relation-unknown': ['model.c4:23', 'model.c4:23'],
   'element-style-unknown-color': ['model.c4:22'],
   'relation-in-view-predicate-with-unknown-tag': ['model.c4:21'],
   'metadata-duplicate-key': [],
@@ -314,8 +319,9 @@ const cliErrorLocations: Record<string, readonly string[]> = {
 describe('validateLikeC4 agrees with likec4 validate', () => {
   it.each(Object.entries(cliErrorLocations))('%s', async (name, locations) => {
     const errors = await validateLikeC4(samples[name]!);
-    const reported = [...new Set(errors.map((e) => /^[^:]*:\d+/.exec(e)?.[0]))];
-    expect(reported).toEqual(locations);
+    // An error without a `<file>:<line>` prefix (a layout error) is kept whole, so it fails the comparison.
+    const reported = errors.map((e) => /^[^:]*:\d+(?=: )/.exec(e)?.[0] ?? e);
+    expect([...reported].sort()).toEqual([...locations].sort());
   });
 
   it('expectValidLikeC4 passes valid sources and fails invalid ones', async () => {

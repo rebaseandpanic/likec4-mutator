@@ -109,11 +109,22 @@ export async function buildLikeC4Model(files: Record<string, string>): Promise<L
  *   from the model (`Layout drift detected on view '...'`).  A view that
  *   graphviz fails to lay out is only logged, not reported.
  *
- * Both are done here the same way, with the same language services.  Errors
- * are `<file>:<line>: <message>` (1-based line, as in
- * {@link LikeC4ModelResult.errors}).  In-memory sources have no manual
- * layouts, so a drift cannot occur.  Not covered: project configuration files
- * (`likec4.config.json`) and `--file` filtering, which the tests do not use.
+ * Both are done here the same way, with the same language services: errors
+ * from `LanguageServices.getErrors()`, layout from
+ * `LanguageServices.diagrams()`, which resolves the project with
+ * `ensureProjectId` and then calls `Views.diagrams(projectId)` — the path the
+ * command takes through `LikeC4.diagrams(project)` without `--project`.
+ * Errors are `<file>:<line>: <message>` (1-based line, as in
+ * {@link LikeC4ModelResult.errors}).
+ *
+ * Limits.  The sources are one in-memory workspace folder, so there is one
+ * project and no project configuration (`likec4.config.json`, its `include` /
+ * `exclude`, multi-project `import`); `--project` and `--file` are not
+ * implemented.  The two layout branches are not exercised by any test: the
+ * language services are built with `NoLikeC4ManualLayouts`, so a drift cannot
+ * occur, and no fixture is known that makes `diagrams()` throw (a view that
+ * fails to lay out, e.g. a sequence view with nested actors, is only logged by
+ * both the command and this function).
  */
 export async function validateLikeC4(files: Record<string, string>): Promise<string[]> {
   const { services } = await buildWorkspace(files);
@@ -122,7 +133,7 @@ export async function validateLikeC4(files: Record<string, string>): Promise<str
   );
   const layout: string[] = [];
   try {
-    for (const view of await services.likec4.Views.diagrams()) {
+    for (const view of await services.likec4.LanguageServices.diagrams()) {
       if (view.drifts && view.drifts.length > 0) layout.push(`Layout drift detected on view '${view.id}'`);
     }
   } catch (e) {

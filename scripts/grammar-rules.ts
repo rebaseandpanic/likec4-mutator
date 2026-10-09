@@ -21,8 +21,14 @@
  * Document format.  A grammar row names its rule in backticks in the first
  * cell: `Rule` for the main row of the rule, `Rule` › ... for a sub-row (an
  * alternative, keyword, property or AST type of the rule).  The main row ends
- * its Notes cell with `<!-- grammar-hash: <fingerprint> -->`.  Other table
- * rows (e.g. constructs outside the grammar) are not checked.
+ * its Notes cell with `<!-- grammar-hash: <fingerprint> -->`.  The sections
+ * "Outside the grammar" and "Documented but not in LikeC4 <version>" hold
+ * tables of other shapes; they are checked for shape and known statuses only.
+ *
+ * What the check does NOT judge: whether a status is true of this library's
+ * code (`src/`), and whether syntax listed as not accepted is still rejected.
+ * A fingerprint changes with the grammar, never with `src/`.  Status truth is
+ * a review step (code reading or a probe); the success message says so.
  *
  * The grammar is taken from the language services of the installed package
  * (`likec4.Grammar`), never from this library's sources: the document is
@@ -276,18 +282,36 @@ function documentRows(lines: readonly string[]): DocRow[] {
   return rows;
 }
 
-/** Whether `token` is named in one of `spans`: as a whole word if it is an identifier, else as a substring. */
+/** Characters that can join a symbol keyword into a longer operator (`-` and `>` in `<->`, `]` in `]->`). */
+const OPERATOR_CHAR = String.raw`[^\sA-Za-z0-9_'"()]`;
+const WORD_CHAR = '[A-Za-z0-9_]';
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Whether `token` is named in one of `spans` as a whole token: not preceded or
+ * followed by a character that would make it part of a longer word or
+ * operator.  An identifier keyword needs word boundaries (`model` is not named
+ * by `models`); a symbol keyword needs operator boundaries (`->` is not named
+ * by `<->`, `]->` or `-[x]->`).  A keyword mixing both (`element.kind`) takes
+ * the boundary of the character at each end.
+ */
 function named(token: string, spans: readonly string[]): boolean {
-  if (/^[A-Za-z0-9_]+$/.test(token)) {
-    const word = new RegExp(`(?<![A-Za-z0-9_])${token}(?![A-Za-z0-9_])`);
-    return spans.some((s) => word.test(s));
-  }
-  return spans.some((s) => s.includes(token));
+  const first = token[0] ?? '';
+  const last = token[token.length - 1] ?? '';
+  const isWord = (c: string): boolean => /^[A-Za-z0-9_]$/.test(c);
+  const before = isWord(first) ? WORD_CHAR : OPERATOR_CHAR;
+  const after = isWord(last) ? WORD_CHAR : OPERATOR_CHAR;
+  const whole = new RegExp(`(?<!${before})${escapeRegExp(token)}(?!${after})`);
+  return spans.some((s) => whole.test(s));
 }
 
 /**
  * Problems of the document against the grammar, empty when it matches:
- * - the title must name the installed LikeC4 version, and every
+ * - the single `# ` title must name the installed LikeC4 version as a whole
+ *   version (`1.59.40` does not name `1.59.4`), and every
  *   `likec4-mutator X.Y.Z` must name the version in package.json;
  * - every parser rule has exactly one main row, every row names a rule of the
  *   grammar, no two rows have the same label;
@@ -295,19 +319,24 @@ function named(token: string, spans: readonly string[]): boolean {
  *   fails with "rule X changed"); sub-rows carry none;
  * - every keyword (brackets excepted), assigned feature and action-created AST
  *   type of a rule is named in backticks in the label or Notes of the rule's
- *   rows (identifiers as whole words, symbols as substrings), and every
+ *   rows as a whole token (`model` is not named by `models`, `->` not by
+ *   `<->` or `-[x]->`), and every
  *   action-created AST type that has no rule of its own has a sub-row whose
  *   label names it, under each rule that creates it;
  * - a rule no other rule calls (not the entry rule) says `Unused` in Notes;
  * - status cells are yes / partial / text / no / n/a, and a row with any
- *   status other than `no` has notes.
+ *   status other than `no` has notes;
+ * - every table has the expected shape and every row is checked
+ *   (`checkTables`).
  */
 function check(lines: readonly string[], ownVersion: string, version: string, grammar: Grammar): string[] {
   const problems: string[] = [];
 
-  const title = lines.find((l) => l.startsWith('# '));
-  if (title === undefined || !title.includes(version)) {
-    problems.push(`title does not name the installed LikeC4 ${version}: ${title ?? '(no "# " title)'}`);
+  const titles = lines.filter((l) => l.startsWith('# '));
+  const title = titles[0];
+  if (titles.length > 1) problems.push(`the document has ${titles.length} "# " titles, expected one`);
+  if (title === undefined || !versionToken(version).test(title)) {
+    problems.push(`title does not name the installed LikeC4 ${version} as a whole version: ${title ?? '(no "# " title)'}`);
   }
   lines.forEach((line, i) => {
     for (const m of line.matchAll(/likec4-mutator (\d+\.\d+\.\d+)/g)) {
@@ -382,6 +411,102 @@ function check(lines: readonly string[], ownVersion: string, version: string, gr
       problems.push(`rule ${rule.name}: no rule calls it, but its row does not say "Unused"`);
     }
   }
+  problems.push(...checkTables(lines, version));
+  return problems;
+}
+
+/** `version` as a whole version number: `1.59.4` matches in `LikeC4 1.59.4 DSL`, not in `1.59.40` or `11.59.4`. */
+function versionToken(version: string): RegExp {
+  return new RegExp(`(?<![0-9.])${escapeRegExp(version)}(?![0-9]|\\.[0-9])`);
+}
+
+const GRAMMAR_HEADER = ['Rule', 'DSL example', 'Read', 'Add', 'Update', 'Remove', 'Notes'] as const;
+
+/** A section of the document whose tables are not grammar rows and are checked by shape and status only. */
+interface ProseSection {
+  readonly heading: string;
+  readonly header: readonly string[];
+  readonly statusColumn: number;
+  readonly statusOk: (cell: string) => boolean;
+  readonly expected: string;
+}
+
+function proseSections(version: string): readonly ProseSection[] {
+  const outsideStatuses: ReadonlySet<string> = new Set(['yes', 'partial', 'no']);
+  return [
+    {
+      heading: '## Outside the grammar',
+      header: ['Topic', 'Status', 'Notes'],
+      statusColumn: 1,
+      statusOk: (cell) => outsideStatuses.has(cell),
+      expected: 'yes / partial / no',
+    },
+    {
+      heading: `## Documented but not in LikeC4 ${version}`,
+      header: ['Documented syntax', 'Where in the docs', version],
+      statusColumn: 2,
+      statusOk: (cell) => cell.startsWith('Parse error'),
+      expected: '"Parse error ..." (a row is syntax the installed grammar rejects)',
+    },
+  ];
+}
+
+/**
+ * Shape of every table: a grammar table (header `Rule | DSL example | ...`)
+ * outside the prose sections, whose every row is labelled `Rule` or
+ * `Rule` › ...; inside each prose section (up to the next `## ` heading) only
+ * tables with that section's header, each row with as many non-empty cells and
+ * a known status.  Both prose sections must exist and have rows.  Unknown
+ * tables and unlabelled rows fail, so no row escapes every check.
+ */
+function checkTables(lines: readonly string[], version: string): string[] {
+  const problems: string[] = [];
+  const sections = proseSections(version);
+  const rowsIn = new Map<string, number>(sections.map((s) => [s.heading, 0]));
+  let section: ProseSection | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (line.startsWith('## ')) {
+      section = sections.find((s) => s.heading === line.trimEnd());
+      continue;
+    }
+    if (!line.trimStart().startsWith('|') || (lines[i - 1] ?? '').trimStart().startsWith('|')) continue;
+
+    // First line of a table: header, then a separator, then rows.
+    const header = tableCells(line);
+    const expected = section?.header ?? GRAMMAR_HEADER;
+    const where = section === undefined ? 'a grammar section' : `"${section.heading}"`;
+    if (header.join(' | ') !== expected.join(' | ')) {
+      problems.push(`line ${i + 1}: table header "${header.join(' | ')}" in ${where}, expected "${expected.join(' | ')}"`);
+    }
+    const separator = tableCells(lines[i + 1] ?? '');
+    if (separator.length !== expected.length || !separator.every((c) => /^:?-{3,}:?$/.test(c))) {
+      problems.push(`line ${i + 2}: expected a table separator row with ${expected.length} cells`);
+    }
+    for (let j = i + 2; (lines[j] ?? '').trimStart().startsWith('|'); j++) {
+      const cells = tableCells(lines[j] ?? '');
+      if (section === undefined) {
+        if (!ROW_LABEL.test(cells[0] ?? '')) {
+          problems.push(`line ${j + 1}: grammar row label "${cells[0] ?? ''}" is not \`Rule\` or \`Rule\` › ...`);
+        }
+        continue;
+      }
+      rowsIn.set(section.heading, (rowsIn.get(section.heading) ?? 0) + 1);
+      if (cells.length !== expected.length) {
+        problems.push(`line ${j + 1}: ${cells.length} cells in ${where}, expected ${expected.length}`);
+        continue;
+      }
+      if (cells.some((c) => c === '')) problems.push(`line ${j + 1}: empty cell in ${where}`);
+      const status = cells[section.statusColumn] ?? '';
+      if (!section.statusOk(status)) {
+        problems.push(`line ${j + 1}: status "${status}" in ${where}, expected ${section.expected}`);
+      }
+    }
+  }
+  for (const s of sections) {
+    if (!lines.some((l) => l.trimEnd() === s.heading)) problems.push(`missing section "${s.heading}"`);
+    else if ((rowsIn.get(s.heading) ?? 0) === 0) problems.push(`section "${s.heading}" has no table rows`);
+  }
   return problems;
 }
 
@@ -430,7 +555,12 @@ function main(argv: readonly string[]): number {
     const subRows = rows.filter((r) => r.sub !== undefined).length;
     console.log(
       `${docPath}: all ${grammar.parser.length} parser rules of LikeC4 ${version} have a current main row ` +
-        `(${rows.length} rows, ${subRows} sub-rows); every keyword, assigned feature and action type is named`,
+        `(${rows.length} rows, ${subRows} sub-rows); every keyword, assigned feature and action type is named; ` +
+        `"Outside the grammar" and "Documented but not in LikeC4 ${version}" are well-formed with known statuses`,
+    );
+    console.log(
+      `${docPath}: NOT judged: whether any status is true against src/ (grammar rows, Outside the grammar) ` +
+        `and whether the documented syntax is still rejected — that is a review step, by code reading or a probe`,
     );
     return 0;
   }
