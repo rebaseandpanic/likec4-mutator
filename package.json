@@ -21,7 +21,7 @@
     "build": "tsdown",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit && tsc -p scripts"
   },
   "dependencies": {
     "@likec4/core": "^1.59.4",

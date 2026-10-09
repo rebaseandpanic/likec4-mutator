@@ -424,6 +424,8 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`. Required: `o
 
 ## Supported properties reference
 
+Which LikeC4 DSL constructs the library can read, add, update and remove — rule by rule of the LikeC4 grammar, including what is not supported yet — is listed in the [DSL coverage matrix](docs/likec4-coverage.md).
+
 ### Element properties
 
 | Property | Type | addElement | updateElement | DSL syntax |
