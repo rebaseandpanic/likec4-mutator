@@ -49,13 +49,10 @@ export interface LikeC4ModelResult {
 }
 
 const WORKSPACE = 'file:///test/workspace';
+const SOURCES = '/test/workspace/src/';
 
-/**
- * Build the LikeC4 model of `files` (file name → source).  File names are
- * resolved below one workspace folder, so they order exactly as LikeC4 orders
- * documents of a project.
- */
-export async function buildLikeC4Model(files: Record<string, string>): Promise<LikeC4ModelResult> {
+/** LikeC4 language services with `files` loaded and built, validation included. */
+async function buildWorkspace(files: Record<string, string>) {
   const services = createLanguageServices({ ...NoFileSystem, ...NoLikeC4ManualLayouts }).likec4;
   const folder = { name: 'test', uri: WORKSPACE };
   services.shared.workspace.WorkspaceManager.initialize({
@@ -75,12 +72,21 @@ export async function buildLikeC4Model(files: Record<string, string>): Promise<L
     return document;
   });
   await services.shared.workspace.DocumentBuilder.build(documents, { validation: true });
+  return { services, documents };
+}
 
+/**
+ * Build the LikeC4 model of `files` (file name → source).  File names are
+ * resolved below one workspace folder, so they order exactly as LikeC4 orders
+ * documents of a project.
+ */
+export async function buildLikeC4Model(files: Record<string, string>): Promise<LikeC4ModelResult> {
+  const { services, documents } = await buildWorkspace(files);
   const format = (onlyErrors: boolean): string[] =>
     documents.flatMap((d) =>
       (d.diagnostics ?? [])
         .filter((x) => !onlyErrors || x.severity === 1)
-        .map((x) => `${d.uri.path.slice(`/test/workspace/src/`.length)}:${x.range.start.line + 1}: ${x.message}`),
+        .map((x) => `${d.uri.path.slice(SOURCES.length)}:${x.range.start.line + 1}: ${x.message}`),
     );
   const diagnostics = format(false);
   const errors = format(true);
@@ -88,6 +94,46 @@ export async function buildLikeC4Model(files: Record<string, string>): Promise<L
   const elements = (model?.$data?.elements ?? {}) as unknown as Record<string, LikeC4ModelElement>;
   const relations = Object.values(model?.$data?.relations ?? {}) as unknown as LikeC4ModelRelation[];
   return { diagnostics, errors, elements, relations };
+}
+
+/**
+ * What `likec4 validate` of LikeC4 1.59.4 reports for `files`, in process:
+ * an empty array means the command would exit with 0.
+ *
+ * The command (`validate` in `likec4/dist/cli/index.mjs`) loads the
+ * workspace, builds every document with validation, and fails on
+ * - every diagnostic of severity error in a source file
+ *   (`LikeC4.getErrors()`); warnings, hints and infos never fail it;
+ * - unless `--no-layout` is given: an exception while laying out the views
+ *   (`Layout validation failed: ...`) and a view whose manual layout drifted
+ *   from the model (`Layout drift detected on view '...'`).  A view that
+ *   graphviz fails to lay out is only logged, not reported.
+ *
+ * Both are done here the same way, with the same language services.  Errors
+ * are `<file>:<line>: <message>` (1-based line, as in
+ * {@link LikeC4ModelResult.errors}).  In-memory sources have no manual
+ * layouts, so a drift cannot occur.  Not covered: project configuration files
+ * (`likec4.config.json`) and `--file` filtering, which the tests do not use.
+ */
+export async function validateLikeC4(files: Record<string, string>): Promise<string[]> {
+  const { services } = await buildWorkspace(files);
+  const errors = services.likec4.LanguageServices.getErrors().map(
+    (e) => `${e.sourceFsPath.slice(SOURCES.length)}:${e.line + 1}: ${e.message}`,
+  );
+  const layout: string[] = [];
+  try {
+    for (const view of await services.likec4.Views.diagrams()) {
+      if (view.drifts && view.drifts.length > 0) layout.push(`Layout drift detected on view '${view.id}'`);
+    }
+  } catch (e) {
+    layout.push(`Layout validation failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return [...errors, ...layout];
+}
+
+/** Assert that `files` pass `likec4 validate` of LikeC4 1.59.4 — see {@link validateLikeC4}. */
+export async function expectValidLikeC4(files: Record<string, string>): Promise<void> {
+  expect(await validateLikeC4(files)).toEqual([]);
 }
 
 /** Effective values of an element as the library reports them. */
