@@ -686,6 +686,17 @@ model {
 - A `label` that changes the identity is rejected, before anything changes, when the relationship's blocks would then also apply to another relationship that already has the new identity, or when blocks of the new identity with tags, links or metadata exist (even if no relationship has it yet): they would start applying to the renamed relationship.
 - `removeRelationship` also removes the blocks that applied to the removed relationship and apply to no remaining one (they would match nothing). `removeElement` removes, besides those of the relationships it removes, every block whose source or target is in the removed subtree. Blocks that matched nothing before are left alone.
 
+## Slashes in titles
+
+In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.
+
+```typescript
+mutator.addView({ id: 'costs', type: 'element', target: 'app', title: 'Cost \\/ Benefit' }); // view "Cost / Benefit", no folder
+mutator.addView({ id: 'prod', type: 'element', target: 'app', title: 'Deployment / Prod' });  // view "Prod" in folder "Deployment"
+```
+
+`getElement().title` reports such a title with `/` (`'Cost / Benefit'`), as LikeC4's model does; write `\/` again when passing it back as a title that should not create a folder.
+
 ## Line endings
 
 Text the library writes into a file uses that file's line ending — the one of its first line break (`\r\n` or `\n`; `\n` when the file has none).  Text kept from the file is never changed, so a file that already mixes line endings stays mixed.

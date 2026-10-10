@@ -93,7 +93,7 @@ export function generateElement(opts: GenerateElementOpts): string {
   );
 
   let result = `${indent}${name} = ${kind}`;
-  if (title) result += ` '${escapeString(title)}'`;
+  if (title) result += ` '${escapeTitle(title)}'`;
 
   if (hasBody) {
     result += ' {\n';
@@ -334,7 +334,7 @@ export function generateView(opts: GenerateViewOpts): string {
 
   let result = header + ' {\n';
   // Title must be declared inside the body (not inline) per the LikeC4 grammar.
-  if (title) result += `${innerIndent}title '${escapeString(title)}'\n`;
+  if (title) result += `${innerIndent}title '${escapeTitle(title)}'\n`;
   if (effectiveIncludes) {
     for (const inc of effectiveIncludes) {
       result += `${innerIndent}include ${inc}\n`;
@@ -360,6 +360,21 @@ const LINE_BREAK = /\r\n|\r|\n/;
  */
 export function escapeString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r\n|[\r\n\t]/g, ' ');
+}
+
+/**
+ * Escape a view or element title for a LikeC4 single-quoted string, like
+ * {@link escapeString} except that `\/` is written as is.
+ *
+ * In a title, `/` separates view folders and `\/` is a literal slash
+ * (LikeC4 docs, "Organize views"); LikeC4 reads a title's `\/` from the
+ * source text unchanged (`unescapeKeepingSlash`), so a title value takes
+ * that notation: `'Cost \/ Benefit'` is one title, `'Deployment / Prod'` the
+ * view `Prod` in the folder `Deployment`.  Every other backslash is escaped,
+ * so the title LikeC4 reads is exactly the value given.
+ */
+export function escapeTitle(s: string): string {
+  return s.replace(/\\(?!\/)/g, '\\\\').replace(/'/g, "\\'").replace(/\r\n|[\r\n\t]/g, ' ');
 }
 
 /**

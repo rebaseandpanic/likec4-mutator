@@ -17,6 +17,7 @@ import {
   generateMetadataBlock,
   elementStyleEntries,
   escapeString,
+  escapeTitle,
   formatLinkUrl,
   formatTag,
   type ElementStyle,
@@ -436,7 +437,7 @@ export function clearExtendContributionsEdits(
  * case in the grammar).
  */
 function buildTitleEdits(node: AstElementNode, newTitle: string): TextEdit[] {
-  const newText = `'${escapeString(newTitle)}'`;
+  const newText = `'${escapeTitle(newTitle)}'`;
   const edits: TextEdit[] = [];
 
   const kindCst = node.kind?.$refNode;

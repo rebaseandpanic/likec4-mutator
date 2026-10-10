@@ -46,13 +46,24 @@ export interface LikeC4ModelResult {
   elements: Record<string, LikeC4ModelElement>;
   /** Computed relations, in the order of the model. */
   relations: LikeC4ModelRelation[];
+  /** Computed views by id: the title LikeC4 shows and the folder path the title puts the view in (`''` for none). */
+  views: Record<string, { title: string | null; folder: string }>;
 }
+
+/** Project configuration for {@link buildLikeC4Model}, as in `likec4.config.json`. */
+export interface LikeC4ProjectOptions {
+  /** LikeC4's `implicitViews` setting: generate a view for every element without one. */
+  implicitViews?: boolean;
+}
+
+/** Project name used when {@link LikeC4ProjectOptions} are given. */
+const PROJECT = 'test';
 
 const WORKSPACE = 'file:///test/workspace';
 const SOURCES = '/test/workspace/src/';
 
 /** LikeC4 language services with `files` loaded and built, validation included. */
-async function buildWorkspace(files: Record<string, string>) {
+async function buildWorkspace(files: Record<string, string>, project?: LikeC4ProjectOptions) {
   const services = createLanguageServices({ ...NoFileSystem, ...NoLikeC4ManualLayouts }).likec4;
   const folder = { name: 'test', uri: WORKSPACE };
   services.shared.workspace.WorkspaceManager.initialize({
@@ -62,6 +73,12 @@ async function buildWorkspace(files: Record<string, string>) {
     workspaceFolders: [folder],
   });
   await services.shared.workspace.WorkspaceManager.initializeWorkspace([folder]);
+  if (project) {
+    await services.shared.workspace.ProjectsManager.registerProject({
+      config: { name: PROJECT, ...project },
+      folderUri: URI.parse(WORKSPACE),
+    });
+  }
 
   const documents = Object.entries(files).map(([name, text]) => {
     const document = services.shared.workspace.LangiumDocumentFactory.fromString(
@@ -78,10 +95,15 @@ async function buildWorkspace(files: Record<string, string>) {
 /**
  * Build the LikeC4 model of `files` (file name → source).  File names are
  * resolved below one workspace folder, so they order exactly as LikeC4 orders
- * documents of a project.
+ * documents of a project.  With `project`, the folder is registered as a
+ * project with that configuration (as a `likec4.config.json` would);
+ * without it, the files form LikeC4's default project.
  */
-export async function buildLikeC4Model(files: Record<string, string>): Promise<LikeC4ModelResult> {
-  const { services, documents } = await buildWorkspace(files);
+export async function buildLikeC4Model(
+  files: Record<string, string>,
+  project?: LikeC4ProjectOptions,
+): Promise<LikeC4ModelResult> {
+  const { services, documents } = await buildWorkspace(files, project);
   const format = (onlyErrors: boolean): string[] =>
     documents.flatMap((d) =>
       (d.diagnostics ?? [])
@@ -90,10 +112,14 @@ export async function buildLikeC4Model(files: Record<string, string>): Promise<L
     );
   const diagnostics = format(false);
   const errors = format(true);
-  const model = await services.likec4.ModelBuilder.computeModel();
+  const model = project
+    ? await services.likec4.ModelBuilder.computeModel(PROJECT as Parameters<typeof services.likec4.ModelBuilder.computeModel>[0])
+    : await services.likec4.ModelBuilder.computeModel();
   const elements = (model?.$data?.elements ?? {}) as unknown as Record<string, LikeC4ModelElement>;
   const relations = Object.values(model?.$data?.relations ?? {}) as unknown as LikeC4ModelRelation[];
-  return { diagnostics, errors, elements, relations };
+  const views: LikeC4ModelResult['views'] = {};
+  for (const view of model?.views() ?? []) views[view.id] = { title: view.title, folder: view.folder.path };
+  return { diagnostics, errors, elements, relations, views };
 }
 
 /**
