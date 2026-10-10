@@ -4,7 +4,8 @@
  * operate on offsets, raw text, and minimal AST shapes.
  */
 import type { TextEdit } from './text-edit.js';
-import { escapeString, formatLinkUrl } from './codegen.js';
+import type { BodyInsertions } from './body-layout.js';
+import { escapeString, formatLinkUrl, formatTag } from './codegen.js';
 
 /**
  * Minimal shape of a Langium CST node: composite nodes carry `content`,
@@ -45,23 +46,9 @@ function lastNonHiddenLeaf(node: CstNodeLike): CstNodeLike | null {
 }
 
 /**
- * Return the insertion offset to use when adding new content immediately
- * before the closing `}` at `closingBraceOffset`.  Walks back past whitespace
- * to the preceding newline, so the caller can splice in `\n<content>` while
- * leaving the brace's indentation intact.
- */
-export function insertionPointBeforeBrace(fullText: string, closingBraceOffset: number): number {
-  let i = closingBraceOffset - 1;
-  while (i >= 0 && (fullText[i] === ' ' || fullText[i] === '\t')) {
-    i--;
-  }
-  if (i >= 0 && fullText[i] === '\n') return i;
-  return closingBraceOffset;
-}
-
-/**
- * Expand a `[offset, end)` range to consume the leading newline + indent
- * preceding `offset` and (optionally) the trailing newline at `end`.
+ * Expand a `[offset, end)` range to consume the leading line break + indent
+ * preceding `offset` and (optionally) the trailing line break at `end`
+ * (`\n` or `\r\n`).
  *
  * Intended for REPLACEMENTS whose new text brings its own leading and
  * trailing newlines (default: both surrounding newlines are consumed).  Do
@@ -81,10 +68,11 @@ export function expandRangeToConsumeSurroundingNewlines(
   let j = newOffset - 1;
   while (j >= 0 && (fullText[j] === ' ' || fullText[j] === '\t')) j--;
   if (j >= 0 && fullText[j] === '\n') {
-    newOffset = j;
+    newOffset = j > 0 && fullText[j - 1] === '\r' ? j - 1 : j;
   }
-  if (consumeTrailing && fullText[newEnd] === '\n') {
-    newEnd += 1;
+  if (consumeTrailing) {
+    if (fullText.startsWith('\r\n', newEnd)) newEnd += 2;
+    else if (fullText[newEnd] === '\n') newEnd += 1;
   }
   return { offset: newOffset, end: newEnd };
 }
@@ -217,68 +205,19 @@ export interface BodyOwnerNode {
 }
 
 /**
- * Build a TextEdit that splices a new property snippet into an existing body
- * so that it lands BEFORE any child elements.  The LikeC4 grammar requires
- * `(properties* tags*) children*` ordering — inserting properties after
- * children produces a parse error.
- *
- * `snippet` is one or more complete, indented lines ending with `\n`.
- * The returned edit is always a zero-width insertion, so several property
- * insertions produced by one update compose without overlapping.
- *
- * - No children: the snippet is inserted at `closingBrace` (unchanged
- *   historical behaviour).
- * - First child starts its own line: the snippet is inserted at the start
- *   of that line, above the child.
- * - First child shares its line with preceding code (e.g. `{ child = x }`):
- *   the snippet is inserted on new lines between that code and the child;
- *   the child follows the last inserted property on its line.
- */
-export function buildInsertBeforeChildrenEdit(
-  node: BodyOwnerNode,
-  fullText: string,
-  closingBrace: number,
-  snippet: string,
-): TextEdit {
-  const atBrace: TextEdit = { offset: closingBrace, end: closingBrace, newText: snippet };
-  const children = node.body?.elements;
-  if (!children || children.length === 0) return atBrace;
-
-  let firstOffset = Infinity;
-  for (const child of children) {
-    const off = child.$cstNode?.offset;
-    if (typeof off === 'number' && off < firstOffset) firstOffset = off;
-  }
-  if (!Number.isFinite(firstOffset) || firstOffset >= closingBrace) return atBrace;
-
-  let i = firstOffset;
-  while (i > 0 && (fullText[i - 1] === ' ' || fullText[i - 1] === '\t')) i--;
-  if (i > 0 && fullText[i - 1] === '\n') {
-    return { offset: i, end: i, newText: snippet };
-  }
-  // Zero-width insertion just before the whitespace preceding the child, so
-  // that several property insertions in one update compose without
-  // overlapping.  The snippet's final newline is dropped: the original
-  // whitespace (or a single space when there is none) separates the last
-  // inserted property from the child.
-  const body = snippet.endsWith('\n') ? snippet.slice(0, -1) : snippet;
-  const separator = i === firstOffset ? ' ' : '';
-  return { offset: i, end: i, newText: '\n' + body + separator };
-}
-
-/**
- * Build a TextEdit that inserts a generated snippet just before the closing `}`
- * of `node.body`.  If the node has no body block yet, one is created on the
- * same line as the node and the snippet is placed inside it.
+ * Build a TextEdit that creates a body holding `snippet` for a node without
+ * one, or — when the node has a body — hand the snippet to `inserts` as a
+ * property (placed before nested declarations, see {@link BodyInsertions})
+ * and return null.
  *
  * The `snippetFn` receives the inner indent string (parent indent + one level)
- * and must return the text to insert (including a trailing newline).
+ * and must return the text to insert (complete lines, each ending with `\n`).
  */
 export function buildInsertBodySnippet(
   node: BodyOwnerNode,
-  fullText: string,
   indent: string,
   snippetFn: (innerIndent: string) => string,
+  inserts: BodyInsertions,
 ): TextEdit | null {
   const innerIndent = indent + '  ';
 
@@ -290,16 +229,16 @@ export function buildInsertBodySnippet(
     return { offset: cst.end, end: cst.end, newText: insertion };
   }
 
-  const closingBrace = findClosingBraceOffset(node.body.$cstNode);
-  return buildInsertBeforeChildrenEdit(node, fullText, closingBrace, snippetFn(innerIndent));
+  inserts.addProperty(snippetFn(innerIndent));
+  return null;
 }
 
 /**
  * Build the TextEdits that replace all existing `link <url> [label]`
  * properties with a new set of links.  When `links` is an empty array all
  * existing links are removed.  When there are no existing links and `links`
- * is non-empty the new links are inserted into the body (before any child
- * elements), creating a body block when absent.
+ * is non-empty the new links are handed to `inserts` (placed before any
+ * child elements), or a body block holding them is created when absent.
  *
  * Each existing link is edited individually: the first one is replaced by
  * the new links and every other one is deleted.  Anything declared between
@@ -313,6 +252,7 @@ export function buildReplaceLinksEdit(
   fullText: string,
   indent: string,
   links: Array<{ url: string; label?: string }>,
+  inserts: BodyInsertions,
 ): TextEdit[] {
   const linkText = (lnk: { url: string; label?: string }) => {
     const escaped = lnk.label ? ` '${escapeString(lnk.label)}'` : '';
@@ -329,8 +269,11 @@ export function buildReplaceLinksEdit(
 
   if (existing.length === 0) {
     if (links.length === 0) return [];
-    const insert = buildInsertBodySnippet(node, fullText, indent, (ii) =>
-      links.map((lnk) => `${ii}${linkText(lnk)}\n`).join(''),
+    const insert = buildInsertBodySnippet(
+      node,
+      indent,
+      (ii) => links.map((lnk) => `${ii}${linkText(lnk)}\n`).join(''),
+      inserts,
     );
     return insert ? [insert] : [];
   }
@@ -357,4 +300,22 @@ export function buildReplaceLinksEdit(
     }
   }
   return edits;
+}
+
+/**
+ * Replace a body's tag block (`#a #b`, possibly over several lines) with
+ * `tags` (non-empty), keeping its place and what surrounds it.  When the
+ * block starts its line, every tag gets a line of its own at the block's
+ * indentation; otherwise the tags replace it on its line, separated by a
+ * space.  A comment after the block stays where it is.
+ */
+export function buildReplaceTagsInPlaceEdit(
+  fullText: string,
+  tagsCst: { offset: number; end: number },
+  tags: string[],
+): TextEdit {
+  const lineStart = fullText.lastIndexOf('\n', tagsCst.offset - 1) + 1;
+  const leading = fullText.substring(lineStart, tagsCst.offset);
+  const separator = /^[ \t]*$/.test(leading) ? '\n' + leading : ' ';
+  return { offset: tagsCst.offset, end: tagsCst.end, newText: tags.map((t) => formatTag(t)).join(separator) };
 }

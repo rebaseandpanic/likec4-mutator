@@ -20,14 +20,13 @@ import {
   formatTag,
   type ElementStyle,
 } from './codegen.js';
+import { BodyInsertions } from './body-layout.js';
 import {
-  findClosingBraceOffset,
-  buildInsertBeforeChildrenEdit,
-  insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
   buildRemovalEdit,
   buildReplaceLinksEdit as buildReplaceLinksEditShared,
+  buildReplaceTagsInPlaceEdit,
   collectLeaves,
   type BodyOwnerNode,
 } from './cst-helpers.js';
@@ -101,7 +100,8 @@ export interface AddElementOpts {
  * Build a TextEdit that inserts a new element inside a parent element's body,
  * or at model level when `parentFqn` is null/empty.
  *
- * The new element is inserted just before the closing `}` of the target block.
+ * The new element goes on its own line at the end of the target block (a
+ * block written on one line is spread over several, see {@link BodyInsertions}).
  *
  * @param doc       - Parsed document
  * @param parentFqn - FQN of the container element, or empty/null for model-level
@@ -116,9 +116,7 @@ export function addElementEdit(
   const { ast, fullText } = doc;
   const index = buildFqnIndex(ast);
 
-  let closingBraceOffset: number;
-  let innerIndent: string;
-
+  let inserts: BodyInsertions;
   if (parentFqn) {
     const entry = index.get(parentFqn);
     if (!entry) {
@@ -128,27 +126,20 @@ export function addElementEdit(
     if (!parentNode.body?.$cstNode) {
       throw new Error(`Parent element '${parentFqn}' has no body`);
     }
-    closingBraceOffset = findClosingBraceOffset(parentNode.body.$cstNode);
-    // Inner indent = parent element indent + one level
-    innerIndent = getNodeIndent(parentNode, fullText) + '  ';
+    inserts = BodyInsertions.forBody(parentNode, fullText, getNodeIndent(parentNode, fullText));
   } else {
     // Model level: first model block
     const model = ast.models?.[0];
     if (!model?.$cstNode) {
       throw new Error('No model block found in document');
     }
-    closingBraceOffset = findClosingBraceOffset(model.$cstNode);
-    innerIndent = '  ';
+    inserts = BodyInsertions.forBlock(model.$cstNode, fullText, getNodeIndent(model, fullText));
   }
 
-  const snippet = generateElement({ indent: innerIndent, ...opts });
-  const insertAt = insertionPointBeforeBrace(fullText, closingBraceOffset);
-  // The closing brace line (indent + }) must be preserved after the insertion.
-  // We extract the brace line (from insertAt to closingBraceOffset+1) and rebuild it.
-  const braceLine = fullText.substring(insertAt, closingBraceOffset + 1);
-  const newText = '\n' + snippet + braceLine;
-
-  return { offset: insertAt, end: closingBraceOffset + 1, newText };
+  inserts.append(generateElement({ indent: inserts.innerIndent, ...opts }) + '\n');
+  const [edit] = inserts.apply([]);
+  if (!edit) throw new Error('internal: no edit for the new element');
+  return edit;
 }
 
 /**
@@ -219,34 +210,38 @@ export function updateElementEdit(
     return edits;
   }
 
-  // Body exists — emit per-field edits.
+  if (!node.body?.$cstNode) return edits;
+
+  // Body exists — emit per-field edits.  New lines are collected in
+  // `inserts` and placed once all edits are known.
+  const inserts = BodyInsertions.forBody(node, fullText, getNodeIndent(node, fullText));
 
   // Handle body string properties: summary / description / technology
   for (const key of ['summary', 'description', 'technology'] as const) {
     const value = patch[key];
     if (value === undefined) continue;
-    edits.push(...buildBodyPropEdits(node, fullText, key, value));
+    edits.push(...buildBodyPropEdits(node, key, value, inserts));
   }
 
   // Handle tags — REPLACE semantics (v0.4.0 BREAKING change): every existing
   // tag in the body is removed, and the supplied set is inserted right after
   // the opening `{`.  An empty array clears all tags.
   if (patch.tags !== undefined) {
-    const tagEdit = buildReplaceTagsEdit(node, fullText, patch.tags);
+    const tagEdit = buildReplaceTagsEdit(node, fullText, patch.tags, inserts);
     if (tagEdit) edits.push(tagEdit);
   }
 
   // Handle links — replace ALL existing link lines, or insert if none exist.
   // Semantics: updateElement with links = "replace links entirely".
   if (patch.links !== undefined) {
-    edits.push(...buildReplaceLinksEdit(node, fullText, patch.links));
+    edits.push(...buildReplaceLinksEdit(node, fullText, patch.links, inserts));
   }
 
   // Handle style — MERGE per-field (v0.4.0 BREAKING change): each provided
   // field overwrites the corresponding existing value; absent fields are
   // preserved.  An empty patch object is a no-op.
   if (patch.style !== undefined && Object.keys(patch.style).length > 0) {
-    const styleEdit = buildReplaceStyleEdit(node, fullText, patch.style);
+    const styleEdit = buildReplaceStyleEdit(node, fullText, patch.style, inserts);
     if (styleEdit) edits.push(styleEdit);
   }
 
@@ -254,10 +249,10 @@ export function updateElementEdit(
   // (string / string[]) or deletes (null); keys absent from the patch are
   // preserved.  An empty patch is a no-op.
   if (patch.metadata !== undefined && Object.keys(patch.metadata).length > 0) {
-    edits.push(...buildReplaceMetadataEdit(node, fullText, patch.metadata));
+    edits.push(...buildReplaceMetadataEdit(node, fullText, patch.metadata, inserts));
   }
 
-  return edits;
+  return inserts.apply(edits);
 }
 
 /**
@@ -410,17 +405,19 @@ export function clearExtendContributionsEdits(
   const { fullText } = doc;
   const edits: TextEdit[] = [];
   if (!node.body?.$cstNode) return edits;
+  // Clearing never inserts; the collector only satisfies the helpers.
+  const inserts = BodyInsertions.forBody(node, fullText, getNodeIndent(node, fullText));
   if (clear.tags) {
-    const tagEdit = buildReplaceTagsEdit(node, fullText, []);
+    const tagEdit = buildReplaceTagsEdit(node, fullText, [], inserts);
     if (tagEdit) edits.push(tagEdit);
   }
   if (clear.links) {
-    edits.push(...buildReplaceLinksEdit(node, fullText, []));
+    edits.push(...buildReplaceLinksEdit(node, fullText, [], inserts));
   }
   if (clear.metadataKeys.length > 0) {
     edits.push(...buildStripMetadataKeysEdits(node, fullText, new Set(clear.metadataKeys)));
   }
-  return edits;
+  return inserts.apply(edits);
 }
 
 // ---------------------------------------------------------------------------
@@ -513,9 +510,9 @@ function buildInlineElementStringEdit(node: AstElementNode, position: number, va
  */
 function buildBodyPropEdits(
   node: AstElementNode,
-  fullText: string,
   key: 'summary' | 'description' | 'technology',
   value: string,
+  inserts: BodyInsertions,
 ): TextEdit[] {
   const newValueText = `'${escapeString(value)}'`;
 
@@ -535,14 +532,11 @@ function buildBodyPropEdits(
     );
   }
 
-  // Body exists but property is missing — insert before the closing `}`
-  // (or, when the body has child elements, before the first child, to keep
-  // the LikeC4 grammar `(properties* tags*) children*` ordering valid).
-  const closingBrace = findClosingBraceOffset(node.body.$cstNode);
-  const indent = getNodeIndent(node, fullText);
-  const innerIndent = indent + '  ';
-  const snippet = `${innerIndent}${key} ${newValueText}\n`;
-  return [buildInsertBeforeChildrenEdit(node, fullText, closingBrace, snippet)];
+  // Body exists but property is missing — a new property line, placed before
+  // the first child element when there is one, to keep the LikeC4 grammar
+  // `(properties* tags*) children*` ordering valid.
+  inserts.addProperty(`${inserts.innerIndent}${key} ${newValueText}\n`);
+  return [];
 }
 
 /**
@@ -554,9 +548,10 @@ function buildReplaceLinksEdit(
   node: AstElementNode,
   fullText: string,
   links: Array<{ url: string; label?: string }>,
+  inserts: BodyInsertions,
 ): TextEdit[] {
   const indent = getNodeIndent(node, fullText);
-  return buildReplaceLinksEditShared(node, fullText, indent, links);
+  return buildReplaceLinksEditShared(node, fullText, indent, links, inserts);
 }
 
 /**
@@ -573,15 +568,14 @@ function buildReplaceStyleEdit(
   node: AstElementNode,
   fullText: string,
   patch: ElementStyle,
+  inserts: BodyInsertions,
 ): TextEdit | null {
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';
 
   const existingStyle = node.body?.props?.find((p) => p.$type === 'ElementStyleProperty');
   if (!existingStyle?.$cstNode) {
-    return buildInsertBodySnippet(node, fullText, indent, (ii) =>
-      generateStyleBlock(patch, ii),
-    );
+    return buildInsertBodySnippet(node, indent, (ii) => generateStyleBlock(patch, ii), inserts);
   }
 
   const existing = readElementStyleProps(existingStyle, fullText);
@@ -649,9 +643,10 @@ function buildReplaceMetadataEdit(
   node: AstElementNode,
   fullText: string,
   patch: MetadataPatch,
+  inserts: BodyInsertions,
 ): TextEdit[] {
   const indent = getNodeIndent(node, fullText);
-  return buildReplaceMetadataEditOnNode(node, fullText, indent, patch);
+  return buildReplaceMetadataEditOnNode(node, fullText, indent, patch, inserts);
 }
 
 /**
@@ -659,9 +654,11 @@ function buildReplaceMetadataEdit(
  *
  * - `tags === []` and an existing tag block is present → delete the block.
  * - `tags === []` and no existing block → no-op.
- * - `tags.length > 0` and no existing block → insert `#tag` lines right after
- *   the opening `{` (tags must precede property declarations per the grammar).
- * - `tags.length > 0` and an existing block → replace the existing block in-place.
+ * - `tags.length > 0` and no existing block → `#tag` lines handed to
+ *   `inserts` to open the body (tags must precede property declarations per
+ *   the grammar).
+ * - `tags.length > 0` and an existing block → replace the existing block in
+ *   place (see {@link buildReplaceTagsInPlaceEdit}).
  *
  * If the element has no body at all, one is created with the tags inside.
  */
@@ -669,6 +666,7 @@ function buildReplaceTagsEdit(
   node: AstElementNode,
   fullText: string,
   tags: string[],
+  inserts: BodyInsertions,
 ): TextEdit | null {
   const indent = getNodeIndent(node, fullText);
   const innerIndent = indent + '  ';
@@ -684,35 +682,24 @@ function buildReplaceTagsEdit(
     | undefined;
   const existingTagsCst = body?.tags?.$cstNode;
 
-  // Build the replacement snippet (without leading newline — that is added by
-  // the splice context where appropriate).
-  const tagLines = tags.map((t) => `${innerIndent}${formatTag(t)}`).join('\n');
-
   // Case 1: no existing tag block.
   if (!existingTagsCst) {
     if (tags.length === 0) return null;
+    const tagLines = tags.map((t) => `${innerIndent}${formatTag(t)}\n`).join('');
     // No body — wrap the tag lines into a fresh body block.
     if (!node.body?.$cstNode) {
       const cst = node.$cstNode;
       if (!cst) return null;
-      const insertion = ' {\n' + tagLines + '\n' + `${indent}}`;
-      return { offset: cst.end, end: cst.end, newText: insertion };
+      return { offset: cst.end, end: cst.end, newText: ' {\n' + tagLines + `${indent}}` };
     }
-    // Body exists — insert right after the opening `{` so the tags stay
-    // before any property declarations (grammar requirement).
-    const bodyCst = node.body.$cstNode;
-    const openingBrace = bodyCst.offset;
-    if (fullText[openingBrace] !== '{') {
-      const kindText = node.kind?.$refText;
-      const ctx = kindText ? ` (element kind=${kindText})` : '';
-      throw new Error(`Expected opening brace at body CST offset${ctx}`);
-    }
-    const insertAt = openingBrace + 1;
-    return { offset: insertAt, end: insertAt, newText: '\n' + tagLines + '\n' };
+    // Body exists — the tags open it, before any property declaration
+    // (grammar requirement).
+    inserts.prepend(tagLines);
+    return null;
   }
 
   // Case 2: existing tag block.  Clearing deletes it without joining the
-  // neighbouring lines; replacing swaps it for the new tag lines.
+  // neighbouring lines; replacing swaps it for the new tags.
   if (tags.length === 0) {
     const { offset, end, newText } = buildRemovalEdit(
       fullText,
@@ -721,11 +708,5 @@ function buildReplaceTagsEdit(
     );
     return { offset, end, newText };
   }
-  const { offset, end } = expandRangeToConsumeSurroundingNewlines(
-    fullText,
-    existingTagsCst.offset,
-    existingTagsCst.end,
-  );
-  return { offset, end, newText: '\n' + tagLines + '\n' };
+  return buildReplaceTagsInPlaceEdit(fullText, existingTagsCst, tags);
 }
-

@@ -16,6 +16,7 @@
  * attributes the patch does not touch are copied from the source verbatim.
  */
 import type { TextEdit } from './text-edit.js';
+import type { BodyInsertions } from './body-layout.js';
 import { removeIndent } from '../query/likec4-text.js';
 import { formatMetadataValue, generateMetadataBlock, validateMetadataKey } from './codegen.js';
 import {
@@ -174,7 +175,8 @@ export function collectMetadataUpserts(patch: MetadataPatch): MetadataMap {
  *  - When the node has no `metadata { ... }` block and the patch only
  *    deletes keys, returns no edit.
  *  - When the node has no metadata block but the patch has at least one
- *    upsert, a fresh block is inserted before the closing brace.
+ *    upsert, a fresh block is handed to `inserts` (or a body holding it is
+ *    created when the node has none).
  *  - When the first block holds a patched key or the patch has an upsert,
  *    the first block is edited attribute by attribute: a patched key is
  *    replaced in place at its first occurrence (later occurrences are
@@ -196,6 +198,7 @@ export function collectMetadataUpserts(patch: MetadataPatch): MetadataMap {
  * @param fullText  - Full source text
  * @param indent    - Indent of the bodyOwner declaration line
  * @param patch     - Per-key upsert / null-delete map
+ * @param inserts   - Insertions into the body of `bodyOwner` (a new block goes there)
  * @returns Non-overlapping edits (empty when nothing changes)
  */
 export function buildReplaceMetadataEditOnNode(
@@ -203,6 +206,7 @@ export function buildReplaceMetadataEditOnNode(
   fullText: string,
   indent: string,
   patch: MetadataPatch,
+  inserts: BodyInsertions,
 ): TextEdit[] {
   const innerIndent = indent + '  ';
   const entryIndent = innerIndent + '  ';
@@ -227,9 +231,7 @@ export function buildReplaceMetadataEditOnNode(
   // Case 1: no existing metadata block.  Pure deletes are no-ops.
   if (!first) {
     if (!hasUpserts) return [];
-    const edit = buildInsertBodySnippet(bodyOwner, fullText, indent, (ii) =>
-      generateMetadataBlock(upserts, ii),
-    );
+    const edit = buildInsertBodySnippet(bodyOwner, indent, (ii) => generateMetadataBlock(upserts, ii), inserts);
     return edit ? [edit] : [];
   }
 

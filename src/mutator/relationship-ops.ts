@@ -17,13 +17,13 @@ import {
   formatTag,
   type RelationshipStyle,
 } from './codegen.js';
+import { BodyInsertions } from './body-layout.js';
 import {
-  findClosingBraceOffset,
-  insertionPointBeforeBrace,
   expandRangeToConsumeSurroundingNewlines,
   buildRemovalEdit,
   buildInsertBodySnippet,
   buildReplaceLinksEdit,
+  buildReplaceTagsInPlaceEdit,
   collectLeaves,
   type BodyOwnerNode,
 } from './cst-helpers.js';
@@ -34,8 +34,8 @@ import {
 } from './metadata-ops.js';
 
 /**
- * Build a TextEdit that inserts a new relationship at model level,
- * appended just before the model block's closing `}`.
+ * Build a TextEdit that inserts a new relationship at model level, on its
+ * own line at the end of the first model block.
  *
  * @param doc    - Parsed document
  * @param source - Source element identifier (local name or FQN)
@@ -64,11 +64,9 @@ export function addRelationshipEdit(
     throw new Error('No model block found in document');
   }
 
-  const closingBrace = findClosingBraceOffset(model.$cstNode);
-  const indent = '  ';
-
+  const inserts = BodyInsertions.forBlock(model.$cstNode, fullText, getNodeIndent(model, fullText));
   const snippet = generateRelationship({
-    indent,
+    indent: inserts.innerIndent,
     source,
     target,
     label,
@@ -79,11 +77,10 @@ export function addRelationshipEdit(
     metadata: opts?.metadata,
     style: opts?.style,
   });
-  const insertAt = insertionPointBeforeBrace(fullText, closingBrace);
-  const braceLine = fullText.substring(insertAt, closingBrace + 1);
-  const newText = '\n' + snippet + braceLine;
-
-  return { offset: insertAt, end: closingBrace + 1, newText };
+  inserts.append(snippet + '\n');
+  const [edit] = inserts.apply([]);
+  if (!edit) throw new Error('internal: no edit for the new relationship');
+  return edit;
 }
 
 /**
@@ -281,29 +278,35 @@ export function updateRelationshipEdit(
     return edits;
   }
 
-  // Body exists — emit per-field edits.
+  if (!rel.body?.$cstNode) return edits;
+
+  // Body exists — emit per-field edits.  New lines are collected in
+  // `inserts` and placed once all edits are known.
+  const inserts = BodyInsertions.forBody(rel as BodyOwnerNode, fullText, indent);
   if (patch.description !== undefined) {
-    edits.push(...buildRelationStringPropEdits(rel, indent, 'description', patch.description));
+    edits.push(...buildRelationStringPropEdits(rel, 'description', patch.description, inserts));
   }
   if (patch.technology !== undefined) {
-    edits.push(...buildRelationStringPropEdits(rel, indent, 'technology', patch.technology));
+    edits.push(...buildRelationStringPropEdits(rel, 'technology', patch.technology, inserts));
   }
   if (patch.tags !== undefined || clearBodyTags) {
-    const e = buildRelationReplaceTagsEdit(rel, fullText, indent, patch.tags ?? []);
+    const e = buildRelationReplaceTagsEdit(rel, fullText, patch.tags ?? [], inserts);
     if (e) edits.push(e);
   }
   if (patch.links !== undefined) {
-    edits.push(...buildReplaceLinksEdit(rel as BodyOwnerNode, fullText, indent, patch.links));
+    edits.push(...buildReplaceLinksEdit(rel as BodyOwnerNode, fullText, indent, patch.links, inserts));
   }
   if (patch.metadata !== undefined && Object.keys(patch.metadata).length > 0) {
-    edits.push(...buildReplaceMetadataEditOnNode(rel as BodyOwnerNode, fullText, indent, patch.metadata));
+    edits.push(
+      ...buildReplaceMetadataEditOnNode(rel as BodyOwnerNode, fullText, indent, patch.metadata, inserts),
+    );
   }
   if (patch.style !== undefined && Object.keys(patch.style).length > 0) {
-    const e = buildReplaceRelationStyleEdit(rel, fullText, indent, patch.style);
+    const e = buildReplaceRelationStyleEdit(rel, fullText, indent, patch.style, inserts);
     if (e) edits.push(e);
   }
 
-  return edits;
+  return inserts.apply(edits);
 }
 
 // ---------------------------------------------------------------------------
@@ -508,9 +511,9 @@ function buildInlineStringEdit(rel: RelationAstNode, position: number, value: st
  */
 function buildRelationStringPropEdits(
   rel: RelationAstNode,
-  indent: string,
   key: 'description' | 'technology',
   value: string,
+  inserts: BodyInsertions,
 ): TextEdit[] {
   const newValueText = `'${escapeString(value)}'`;
   const replacements: TextEdit[] = [];
@@ -527,15 +530,8 @@ function buildRelationStringPropEdits(
       'internal: buildRelationStringPropEdits called without body — caller should have routed via the combined-insert path',
     );
   }
-  const innerIndent = indent + '  ';
-  const closingBrace = findClosingBraceOffset(rel.body.$cstNode);
-  return [
-    {
-      offset: closingBrace,
-      end: closingBrace,
-      newText: `${innerIndent}${key} ${newValueText}\n`,
-    },
-  ];
+  inserts.addProperty(`${inserts.innerIndent}${key} ${newValueText}\n`);
+  return [];
 }
 
 /**
@@ -557,36 +553,22 @@ function buildReplaceHeaderTagsEdit(
 }
 
 /**
- * Replace (or insert / clear) the tags block on a Relation.  Tags live on
- * `body.tags` as a single `Tags` node.  Empty array clears all tags.
+ * Replace (or insert / clear) the tags block in the body of a Relation.
+ * Tags live on `body.tags` as a single `Tags` node.  Empty array clears all
+ * tags; new tags are handed to `inserts` to open the body.
  */
 function buildRelationReplaceTagsEdit(
   rel: RelationAstNode,
   fullText: string,
-  indent: string,
   tags: string[],
+  inserts: BodyInsertions,
 ): TextEdit | null {
-  const innerIndent = indent + '  ';
-  const tagLines = tags.map((t) => `${innerIndent}${formatTag(t)}`).join('\n');
-
   const existingTagsCst = rel.body?.tags?.$cstNode;
 
   if (!existingTagsCst) {
     if (tags.length === 0) return null;
-    if (!rel.body?.$cstNode) {
-      throw new Error(
-        'internal: buildRelationReplaceTagsEdit called without body — caller should have routed via the combined-insert path',
-      );
-    }
-    const bodyCst = rel.body.$cstNode;
-    const openingBrace = bodyCst.offset;
-    if (fullText[openingBrace] !== '{') {
-      const targetText = (rel.target as { value?: { $refText?: string } } | undefined)?.value
-        ?.$refText;
-      const ctx = targetText ? ` (relation -> ${targetText})` : '';
-      throw new Error(`Expected opening brace at relation body CST offset${ctx}`);
-    }
-    return { offset: openingBrace + 1, end: openingBrace + 1, newText: '\n' + tagLines + '\n' };
+    inserts.prepend(tags.map((t) => `${inserts.innerIndent}${formatTag(t)}\n`).join(''));
+    return null;
   }
 
   if (tags.length === 0) {
@@ -597,12 +579,7 @@ function buildRelationReplaceTagsEdit(
     );
     return { offset, end, newText };
   }
-  const { offset, end } = expandRangeToConsumeSurroundingNewlines(
-    fullText,
-    existingTagsCst.offset,
-    existingTagsCst.end,
-  );
-  return { offset, end, newText: '\n' + tagLines + '\n' };
+  return buildReplaceTagsInPlaceEdit(fullText, existingTagsCst, tags);
 }
 
 /**
@@ -615,13 +592,12 @@ function buildReplaceRelationStyleEdit(
   fullText: string,
   indent: string,
   patch: RelationshipStyle,
+  inserts: BodyInsertions,
 ): TextEdit | null {
   const innerIndent = indent + '  ';
   const existingStyle = rel.body?.props?.find((p) => p.$type === 'RelationStyleProperty');
   if (!existingStyle?.$cstNode) {
-    return buildInsertBodySnippet(rel as BodyOwnerNode, fullText, indent, (ii) =>
-      generateRelationshipStyleBlock(patch, ii),
-    );
+    return buildInsertBodySnippet(rel as BodyOwnerNode, indent, (ii) => generateRelationshipStyleBlock(patch, ii), inserts);
   }
 
   const existing = readRelationStyleProps(existingStyle, fullText);

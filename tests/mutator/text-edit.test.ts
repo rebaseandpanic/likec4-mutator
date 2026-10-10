@@ -99,4 +99,23 @@ describe('applyEdits', () => {
     // The documented (not necessarily desired) result:
     expect(applyEdits(source, edits)).toBe('aXYZe');
   });
+
+  it('puts insertions at the start of a replaced range before the replacement, in list order', () => {
+    // The replacement is listed between the two insertions; either way the
+    // inserted text must survive and precede the replacement's text.
+    const edits: TextEdit[] = [
+      { offset: 1, end: 1, newText: '1' },
+      { offset: 1, end: 3, newText: 'R' },
+      { offset: 1, end: 1, newText: '2' },
+    ];
+    expect(applyEdits('abcde', edits)).toBe('a12Rde');
+  });
+
+  it('puts an insertion at the end of a replaced range after the replacement', () => {
+    const edits: TextEdit[] = [
+      { offset: 3, end: 3, newText: '!' },
+      { offset: 1, end: 3, newText: 'R' },
+    ];
+    expect(applyEdits('abcde', edits)).toBe('aR!de');
+  });
 });
