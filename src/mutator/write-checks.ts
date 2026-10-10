@@ -18,6 +18,7 @@ import {
   grammarKeywords,
   isDeclarableName,
   isLikeC4Id,
+  containsComment,
   isReferenceForm,
   libraryIconNames,
   parseAutoLayout,
@@ -270,6 +271,9 @@ export function checkStyle(
     }
     if (typeof value !== 'string') throw new InvalidWriteError(path, `${quote(value)} is not a string`);
     if (value === '') continue;
+    if (containsComment(value)) {
+      throw new InvalidWriteError(path, `${quote(value)} contains a comment; expected the style value alone`);
+    }
     const property = parseStyleProperty(target, key, value);
     if (!property) throw new InvalidWriteError(path, `${quote(value)} is not ${expectedStyleValue(key)}`);
     checkParsedStyleValue(property, key, value, workspace, path);

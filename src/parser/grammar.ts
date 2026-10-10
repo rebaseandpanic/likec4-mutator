@@ -99,7 +99,9 @@ const INCLUDE_RULE_TYPE: Record<IncludeViewType, string> = {
  * errors and adds no further rule, property, step, view or top-level block.
  * Comma-separated predicates (`a, b`) form one rule.  This guards against an
  * expression such as `* exclude x` or `*\n autoLayout LeftRight`, which is
- * valid LikeC4 but would write more than the one include rule asked for.
+ * valid LikeC4 but would write more than the one include rule asked for.  A
+ * comment after the predicates (`* // every element`) is accepted: the rule is
+ * written on a line of its own, so the comment ends with it.
  */
 export function isSingleIncludeRule(expression: string, type: IncludeViewType): boolean {
   const source = `views {\n${VIEW_KEYWORD[type]} probe {\ninclude ${expression}\n}\n}\n`;
@@ -220,6 +222,8 @@ export interface AutoLayoutValue {
  * not exactly one `autoLayout` rule of the grammar (`ViewRuleAutoLayout:
  * 'autoLayout' direction=ViewLayoutDirection (rankSep=Number
  * nodeSep=Number?)?`) — e.g. an unknown direction or anything after it.
+ * A trailing comment is accepted: the directive is written on a line of its
+ * own, so the comment ends with it.
  */
 export function parseAutoLayout(value: string): AutoLayoutValue | undefined {
   const document = parseClean(`views {\nview probe {\nautoLayout ${value}\n}\n}\n`);
@@ -257,7 +261,9 @@ export interface ParsedStyleProperty {
  * Parse `key value` as the single property of a `style { ... }` block of an
  * element or a relationship.  Returns the property node, or undefined when the
  * text is not exactly one property with this key — e.g. a value the grammar
- * does not accept for the key, or a value followed by another property.
+ * does not accept for the key, or a value followed by another property — or
+ * when `value` is more than the value's tokens: a comment (`red // x`) or a
+ * separator (`red;`).  Whitespace around the value is allowed.
  */
 export function parseStyleProperty(
   target: 'element' | 'relationship',
@@ -282,8 +288,41 @@ export function parseStyleProperty(
   const style = ownerBody.props[0] as { $type: string; props?: unknown[] };
   const styleType = target === 'element' ? 'ElementStyleProperty' : 'RelationStyleProperty';
   if (style.$type !== styleType || style.props?.length !== 1) return undefined;
-  const property = style.props[0] as ParsedStyleProperty;
-  return property.key === key ? property : undefined;
+  const property = style.props[0] as ParsedStyleProperty & { $cstNode?: CstNodeView };
+  if (property.key !== key || !property.$cstNode) return undefined;
+  // The value must be exactly the value's tokens: no comment (`red // x` would
+  // comment out whatever follows the value on its line once written into an
+  // existing style block) and no separator such as a trailing `;`.
+  const valueStart = source.indexOf(`\n${key} ${value}\n`) + key.length + 2;
+  const leaves = cstLeaves(property.$cstNode).filter((leaf) => leaf.offset >= valueStart);
+  if (leaves.length === 0 || leaves.some((leaf) => leaf.hidden || leaf.text === ';')) return undefined;
+  const span = source.slice(leaves[0]!.offset, leaves[leaves.length - 1]!.end);
+  return span === value.trim() && !containsComment(value) ? property : undefined;
+}
+
+/** Minimal structural view of a Langium CST node. */
+interface CstNodeView {
+  readonly offset: number;
+  readonly end: number;
+  readonly text: string;
+  readonly hidden?: boolean;
+  readonly content?: ReadonlyArray<CstNodeView>;
+}
+
+/** The leaf nodes of `node` in source order, hidden ones (comments) included. */
+function cstLeaves(node: CstNodeView): CstNodeView[] {
+  if (!node.content) return [node];
+  return node.content.flatMap((child) => cstLeaves(child));
+}
+
+/**
+ * Whether the LikeC4 lexer reads a comment (`// ...` or `/* ... *\/`) in
+ * `text`.  A `//` inside a token — a URI such as `https://host/path` or a
+ * string — is not a comment.
+ */
+export function containsComment(text: string): boolean {
+  const { hidden } = getServices().likec4.parser.Lexer.tokenize(text);
+  return (hidden ?? []).length > 0;
 }
 
 /**

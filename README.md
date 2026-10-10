@@ -720,7 +720,7 @@ Every write call checks the values it introduces before anything changes. A reje
 | `includes` items (`addView`) | Exactly one `include` rule of the view's type; in a deployment view without `with { ... }`, which LikeC4 does not apply there. |
 | style values (`addElement`, `updateElement`, `addRelationship`, `updateRelationship`) | See [Element style properties](#element-style-properties) and [Relationship style properties](#relationship-style-properties); a field the style type does not have is rejected. |
 
-A value that would add other DSL than the property asked for (`autoLayout: 'LeftRight\n exclude a'`, `style: { color: 'red\n shape cylinder' }`) is rejected by these checks.
+A value that would add other DSL than the property asked for (`autoLayout: 'LeftRight\n exclude a'`, `style: { color: 'red\n shape cylinder' }`) is rejected by these checks, and so is a style value with a comment (`// ...`, `/* ... */`) or a separator (`color: 'red;'`): a style value is written in place of the existing one, where `red // x` would comment out a field that follows on the same line. Only what LikeC4 lexes as a comment counts: `//` inside a URI (`icon: 'https://example.com/a.svg'`) is accepted. `autoLayout` and `includes` items are written on lines of their own, so a trailing comment there (`'* // every element'`) is accepted and ends with the line.
 
 Writes LikeC4 would reject are refused the same way:
 

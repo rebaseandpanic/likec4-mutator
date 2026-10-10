@@ -326,3 +326,94 @@ describe('relationship style values', () => {
     await expectValidLikeC4(m.serialize());
   });
 });
+
+describe('comments and separators in probe-checked values', () => {
+  // A style value is written into the existing property's value span; a
+  // trailing `// ...` would comment out whatever follows on that line, and a
+  // `/* ... */` or `;` would write text beyond the value.  Values that only
+  // contain `//` inside a token (a URI) are not comments and stay accepted.
+  const INLINE_STYLE = `${SPEC}model {
+  app = service {
+    style {
+      color blue border dashed
+    }
+  }
+  api = service
+  db = service
+  api -> db {
+    style {
+      line dotted head diamond
+    }
+  }
+}
+`;
+
+  it.each([
+    ['a trailing line comment', 'red // injected'],
+    ['a trailing block comment', 'red /* injected */'],
+    ['a trailing separator', 'red;'],
+    ['a separator and a comment', 'red; // injected'],
+  ])('rejects an element style value with %s and keeps the other fields of its line', async (_name, color) => {
+    const m = mutator({ 'model.c4': INLINE_STYLE });
+    expectRejected(m, 'style.color', () => m.updateElement('app', { style: { color } }));
+    expectRejected(m, 'style.color', () => m.addElement('app', { name: 'x', kind: 'service', title: 'X', style: { color } }));
+    m.updateElement('app', { style: { color: 'red' } });
+    expect(m.serialize()['model.c4']).toContain('      color red border dashed\n');
+    await expectValidLikeC4(m.serialize());
+  });
+
+  it('rejects an icon URI followed by a comment, and writes the URI alone', async () => {
+    const m = mutator({ 'model.c4': INLINE_STYLE });
+    expectRejected(m, 'style.icon', () => m.updateElement('app', { style: { icon: 'https://example.com/a.svg // x' } }));
+    m.updateElement('app', { style: { icon: 'https://example.com/a//b.svg' } });
+    expect(m.serialize()['model.c4']).toContain('icon https://example.com/a//b.svg');
+    await expectValidLikeC4(m.serialize());
+  });
+
+  it('rejects a relationship style value with a trailing comment', async () => {
+    const m = mutator({ 'model.c4': INLINE_STYLE });
+    expectRejected(m, 'style.line', () =>
+      m.updateRelationship({ source: 'api', target: 'db' }, { style: { line: 'dashed // injected' } }),
+    );
+    expectRejected(m, 'style.color', () => m.addRelationship('db', 'api', 'x', { style: { color: 'red /* x */' } }));
+    m.updateRelationship({ source: 'api', target: 'db' }, { style: { line: 'dashed' } });
+    expect(m.serialize()['model.c4']).toContain('      line dashed head diamond\n');
+    await expectValidLikeC4(m.serialize());
+  });
+
+  it.each([
+    ['autoLayout', { autoLayout: 'LeftRight // x' }, 'autoLayout LeftRight // x\n'],
+    ['an include item', { includes: ['app.api /* x */'] }, 'include app.api /* x */\n'],
+  ] as const)('writes %s with a trailing comment on a line of its own', async (_name, opts, line) => {
+    const m = mutator();
+    m.addView({ id: 'v', type: 'element', target: 'app', includes: ['*'], autoLayout: 'TopBottom', ...opts });
+    const text = m.serialize()['model.c4']!;
+    expect(text).toContain(line);
+    // The rules after the commented line are still written and parsed.
+    expect(text).toMatch(/include [^\n]*\n\s+autoLayout /);
+    await expectValidLikeC4(m.serialize());
+  });
+
+  it.each([
+    ['target', () => ({ id: 'v', type: 'element' as const, target: 'app // x' })],
+    ['id', () => ({ id: 'v /* x */', type: 'element' as const, target: 'app' })],
+  ])('rejects a comment in the view %s', (field, opts) => {
+    const m = mutator();
+    expectRejected(m, field, () => m.addView(opts()));
+  });
+
+  it.each([
+    ['name', { name: 'x // y', kind: 'service' }],
+    ['kind', { name: 'x', kind: 'service /* y */' }],
+  ])('rejects a comment in the element %s', (field, opts) => {
+    const m = mutator();
+    expectRejected(m, field, () => m.addElement('app', { title: 'X', ...opts }));
+  });
+
+  it('writes an include whose string contains // (not a comment)', async () => {
+    const m = mutator();
+    m.addView({ id: 'v', type: 'element', target: 'app', includes: ["* with { title 'see https://example.com' }"] });
+    expect(m.serialize()['model.c4']).toContain("include * with { title 'see https://example.com' }\n");
+    await expectValidLikeC4(m.serialize());
+  });
+});

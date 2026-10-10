@@ -282,6 +282,11 @@ describe('CLI apply rejects values LikeC4 would not accept', () => {
       path: 'mutations[1].style.color',
     },
     {
+      name: 'a style color with a trailing line comment',
+      mutation: { op: 'updateElement', fqn: 'app', style: { color: 'red // injected' } },
+      path: 'mutations[1].style.color',
+    },
+    {
       name: 'an unknown shape',
       mutation: { op: 'updateElement', fqn: 'app', style: { shape: 'hexagon' } },
       path: 'mutations[1].style.shape',
@@ -342,5 +347,46 @@ describe('CLI apply rejects values LikeC4 would not accept', () => {
     expect(status).toBe(1);
     expect(stderr).toContain(`${path}:`);
     expect(model).toBe(source);
+  });
+});
+
+describe('CLI apply style merge into a one-line style block', () => {
+  const inlineStyle = `specification {
+  element service
+}
+model {
+  app = service {
+    style {
+      color blue border dashed
+    }
+  }
+}
+`;
+
+  function applyTo(mutations: unknown[]): { status: number | null; stderr: string; model: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'likec4-mutator-apply-style-'));
+    writeFileSync(join(dir, 'model.c4'), inlineStyle, 'utf-8');
+    const mutationsPath = join(dir, 'mutations.json');
+    writeFileSync(mutationsPath, JSON.stringify({ mutations }), 'utf-8');
+    const result = spawnSync(
+      'npx',
+      ['tsx', 'src/cli.ts', 'apply', '--dir', dir, '--mutations', mutationsPath, '--in-place'],
+      { cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 30000 },
+    );
+    return { status: result.status, stderr: result.stderr, model: readFileSync(join(dir, 'model.c4'), 'utf-8') };
+  }
+
+  it('rejects a color with a trailing comment, which would comment out the border', () => {
+    const { status, stderr, model } = applyTo([{ op: 'updateElement', fqn: 'app', style: { color: 'red // injected' } }]);
+    expect(status).toBe(1);
+    expect(stderr).toContain('mutations[0].style.color:');
+    expect(model).toBe(inlineStyle);
+  });
+
+  it('writes the color alone and keeps the border on its line', async () => {
+    const { status, model } = applyTo([{ op: 'updateElement', fqn: 'app', style: { color: 'red' } }]);
+    expect(status).toBe(0);
+    expect(model).toContain('      color red border dashed\n');
+    await expectValidLikeC4({ 'model.c4': model });
   });
 });
