@@ -195,7 +195,8 @@ describe('CLI commands reject values LikeC4 would not accept', () => {
     ['add-element', `--parent app --kind 'service x' --id ok --title 'X'`, '--kind'],
     ['add-element', `--parent app --kind service --id api --title 'X'`, '--id'],
     ['add-relationship', `--source 'app.api {' --target app.db`, '--source'],
-    ['update-element', `--fqn app.api --tags 'ok,not ok'`, '--tags'],
+    ['update-element', `--fqn app.api --tags 'deprecated,not ok'`, '--tags'],
+    ['update-element', `--fqn app.api --tags 'deprecated,undeclared'`, '--tags'],
   ])('%s %s exits with code 1 naming %s and writes nothing', (command, args, option) => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
     writeFileSync(join(tmpDir, 'model.c4'), readFileSync(join(FIXTURE_DIR, 'model.c4'), 'utf-8'), 'utf-8');
