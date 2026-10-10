@@ -20,7 +20,7 @@ import { removeIndent } from '../query/likec4-text.js';
 import { readContribution, type Decorations } from '../query/extend-merge.js';
 import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
-import { applyEdits, type TextEdit } from './text-edit.js';
+import { applyEdits, lineEndingOf, withLineEnding, type TextEdit } from './text-edit.js';
 import {
   addElementEdit,
   updateElementEdit,
@@ -922,7 +922,8 @@ export class LikeC4Mutator {
   private applyEditsToFile(filename: string, edits: TextEdit[]): void {
     const current = this.sources.get(filename);
     if (current === undefined) throw new Error(`No source registered for '${filename}'`);
-    const updated = applyEdits(current, edits);
+    // New text is generated with `\n`; it gets the file's own line ending.
+    const updated = applyEdits(current, withLineEnding(edits, lineEndingOf(current)));
     const doc = this.parser.parse(updated);
     if (doc.errors.length > 0) {
       // Rollback: do not apply the edits; leave source as it was.

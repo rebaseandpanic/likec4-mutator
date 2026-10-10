@@ -57,3 +57,25 @@ export function applyEdits(source: string, edits: TextEdit[]): string {
   }
   return result;
 }
+
+/** A line ending a document uses. */
+export type LineEnding = '\n' | '\r\n';
+
+/**
+ * The line ending of `text`: the one its first line break uses (`\r\n` or
+ * `\n`); `\n` for a text without line breaks.
+ */
+export function lineEndingOf(text: string): LineEnding {
+  const lf = text.indexOf('\n');
+  return lf > 0 && text[lf - 1] === '\r' ? '\r\n' : '\n';
+}
+
+/**
+ * `edits` with every line break of their new text that is a lone `\n`
+ * written as `eol`.  Text copied from a document keeps its line breaks:
+ * `\r\n` is never doubled.
+ */
+export function withLineEnding(edits: readonly TextEdit[], eol: LineEnding): TextEdit[] {
+  if (eol === '\n') return [...edits];
+  return edits.map((e) => ({ ...e, newText: e.newText.replace(/(?<!\r)\n/g, eol) }));
+}

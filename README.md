@@ -458,7 +458,7 @@ mutator.updateElement('app', { metadata: { manifest: 'apiVersion: v1\nkind: Depl
     }
 ```
 
-LikeC4 (and the library) read it back as the value written.  As for any metadata value, LikeC4 removes the indentation shared by all lines and trims the value, so leading and trailing whitespace and common indentation are not kept.  A value without line breaks stays a single-quoted string.
+LikeC4 (and the library) read it back as the value written.  As for any metadata value, LikeC4 removes the indentation shared by all lines and trims the value, so leading and trailing whitespace and common indentation are not kept.  Line breaks are written as the file's line ending, so in a file with CRLF line endings the value reads back with `\r\n` line breaks.  A value without line breaks stays a single-quoted string.
 
 ### Element style properties
 
@@ -685,6 +685,10 @@ model {
 - A block applies to every relationship with the same identity (e.g. `a -> b 'x'` and `a -> b { title 'x' }`). When an update would change such a shared block, it is rejected before anything changes, because the other relationship would change too.
 - A `label` that changes the identity is rejected, before anything changes, when the relationship's blocks would then also apply to another relationship that already has the new identity, or when blocks of the new identity with tags, links or metadata exist (even if no relationship has it yet): they would start applying to the renamed relationship.
 - `removeRelationship` also removes the blocks that applied to the removed relationship and apply to no remaining one (they would match nothing). `removeElement` removes, besides those of the relationships it removes, every block whose source or target is in the removed subtree. Blocks that matched nothing before are left alone.
+
+## Line endings
+
+Text the library writes into a file uses that file's line ending — the one of its first line break (`\r\n` or `\n`; `\n` when the file has none).  Text kept from the file is never changed, so a file that already mixes line endings stays mixed.
 
 ## How it works
 
