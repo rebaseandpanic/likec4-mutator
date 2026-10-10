@@ -188,3 +188,29 @@ describe('CLI add-element with --summary and --tags', () => {
     expect(content).toContain('#internal');
   });
 });
+
+describe('CLI commands reject values LikeC4 would not accept', () => {
+  it.each([
+    ['add-element', `--parent app --kind service --id 1api --title 'X'`, '--id'],
+    ['add-element', `--parent app --kind 'service x' --id ok --title 'X'`, '--kind'],
+    ['add-element', `--parent app --kind service --id api --title 'X'`, '--id'],
+    ['add-relationship', `--source 'app.api {' --target app.db`, '--source'],
+    ['update-element', `--fqn app.api --tags 'ok,not ok'`, '--tags'],
+  ])('%s %s exits with code 1 naming %s and writes nothing', (command, args, option) => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
+    writeFileSync(join(tmpDir, 'model.c4'), readFileSync(join(FIXTURE_DIR, 'model.c4'), 'utf-8'), 'utf-8');
+    const before = readFileSync(join(tmpDir, 'model.c4'), 'utf-8');
+    let stderr = '';
+    let status = 0;
+    try {
+      runCli(`${command} --dir ${tmpDir} ${args}`);
+    } catch (err) {
+      const failure = err as { status: number; stderr: string };
+      status = failure.status;
+      stderr = failure.stderr;
+    }
+    expect(status).toBe(1);
+    expect(stderr).toContain(`${option}:`);
+    expect(readFileSync(join(tmpDir, 'model.c4'), 'utf-8')).toBe(before);
+  });
+});

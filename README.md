@@ -445,18 +445,20 @@ Which LikeC4 DSL constructs the library can read, add, update and remove — rul
 
 | Property | Values |
 |----------|--------|
-| shape | rectangle, person, browser, mobile, cylinder, storage, queue, bucket, document |
-| color | primary, secondary, muted, slate, blue, indigo, sky, red, gray, green, amber |
-| icon | Library icons (`tech:postgresql`, `aws:lambda`) or URL |
-| opacity | Percentage (`40%`, `100%`) |
+| shape | rectangle, component, person, browser, mobile, cylinder, storage, queue, bucket, document |
+| color | primary, secondary, muted, slate, blue, indigo, sky, red, gray, green, amber, or a custom color declared in a specification (`color brand #3b82f6`) |
+| icon | An icon of LikeC4's built-in library (`tech:postgresql`, `aws:lambda`), a URI (`https://…`, `/…`, `./…`, `../…`, `@alias/…`; not `file://`) or `none` |
+| opacity | Percentage from `0%` to `100%` (`40%`) |
 | border | solid, dashed, dotted, none |
-| multiple | true, false |
-| size | xs, sm, md, lg, xl |
-| padding | xs, sm, md, lg, xl |
-| textSize | xs, sm, md, lg, xl |
+| multiple | true, false (a boolean) |
+| size | xs, sm, md, lg, xl, xsmall, small, medium, large, xlarge |
+| padding | Same as size |
+| textSize | Same as size |
 | iconPosition | left, right, top, bottom |
-| iconColor | Theme colors |
-| iconSize | xs, sm, md, lg, xl |
+| iconColor | Same as color |
+| iconSize | Same as size |
+
+Values are checked before writing (see [Rejected writes](#rejected-writes)); the keyword sets are taken from the grammar of the installed LikeC4.
 
 ### Relationship properties
 
@@ -475,7 +477,7 @@ Which LikeC4 DSL constructs the library can read, add, update and remove — rul
 | Property | Values |
 |----------|--------|
 | line | solid, dashed, dotted |
-| color | Theme colors |
+| color | Same as the element `color` |
 | head | normal, onormal, diamond, odiamond, crow, open, vee, dot, odot, none |
 | tail | Same as head |
 
@@ -666,6 +668,21 @@ model {
 - A block applies to every relationship with the same identity (e.g. `a -> b 'x'` and `a -> b { title 'x' }`). When an update would change such a shared block, it is rejected before anything changes, because the other relationship would change too.
 - A `label` that changes the identity is rejected, before anything changes, when the relationship's blocks would then also apply to another relationship that already has the new identity, or when blocks of the new identity with tags, links or metadata exist (even if no relationship has it yet): they would start applying to the renamed relationship.
 - `removeRelationship` also removes the blocks that applied to the removed relationship and apply to no remaining one (they would match nothing). `removeElement` removes, besides those of the relationships it removes, every block whose source or target is in the removed subtree. Blocks that matched nothing before are left alone.
+
+## Rejected writes
+
+Every write call checks the values it introduces before anything changes. A rejected call throws an `InvalidWriteError` (exported): `field` names the offending option in the terms of the call (`name`, `kind`, `id`, `target`, `source`, `autoLayout`, `tags[1]`, `style.color`, `includes[0]`), `detail` says what is wrong, and no file changes. `apply` reports the same as `mutations[i].<field>` (the element name of `addElement` is its `id`) with exit code 1 and writes nothing; the single-purpose CLI commands name the option (`--id`, `--kind`, `--tags`, ...).
+
+| Value | Accepted |
+| --- | --- |
+| element `name` (`addElement`), view `id` (`addView`) | One LikeC4 identifier (letters, digits, `_`, `-`; not starting with a digit or `-`; no `.`; not a keyword such as `title`), not a reserved word (`this`, `it`, `self`, `super`, `likec4lib`, `global`), and not used yet: no element of a loaded file has the same FQN (a sibling in the parent's body or in an `extend` of the parent, or another root element), no view of any type has the same id. |
+| `kind` (`addElement`) | One identifier. |
+| relationship `source` / `target` (`addRelationship`), view `target` (`addView`) | Identifiers joined by `.` (`app.api`). |
+| `autoLayout` (`addView`) | A direction (`TopBottom`, `LeftRight`, `BottomTop`, `RightLeft`), optionally followed by a whole-number rankSep and nodeSep (`LeftRight 120 40`). |
+| `includes` items (`addView`) | Exactly one `include` rule of the view's type; in a deployment view without `with { ... }`, which LikeC4 does not apply there. |
+| style values (`addElement`, `updateElement`, `addRelationship`, `updateRelationship`) | See [Element style properties](#element-style-properties) and [Relationship style properties](#relationship-style-properties); a field the style type does not have is rejected. |
+
+A value that would add other DSL than the property asked for (`autoLayout: 'LeftRight\n exclude a'`, `style: { color: 'red\n shape cylinder' }`) is rejected by these checks.
 
 ## How it works
 

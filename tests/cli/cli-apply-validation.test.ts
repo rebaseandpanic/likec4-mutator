@@ -265,3 +265,58 @@ describe('CLI apply validates the mutations file shape', () => {
     expect(m.getElement('app')?.tags).toEqual(['t']);
   });
 });
+
+describe('CLI apply rejects values LikeC4 would not accept', () => {
+  // Checked while the file is validated (no loaded files needed) or when the
+  // mutation is applied; either way the JSON path is named and nothing is
+  // written.
+  it.each([
+    { name: 'an element id that is not an identifier', mutation: { ...validAdd, id: '1api' }, path: 'mutations[1].id' },
+    { name: 'an element kind with DSL', mutation: { ...validAdd, kind: "service\n x = service 'X'" }, path: 'mutations[1].kind' },
+    {
+      name: 'a style color with DSL',
+      mutation: { ...validAdd, style: { color: 'red\n shape cylinder' } },
+      path: 'mutations[1].style.color',
+    },
+    {
+      name: 'an unknown shape',
+      mutation: { op: 'updateElement', fqn: 'app', style: { shape: 'hexagon' } },
+      path: 'mutations[1].style.shape',
+    },
+    {
+      name: 'a relationship source that is not a reference',
+      mutation: { op: 'addRelationship', source: 'app db', target: 'app' },
+      path: 'mutations[1].source',
+    },
+    {
+      name: 'an unknown arrow head',
+      mutation: { op: 'updateRelationship', source: 'app.db', target: 'app', style: { head: 'arrow' } },
+      path: 'mutations[1].style.head',
+    },
+    { name: 'a view id with a dot', mutation: { op: 'addView', id: 'a.b', type: 'element' }, path: 'mutations[1].id' },
+    {
+      name: 'a view target with DSL',
+      mutation: { op: 'addView', id: 'v', type: 'element', target: 'app {\n }\n view w' },
+      path: 'mutations[1].target',
+    },
+    {
+      name: '`with` in a deployment view include',
+      mutation: { op: 'addView', id: 'd', type: 'deployment', includes: ['* with { color red }'] },
+      path: 'mutations[1].includes[0]',
+    },
+    { name: 'a duplicate element name', mutation: { ...validAdd, id: 'db' }, path: 'mutations[1].id' },
+    { name: 'the id of a view added before', mutation: { op: 'addView', id: 'index', type: 'element' }, path: 'mutations[2].id' },
+    {
+      name: 'an undeclared custom color',
+      mutation: { op: 'updateElement', fqn: 'app', style: { color: 'nosuchcolor' } },
+      path: 'mutations[1].style.color',
+    },
+  ])('rejects $name with exit code 1, naming $path', ({ mutation, path }) => {
+    const mutations: unknown[] = [validAdd, mutation];
+    if (path.startsWith('mutations[2]')) mutations.splice(1, 0, { op: 'addView', id: 'index', type: 'element' });
+    const { status, stderr, model } = runApply({ mutations });
+    expect(status).toBe(1);
+    expect(stderr).toContain(`${path}:`);
+    expect(model).toBe(source);
+  });
+});

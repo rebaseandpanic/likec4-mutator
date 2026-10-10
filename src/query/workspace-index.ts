@@ -175,6 +175,10 @@ export class WorkspaceIndex {
   private readonly elementKinds = new Map<string, KindSpec>();
   /** relationship kind → the declaration LikeC4 uses */
   private readonly relationshipKinds = new Map<string, KindSpec>();
+  /** Tags declared by a specification (`tag x`) */
+  private readonly declaredTags = new Set<string>();
+  /** Custom colors declared by a specification (`color x #hex`) */
+  private readonly declaredColors = new Set<string>();
   /** relation fingerprint → `extend a -> b` blocks, in merge order (built on first use) */
   private relationExtends: Map<string, ExtendRelationBlockRef[]> | undefined;
   private relationExtendList: Array<{ key: string; block: ExtendRelationBlockRef }> | undefined;
@@ -213,6 +217,14 @@ export class WorkspaceIndex {
       }
       for (const [name, spec] of elementKinds) this.elementKinds.set(name, spec);
       for (const [name, spec] of relationshipKinds) this.relationshipKinds.set(name, spec);
+      for (const raw of ast.specifications ?? []) {
+        const spec = raw as {
+          tags?: Array<{ tag?: { name?: string } }>;
+          colors?: Array<{ name?: { name?: string } }>;
+        };
+        for (const tag of spec.tags ?? []) if (tag.tag?.name) this.declaredTags.add(tag.tag.name);
+        for (const color of spec.colors ?? []) if (color.name?.name) this.declaredColors.add(color.name.name);
+      }
     }
     for (const { file, ast } of this.ordered) {
       for (const model of ast.models ?? []) {
@@ -265,6 +277,20 @@ export class WorkspaceIndex {
    */
   relationshipKind(kind: string): KindSpec | undefined {
     return this.relationshipKinds.get(kind);
+  }
+
+  /**
+   * True when a specification declares the tag `name` (without `#`).  A tag
+   * reference links to such a declaration in any document of the project
+   * (language-server `LikeC4ScopeComputation.exportSpecification`).
+   */
+  hasTag(name: string): boolean {
+    return this.declaredTags.has(name);
+  }
+
+  /** True when a specification declares the custom color `name`. */
+  hasCustomColor(name: string): boolean {
+    return this.declaredColors.has(name);
   }
 
   /**
@@ -409,6 +435,49 @@ export function resolveRelations(
     resolver.walkContainer(model.elements ?? [], [{ scope: modelScopes[i] }], '', results);
   });
   return results;
+}
+
+/** Where a reference is written, for {@link resolveReferenceText}. */
+export type ReferencePosition =
+  /** Directly in the `model` block with this index (a model-level relation) */
+  | { model: number }
+  /** In a `views` block, outside a view body (the element of `view ... of X`) */
+  | 'views';
+
+/**
+ * The absolute FQN LikeC4 links an element reference written as `reference`
+ * (`api`, `app.api`, ...) to, when it is written at `position` in the
+ * document `ast`; undefined when it does not resolve.
+ *
+ * Follows LikeC4 1.59.4 (language-server `LikeC4ScopeProvider.computeScope`
+ * and `streamForFqnRef`): a parentless name is looked up in the local scope
+ * of each container from the reference outwards — for a model-level relation
+ * the `model` block (its children and unique descendants), for a reference in
+ * a `views` block none — then in the document scope (names unique across the
+ * document's model blocks), then among the root elements of the project.
+ * Every further segment is looked up among the unique descendants of the
+ * previous one (`FqnIndex.uniqueDescedants`).  `this` / `it` resolve only
+ * inside an element or `extend` body, so at these positions they do not.
+ */
+export function resolveReferenceText(
+  ast: WorkspaceDocumentAst,
+  workspace: WorkspaceIndex,
+  reference: string,
+  position: ReferencePosition,
+): string | undefined {
+  let ref: RefLike | undefined;
+  for (const segment of reference.split('.')) {
+    ref = ref === undefined ? { value: { $refText: segment } } : { parent: ref, value: { $refText: segment } };
+  }
+  const models = ast.models ?? [];
+  const modelScopes = models.map((m) => computeLocalScope(m.elements ?? [], null).scope);
+  const resolver = new EndpointResolver(workspace, uniqueAcross(modelScopes));
+  const chain: ScopeFrame[] = [];
+  if (position !== 'views') {
+    const scope = modelScopes[position.model];
+    if (scope) chain.push({ scope });
+  }
+  return resolver.resolveEndpoint(ref, chain);
 }
 
 /**

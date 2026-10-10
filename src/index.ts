@@ -23,6 +23,7 @@ export type {
 
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';
+export { InvalidWriteError } from './mutator/write-checks.js';
 export type {
   AddElementOpts,
   AddViewOpts,

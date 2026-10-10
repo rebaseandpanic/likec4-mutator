@@ -4,7 +4,8 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSy
 import { resolve, join, relative, extname, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
 import { LikeC4Mutator } from './mutator/mutator.js';
-import { parseMutationsFile } from './mutations-file.js';
+import { mutationFieldPath, parseMutationsFile, type Mutation } from './mutations-file.js';
+import { InvalidWriteError } from './mutator/write-checks.js';
 
 const _require = createRequire(import.meta.url);
 const pkg = _require('../package.json') as { version: string };
@@ -64,6 +65,17 @@ function writeOutput(mutator: LikeC4Mutator, outputDir: string) {
     mkdirSync(resolve(outPath, '..'), { recursive: true });
     writeFileSync(outPath, content, 'utf-8');
   }
+}
+
+/**
+ * Rethrow an {@link InvalidWriteError} of a standalone command naming the
+ * command-line option that carried the value (`name` is given as `--id`, a
+ * tag as `--tags`); other errors unchanged.
+ */
+function asOptionError(err: unknown): unknown {
+  if (!(err instanceof InvalidWriteError)) return err;
+  const field = err.field === 'name' ? 'id' : err.field.replace(/[[.].*$/, '');
+  return new Error(`--${field}: ${err.detail}`);
 }
 
 function assertNever(x: never): never {
@@ -249,15 +261,20 @@ program
       const files = loadDirectory(opts.dir);
       const mutator = LikeC4Mutator.fromFiles(files);
       const parsedTags = opts.tags ? opts.tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
-      const createdFqn = mutator.addElement(opts.parent, {
-        name: opts.id,
-        kind: opts.kind,
-        title: opts.title,
-        summary: opts.summary,
-        description: opts.description,
-        technology: opts.technology,
-        tags: parsedTags,
-      });
+      let createdFqn: string;
+      try {
+        createdFqn = mutator.addElement(opts.parent, {
+          name: opts.id,
+          kind: opts.kind,
+          title: opts.title,
+          summary: opts.summary,
+          description: opts.description,
+          technology: opts.technology,
+          tags: parsedTags,
+        });
+      } catch (err) {
+        throw asOptionError(err);
+      }
       const outDir = opts.output ?? opts.dir;
       writeOutput(mutator, resolve(outDir));
       process.stdout.write(`Created element '${createdFqn}'\n`);
@@ -290,7 +307,11 @@ program
     try {
       const files = loadDirectory(opts.dir);
       const mutator = LikeC4Mutator.fromFiles(files);
-      mutator.addRelationship(opts.source, opts.target, opts.label);
+      try {
+        mutator.addRelationship(opts.source, opts.target, opts.label);
+      } catch (err) {
+        throw asOptionError(err);
+      }
       const outDir = opts.output ?? opts.dir;
       writeOutput(mutator, resolve(outDir));
       process.stdout.write(`Relationship '${opts.source}' -> '${opts.target}' added successfully\n`);
@@ -330,13 +351,17 @@ program
       const files = loadDirectory(opts.dir);
       const mutator = LikeC4Mutator.fromFiles(files);
       const parsedTags = opts.tags ? opts.tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
-      mutator.updateElement(opts.fqn, {
-        title: opts.title,
-        summary: opts.summary,
-        description: opts.description,
-        technology: opts.technology,
-        tags: parsedTags,
-      });
+      try {
+        mutator.updateElement(opts.fqn, {
+          title: opts.title,
+          summary: opts.summary,
+          description: opts.description,
+          technology: opts.technology,
+          tags: parsedTags,
+        });
+      } catch (err) {
+        throw asOptionError(err);
+      }
       const outDir = opts.output ?? opts.dir;
       writeOutput(mutator, resolve(outDir));
       process.stdout.write(`Element '${opts.fqn}' updated successfully\n`);
@@ -434,9 +459,21 @@ program
       const files = loadDirectory(opts.dir);
       const mutator = LikeC4Mutator.fromFiles(files);
 
-      // Apply each mutation in order
+      // Apply each mutation in order.  A value rejected by the library is
+      // reported with the JSON path of the mutation field; nothing is written.
       let applied = 0;
-      for (const mutation of mutationsFile.mutations) {
+      for (const [index, mutation] of mutationsFile.mutations.entries()) {
+        try {
+          applyMutation(mutation);
+        } catch (err) {
+          if (err instanceof InvalidWriteError) {
+            throw new Error(`${mutationFieldPath(mutation.op, `mutations[${index}]`, err.field)}: ${err.detail}`);
+          }
+          throw err;
+        }
+      }
+
+      function applyMutation(mutation: Mutation): void {
         switch (mutation.op) {
           case 'addElement': {
             const m = mutation;

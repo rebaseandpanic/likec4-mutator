@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+- Write calls check the identifiers and string parameters they introduce before anything is written, and throw the new `InvalidWriteError` (`field`, `detail`) naming the offending option; no file changes. `apply` exits with code 1 naming `mutations[i].<field>`; the single-purpose CLI commands name the option. Rejected now, written before:
+  - an element name or view id that is not one LikeC4 identifier or is a reserved word (`this`, `it`, `self`, `super`, `likec4lib`, `global`) — an empty view id wrote an unnamed view;
+  - an element name already declared at the same FQN in a loaded file (a sibling in the parent's body or in an `extend` of the parent, or another root element), and a view id already used by a view of any type;
+  - a `kind` that is not one identifier, a relationship endpoint or view `target` that is not identifiers joined by `.`;
+  - an `autoLayout` that is not a direction optionally followed by whole-number rankSep and nodeSep;
+  - a style value that is not a value of its field (keyword sets of the installed grammar, a theme color or a custom color declared in a loaded file, a percentage from 0% to 100%, a library icon that exists, a URI other than `file://`, `none`, a boolean), and a style field the style type does not have;
+  - an `includes` item of a deployment view that uses `with { ... }`.
+  Such values could add other DSL than asked for (`autoLayout: 'LeftRight\n exclude a'` wrote an `exclude` rule) or produced text LikeC4 rejects or ignores.
+
+### Added
+- `InvalidWriteError`, exported.
+
 ## [0.7.1] - 2026-10-08
 
 ### Bugfix

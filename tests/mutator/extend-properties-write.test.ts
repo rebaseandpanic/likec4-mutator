@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { C4Parser } from '../../src/parser/parser.js';
 import { expectAgreesWithLikeC4 } from '../helpers/likec4-model.js';
 
 /**
@@ -344,13 +345,22 @@ describe('updateElement — failures change nothing', () => {
   });
 
   it('restores every file when the declaration edit fails after an extend file was edited', () => {
-    // ext1.c4 is edited first (load order); the style value then produces
-    // text that does not parse in base.c4.
+    // ext1.c4 is edited first (load order); the reparse of the edited base.c4
+    // then reports an error.  Every value of the call is valid, so the failure
+    // is injected at the parser, the boundary that judges the edited text.
     const files = { 'ext1.c4': EXT1, 'base.c4': BASE };
     const m = LikeC4Mutator.fromFiles(files);
-    expect(() =>
-      m.updateElement('app', { tags: [], style: { color: 'not a color' } as never }),
-    ).toThrow(/base\.c4/);
+    const parse = C4Parser.prototype.parse;
+    const spy = vi.spyOn(C4Parser.prototype, 'parse').mockImplementation(function (this: C4Parser, source: string) {
+      const doc = parse.call(this, source);
+      if (!source.startsWith(SPEC) || source === BASE) return doc;
+      return { ...doc, errors: [{ message: 'injected', line: 1, column: 1, offset: 0, length: 1 }] };
+    });
+    try {
+      expect(() => m.updateElement('app', { tags: [], style: { color: 'red' } })).toThrow(/base\.c4/);
+    } finally {
+      spy.mockRestore();
+    }
     expect(m.serialize()).toEqual(files);
     expect(m.getElement('app')!.tags).toEqual(['a', 'b', 'c']);
   });
