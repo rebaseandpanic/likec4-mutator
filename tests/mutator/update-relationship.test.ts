@@ -272,6 +272,7 @@ views {
   it('combines body-creation edits when relation has no body', () => {
     const noBody = `specification {
   element service
+  tag internal
 }
 model {
   a = service 'A'

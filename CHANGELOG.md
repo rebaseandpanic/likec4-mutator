@@ -11,6 +11,8 @@
   - a style value that is not a value of its field (keyword sets of the installed grammar, a theme color or a custom color declared in a loaded file, a percentage from 0% to 100%, a library icon that exists, a URI other than `file://`, `none`, a boolean), and a style field the style type does not have;
   - an `includes` item of a deployment view that uses `with { ... }`.
   Such values could add other DSL than asked for (`autoLayout: 'LeftRight\n exclude a'` wrote an `exclude` rule) or produced text LikeC4 rejects or ignores.
+- Writes LikeC4 would reject semantically are refused before writing, with an `InvalidWriteError` naming the field: an undeclared element kind (`addElement`), an undeclared tag (`addElement`, `updateElement`, `addRelationship`, `updateRelationship`), a relationship endpoint that does not resolve, a self or parent-child relationship (`addRelationship`), and an element view `target` that does not resolve (`addView`). Endpoints are resolved the way LikeC4 links them from the `model` block they are written into (unique descendants included), so `addRelationship('app.gateway', 'app.cache')` is rejected when `app.cache` links to `app.gateway.cache`.
+- Only the values a call introduces are checked: problems already in the files do not block valid writes. Only the loaded files are known: a kind, tag, custom color or element declared in a file that is not loaded is rejected.
 
 ### Added
 - `InvalidWriteError`, exported.

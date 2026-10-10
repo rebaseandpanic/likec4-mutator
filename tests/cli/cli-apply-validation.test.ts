@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
 
@@ -17,7 +18,8 @@ model {
   app = service {
     db = service
   }
-  app -> app.db 'reads'
+  ext = service
+  ext -> app.db 'reads'
 }
 views {
 }
@@ -64,7 +66,7 @@ describe('CLI apply validates the mutations file shape', () => {
     },
     {
       name: 'string links on addRelationship',
-      mutation: { op: 'addRelationship', source: 'app.db', target: 'app', links: 'https://x.io' },
+      mutation: { op: 'addRelationship', source: 'app.db', target: 'ext', links: 'https://x.io' },
       field: 'links',
     },
     {
@@ -84,7 +86,7 @@ describe('CLI apply validates the mutations file shape', () => {
     },
     {
       name: 'string style on addRelationship',
-      mutation: { op: 'addRelationship', source: 'app.db', target: 'app', style: 'dashed' },
+      mutation: { op: 'addRelationship', source: 'app.db', target: 'ext', style: 'dashed' },
       field: 'style',
     },
     {
@@ -94,7 +96,7 @@ describe('CLI apply validates the mutations file shape', () => {
     },
     {
       name: 'non-string label on updateRelationship',
-      mutation: { op: 'updateRelationship', source: 'app', target: 'app.db', label: 7 },
+      mutation: { op: 'updateRelationship', source: 'ext', target: 'app.db', label: 7 },
       field: 'label',
     },
     {
@@ -121,25 +123,25 @@ describe('CLI apply validates the mutations file shape', () => {
     { name: 'tag on addElement', mutation: { ...validAdd, id: 'child', tag: ['i'] }, field: 'tag' },
     {
       name: 'technologies on addRelationship',
-      mutation: { op: 'addRelationship', source: 'app.db', target: 'app', technologies: 'JDBC' },
+      mutation: { op: 'addRelationship', source: 'app.db', target: 'ext', technologies: 'JDBC' },
       field: 'technologies',
     },
     { name: 'titel on updateElement', mutation: { op: 'updateElement', fqn: 'app', titel: 'X' }, field: 'titel' },
     {
       name: 'matchLabel on updateRelationship',
-      mutation: { op: 'updateRelationship', source: 'app', target: 'app.db', matchLabel: 'reads', label: 'x' },
+      mutation: { op: 'updateRelationship', source: 'ext', target: 'app.db', matchLabel: 'reads', label: 'x' },
       field: 'matchLabel',
     },
     { name: 'recursive on removeElement', mutation: { op: 'removeElement', fqn: 'app.db', recursive: true }, field: 'recursive' },
     {
       name: 'label on removeRelationship',
-      mutation: { op: 'removeRelationship', source: 'app', target: 'app.db', label: 'reads' },
+      mutation: { op: 'removeRelationship', source: 'ext', target: 'app.db', label: 'reads' },
       field: 'label',
     },
     { name: 'element style key colour', mutation: { ...validAdd, id: 'child', style: { colour: 'red' } }, field: 'colour' },
     {
       name: 'relationship style key shape',
-      mutation: { op: 'updateRelationship', source: 'app', target: 'app.db', style: { shape: 'person' } },
+      mutation: { op: 'updateRelationship', source: 'ext', target: 'app.db', style: { shape: 'person' } },
       field: 'shape',
     },
     { name: 'link key title', mutation: { ...validAdd, id: 'child', links: [{ url: 'https://example.com', title: 'X' }] }, field: 'title' },
@@ -226,7 +228,7 @@ describe('CLI apply validates the mutations file shape', () => {
           style: { line: 'dotted', color: 'red' },
         },
         { op: 'addView', id: 'apiView', type: 'element', target: 'app.api', title: 'API Overview', includes: ['*'] },
-        { op: 'removeRelationship', source: 'app', target: 'app.db' },
+        { op: 'removeRelationship', source: 'ext', target: 'app.db' },
         { op: 'removeElement', fqn: 'app.api' },
       ],
     });
@@ -242,7 +244,7 @@ describe('CLI apply validates the mutations file shape', () => {
     expect(model).toBe(source);
   });
 
-  it('applies a fully-typed batch', () => {
+  it('applies a fully-typed batch', async () => {
     const { status, model } = runApply({
       mutations: [
         {
@@ -253,7 +255,7 @@ describe('CLI apply validates the mutations file shape', () => {
           metadata: { owner: 'team', envs: ['dev', 'prod'] },
         },
         { op: 'updateElement', fqn: 'app', tags: ['t'], metadata: { gone: null } },
-        { op: 'updateRelationship', source: 'app', target: 'app.db', style: { line: 'dashed' } },
+        { op: 'updateRelationship', source: 'ext', target: 'app.db', style: { line: 'dashed' } },
         { op: 'addView', id: 'v', type: 'element', target: 'app' },
       ],
     });
@@ -263,6 +265,7 @@ describe('CLI apply validates the mutations file shape', () => {
     expect(m.getElement('app.ok')?.tags).toEqual(['i', 'n']);
     expect(m.getElement('app.ok')?.metadata).toEqual({ owner: 'team', envs: ['dev', 'prod'] });
     expect(m.getElement('app')?.tags).toEqual(['t']);
+    await expectValidLikeC4({ 'model.c4': model });
   });
 });
 
@@ -290,7 +293,7 @@ describe('CLI apply rejects values LikeC4 would not accept', () => {
     },
     {
       name: 'an unknown arrow head',
-      mutation: { op: 'updateRelationship', source: 'app.db', target: 'app', style: { head: 'arrow' } },
+      mutation: { op: 'updateRelationship', source: 'app.db', target: 'ext', style: { head: 'arrow' } },
       path: 'mutations[1].style.head',
     },
     { name: 'a view id with a dot', mutation: { op: 'addView', id: 'a.b', type: 'element' }, path: 'mutations[1].id' },
@@ -306,6 +309,27 @@ describe('CLI apply rejects values LikeC4 would not accept', () => {
     },
     { name: 'a duplicate element name', mutation: { ...validAdd, id: 'db' }, path: 'mutations[1].id' },
     { name: 'the id of a view added before', mutation: { op: 'addView', id: 'index', type: 'element' }, path: 'mutations[2].id' },
+    {
+      name: 'an undeclared tag',
+      mutation: { ...validAdd, tags: ['i', 'undeclared'] },
+      path: 'mutations[1].tags[1]',
+    },
+    { name: 'an undeclared element kind', mutation: { ...validAdd, kind: 'nosuchkind' }, path: 'mutations[1].kind' },
+    {
+      name: 'a parent-child relationship',
+      mutation: { op: 'addRelationship', source: 'app', target: 'app.db' },
+      path: 'mutations[1].target',
+    },
+    {
+      name: 'an unresolved relationship target',
+      mutation: { op: 'addRelationship', source: 'ext', target: 'app.missing' },
+      path: 'mutations[1].target',
+    },
+    {
+      name: 'an undeclared tag on a relationship update',
+      mutation: { op: 'updateRelationship', source: 'ext', target: 'app.db', tags: ['undeclared'] },
+      path: 'mutations[1].tags[0]',
+    },
     {
       name: 'an undeclared custom color',
       mutation: { op: 'updateElement', fqn: 'app', style: { color: 'nosuchcolor' } },

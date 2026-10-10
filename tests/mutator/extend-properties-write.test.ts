@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
-import { expectAgreesWithLikeC4 } from '../helpers/likec4-model.js';
+import { expectAgreesWithLikeC4, expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * `updateElement` applies the documented semantics — `tags` / `links`
@@ -264,13 +264,14 @@ describe('updateElement — what is left in place', () => {
     expect(m.validate()).toEqual([]);
   });
 
-  it('keeps elements and relationships declared inside an extend block', () => {
-    const ext = `model {\n  extend app {\n    #b\n    cache = service 'Cache' {\n      #c\n    }\n    cache -> app 'reads'\n  }\n}\n`;
+  it('keeps elements and relationships declared inside an extend block', async () => {
+    const ext = `model {\n  extend app {\n    #b\n    cache = service 'Cache' {\n      #c\n    }\n    store = service 'Store'\n    cache -> store 'reads'\n  }\n}\n`;
     const m = LikeC4Mutator.fromFiles({ 'base.c4': BASE, 'ext.c4': ext });
     m.updateElement('app', { tags: [] });
     expect(m.serialize()['ext.c4']).toBe(ext.replace('    #b\n', ''));
     expect(m.getElement('app.cache')!.tags).toEqual(['c']);
     expect(m.getRelationships({ sourceFqn: 'app.cache' })).toHaveLength(1);
+    await expectValidLikeC4(m.serialize());
   });
 
   it('does not touch extend blocks of descendants', () => {

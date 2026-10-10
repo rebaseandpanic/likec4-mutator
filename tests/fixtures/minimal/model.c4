@@ -4,6 +4,11 @@ specification {
   element database
   tag deprecated
   tag backend
+  tag internal
+  tag critical
+  tag monitored
+  tag legacy
+  tag async
 }
 model {
   app = system 'My Application' {

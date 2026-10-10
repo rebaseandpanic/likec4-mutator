@@ -26,9 +26,14 @@ const mutator = LikeC4Mutator.fromFiles({
 specification {
   element service
   element database
+  tag internal
+  tag critical
+  tag deprecated
 }
 model {
-  app = service 'My App'
+  app = service 'My App' {
+    api = service 'API'
+  }
 }
 views {
   view index {
@@ -72,7 +77,7 @@ mutator.addElement('app', {
 });
 
 // Add relationship (all properties)
-mutator.addRelationship('app', 'app.db', 'reads/writes', {
+mutator.addRelationship('app.api', 'app.db', 'reads/writes', {
   description: 'Queries the main database',
   technology: 'JDBC',
   tags: ['internal'],
@@ -109,7 +114,7 @@ const { changedFiles } = mutator.updateElement('app.db', {
 
 // Update an existing relationship (=> { changedFiles })
 mutator.updateRelationship(
-  { source: 'app', target: 'app.db' },
+  { source: 'app.api', target: 'app.db' },
   {
     label: 'persists',
     description: 'Reads and writes user data',
@@ -122,8 +127,8 @@ mutator.updateRelationship(
 );
 
 // Remove
+mutator.removeRelationship('app.api', 'app.db');
 mutator.removeElement('app.db');
-mutator.removeRelationship('app', 'app.db');
 
 // Validate & serialize
 const errors = mutator.validate(); // [] = valid
@@ -683,6 +688,21 @@ Every write call checks the values it introduces before anything changes. A reje
 | style values (`addElement`, `updateElement`, `addRelationship`, `updateRelationship`) | See [Element style properties](#element-style-properties) and [Relationship style properties](#relationship-style-properties); a field the style type does not have is rejected. |
 
 A value that would add other DSL than the property asked for (`autoLayout: 'LeftRight\n exclude a'`, `style: { color: 'red\n shape cylinder' }`) is rejected by these checks.
+
+Writes LikeC4 would reject are refused the same way:
+
+| Call | Rejected when |
+| --- | --- |
+| `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`). |
+| `updateElement`, `updateRelationship` | a tag of `tags` is not declared. |
+| `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
+| `addView` | an element view's `target` does not resolve to an element. |
+
+Endpoints are resolved the way LikeC4 links them from the place they are written — the first `model` block of the first file that has one: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
+
+**Only what the call introduces is checked.** Problems already in the files — undeclared tags or kinds, dangling references, duplicates — are neither reported nor a reason to reject a valid write, so a workspace with unrelated LikeC4 errors still accepts valid edits. `validate()` still reports syntax errors only.
+
+**Only the loaded files are known.** Declarations and elements of files that were not passed to `fromFiles` (or are outside `--dir`) are invisible: a kind, tag, custom color or endpoint declared only there is rejected, as the library cannot tell it from a typo. Load every file of the project (the CLI loads the whole `--dir` tree).
 
 ## How it works
 
