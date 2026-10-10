@@ -15,14 +15,15 @@ import {
   generateElement,
   generateStyleBlock,
   generateMetadataBlock,
+  elementStyleEntries,
   escapeString,
   formatLinkUrl,
   formatTag,
   type ElementStyle,
 } from './codegen.js';
 import { BodyInsertions } from './body-layout.js';
+import { buildMergeStyleEdits } from './style-ops.js';
 import {
-  expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
   buildRemovalEdit,
   buildReplaceLinksEdit as buildReplaceLinksEditShared,
@@ -241,8 +242,7 @@ export function updateElementEdit(
   // field overwrites the corresponding existing value; absent fields are
   // preserved.  An empty patch object is a no-op.
   if (patch.style !== undefined && Object.keys(patch.style).length > 0) {
-    const styleEdit = buildReplaceStyleEdit(node, fullText, patch.style, inserts);
-    if (styleEdit) edits.push(styleEdit);
+    edits.push(...buildReplaceStyleEdits(node, fullText, patch.style, inserts));
   }
 
   // Handle metadata — MERGE + null-deletion: each key in the patch upserts
@@ -555,84 +555,28 @@ function buildReplaceLinksEdit(
 }
 
 /**
- * Build a TextEdit that merges per-field updates into an existing
- * `style { ... }` block, or inserts a fresh block if none exists.
+ * Build the edits that merge per-field updates into the element's
+ * `style { ... }` block (the first one, which LikeC4 reads), or insert a
+ * fresh block if none exists.
  *
  * Merge semantics: each style key in `patch` overwrites the corresponding
- * existing value; keys absent from `patch` are preserved with their original
- * value.  The block is fully regenerated from the merged map (so reordering
- * or stylistic differences from the original CST text are not preserved —
- * only the surviving key/value pairs).
+ * existing value in place; keys absent from `patch` are preserved, and so
+ * are comments, separators and indentation in the block (see
+ * {@link buildMergeStyleEdits}).
  */
-function buildReplaceStyleEdit(
+function buildReplaceStyleEdits(
   node: AstElementNode,
   fullText: string,
   patch: ElementStyle,
   inserts: BodyInsertions,
-): TextEdit | null {
+): TextEdit[] {
   const indent = getNodeIndent(node, fullText);
-  const innerIndent = indent + '  ';
-
   const existingStyle = node.body?.props?.find((p) => p.$type === 'ElementStyleProperty');
   if (!existingStyle?.$cstNode) {
-    return buildInsertBodySnippet(node, indent, (ii) => generateStyleBlock(patch, ii), inserts);
+    const edit = buildInsertBodySnippet(node, indent, (ii) => generateStyleBlock(patch, ii), inserts);
+    return edit ? [edit] : [];
   }
-
-  const existing = readElementStyleProps(existingStyle, fullText);
-  const merged: ElementStyle = { ...existing };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined) continue;
-    (merged as Record<string, unknown>)[k] = v;
-  }
-
-  const cst = existingStyle.$cstNode;
-  const { offset, end } = expandRangeToConsumeSurroundingNewlines(fullText, cst.offset, cst.end);
-  const newText = '\n' + generateStyleBlock(merged, innerIndent);
-  return { offset, end, newText };
-}
-
-/**
- * Read existing element-style key/value pairs from a parsed
- * `ElementStyleProperty` AST node.  When the AST `value` field is undefined
- * (which happens for keyword-typed values such as `color blue`) the value is
- * recovered by parsing the raw CST text of the property.
- */
-function readElementStyleProps(
-  styleProp: NonNullable<NonNullable<AstElementNode['body']>['props']>[number],
-  fullText: string,
-): ElementStyle {
-  const out: Record<string, unknown> = {};
-  for (const rawSp of styleProp.props ?? []) {
-    const sp = rawSp as {
-      key?: string;
-      name?: string;
-      value?: unknown;
-      $cstNode?: { offset: number; end: number };
-    };
-    const key = sp.key ?? sp.name;
-    if (!key) continue;
-    let value: unknown;
-    const rawValue = sp.value;
-    if (rawValue && typeof rawValue === 'object') {
-      const obj = rawValue as { text?: unknown; value?: unknown };
-      value = obj.text ?? obj.value;
-    } else if (rawValue !== undefined && rawValue !== null) {
-      value = rawValue;
-    }
-    if (value === undefined || value === null) {
-      // Recover from CST text: "<key> <value>"
-      const cst = sp.$cstNode;
-      if (cst) {
-        const text = fullText.substring(cst.offset, cst.end).trim();
-        const space = text.indexOf(' ');
-        if (space !== -1) value = text.substring(space + 1).trim();
-      }
-    }
-    if (value !== undefined && value !== null) {
-      out[key] = value;
-    }
-  }
-  return out as ElementStyle;
+  return buildMergeStyleEdits(fullText, existingStyle, elementStyleEntries(patch), indent + '    ');
 }
 
 /**

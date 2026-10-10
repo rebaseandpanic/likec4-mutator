@@ -11,6 +11,7 @@ import { getNodeIndent } from './indent.js';
 import {
   generateRelationship,
   generateRelationshipStyleBlock,
+  relationshipStyleEntries,
   generateMetadataBlock,
   escapeString,
   formatLinkUrl,
@@ -18,8 +19,8 @@ import {
   type RelationshipStyle,
 } from './codegen.js';
 import { BodyInsertions } from './body-layout.js';
+import { buildMergeStyleEdits } from './style-ops.js';
 import {
-  expandRangeToConsumeSurroundingNewlines,
   buildRemovalEdit,
   buildInsertBodySnippet,
   buildReplaceLinksEdit,
@@ -302,8 +303,7 @@ export function updateRelationshipEdit(
     );
   }
   if (patch.style !== undefined && Object.keys(patch.style).length > 0) {
-    const e = buildReplaceRelationStyleEdit(rel, fullText, indent, patch.style, inserts);
-    if (e) edits.push(e);
+    edits.push(...buildReplaceRelationStyleEdits(rel, fullText, indent, patch.style, inserts));
   }
 
   return inserts.apply(edits);
@@ -583,77 +583,29 @@ function buildRelationReplaceTagsEdit(
 }
 
 /**
- * Build a TextEdit that merges per-field updates into an existing relation
- * `style { ... }` block or inserts a fresh one.  Keys not in the patch are
- * preserved.
+ * Build the edits that merge per-field updates into the relation's
+ * `style { ... }` block (the first one, which LikeC4 reads) in place, or
+ * insert a fresh one.  Keys not in the patch, comments, separators and
+ * indentation in the block are preserved (see {@link buildMergeStyleEdits}).
  */
-function buildReplaceRelationStyleEdit(
+function buildReplaceRelationStyleEdits(
   rel: RelationAstNode,
   fullText: string,
   indent: string,
   patch: RelationshipStyle,
   inserts: BodyInsertions,
-): TextEdit | null {
-  const innerIndent = indent + '  ';
+): TextEdit[] {
   const existingStyle = rel.body?.props?.find((p) => p.$type === 'RelationStyleProperty');
   if (!existingStyle?.$cstNode) {
-    return buildInsertBodySnippet(rel as BodyOwnerNode, indent, (ii) => generateRelationshipStyleBlock(patch, ii), inserts);
+    const edit = buildInsertBodySnippet(
+      rel as BodyOwnerNode,
+      indent,
+      (ii) => generateRelationshipStyleBlock(patch, ii),
+      inserts,
+    );
+    return edit ? [edit] : [];
   }
-
-  const existing = readRelationStyleProps(existingStyle, fullText);
-  const merged: RelationshipStyle = { ...existing };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined) continue;
-    (merged as Record<string, unknown>)[k] = v;
-  }
-
-  const cst = existingStyle.$cstNode;
-  const { offset, end } = expandRangeToConsumeSurroundingNewlines(fullText, cst.offset, cst.end);
-  return {
-    offset,
-    end,
-    newText: '\n' + generateRelationshipStyleBlock(merged, innerIndent),
-  };
-}
-
-/**
- * Read existing relationship-style key/value pairs.  Keyword-typed values
- * (where AST.value is undefined) are recovered from raw CST text as a
- * trimmed substring after the key token.
- */
-function readRelationStyleProps(
-  styleProp: { props?: Array<unknown> },
-  fullText: string,
-): RelationshipStyle {
-  const out: Record<string, unknown> = {};
-  for (const sp of styleProp.props ?? []) {
-    const p = sp as {
-      key?: string;
-      name?: string;
-      value?: unknown;
-      $cstNode?: { offset: number; end: number };
-    };
-    const key = p.key ?? p.name;
-    if (!key) continue;
-    let value: unknown;
-    const rawValue = p.value;
-    if (rawValue && typeof rawValue === 'object') {
-      const obj = rawValue as { text?: unknown; value?: unknown };
-      value = obj.text ?? obj.value;
-    } else if (rawValue !== undefined && rawValue !== null) {
-      value = rawValue;
-    }
-    if (value === undefined || value === null) {
-      const cst = p.$cstNode;
-      if (cst) {
-        const text = fullText.substring(cst.offset, cst.end).trim();
-        const space = text.indexOf(' ');
-        if (space !== -1) value = text.substring(space + 1).trim();
-      }
-    }
-    if (value !== undefined && value !== null) out[key] = value;
-  }
-  return out as RelationshipStyle;
+  return buildMergeStyleEdits(fullText, existingStyle, relationshipStyleEntries(patch), indent + '    ');
 }
 
 /**

@@ -23,7 +23,8 @@ import {
   expandRangeToConsumeSurroundingNewlines,
   buildInsertBodySnippet,
   buildRemovalEdit,
-  findClosingBraceOffset,
+  blockEntryLayout,
+  ownLineIndent,
   type BodyOwnerNode,
 } from './cst-helpers.js';
 
@@ -285,22 +286,17 @@ export function buildReplaceMetadataEditOnNode(
   }
 
   const survivors = firstAttrs.filter((attr) => !removed.includes(attr));
-  const ownLineIndent = (offset: number): string | undefined => {
-    const lineStart = fullText.lastIndexOf('\n', offset - 1) + 1;
-    const leading = fullText.substring(lineStart, offset);
-    return /^[ \t]*$/.test(leading) ? leading : undefined;
-  };
-  const lastOnOwnLine = [...survivors].reverse().find((a) => a.$cstNode && ownLineIndent(a.$cstNode.offset) !== undefined);
-  const closingBrace = findClosingBraceOffset(cst);
-  const closingIndent = ownLineIndent(closingBrace);
-  const attrIndent =
-    (lastOnOwnLine?.$cstNode && ownLineIndent(lastOnOwnLine.$cstNode.offset)) ??
-    (closingIndent !== undefined ? closingIndent + '  ' : entryIndent);
+  const layout = blockEntryLayout(
+    fullText,
+    cst,
+    survivors.flatMap((attr) => (attr.$cstNode ? [attr.$cstNode] : [])),
+    entryIndent,
+  );
 
   edits.push(...removeAttributes(removed, fullText));
   for (const { attr, key } of replaced) {
     if (!attr.$cstNode) continue;
-    const indentHere = ownLineIndent(attr.$cstNode.offset) ?? attrIndent;
+    const indentHere = ownLineIndent(fullText, attr.$cstNode.offset) ?? layout.indent;
     edits.push({
       offset: attr.$cstNode.offset,
       end: attr.$cstNode.end,
@@ -308,18 +304,7 @@ export function buildReplaceMetadataEditOnNode(
     });
   }
   if (added.length > 0) {
-    const entries = added.map(([key, value]) => `${key} ${formatMetadataValue(value, attrIndent)}`);
-    if (closingIndent !== undefined) {
-      // Multi-line block: new lines just above the closing brace.
-      const lineStart = closingBrace - closingIndent.length;
-      edits.push({ offset: lineStart, end: lineStart, newText: entries.map((e) => `${attrIndent}${e}\n`).join('') });
-    } else {
-      // One-line block: on the same line, after the last attribute kept.
-      const lastKept = survivors[survivors.length - 1]?.$cstNode;
-      const at = lastKept ? lastKept.end : fullText.indexOf('{', cst.offset) + 1;
-      const trailing = fullText[at] === '}' ? ' ' : '';
-      edits.push({ offset: at, end: at, newText: ` ${entries.join(' ')}${trailing}` });
-    }
+    edits.push(layout.append(added.map(([key, value]) => `${key} ${formatMetadataValue(value, layout.indent)}`)));
   }
   return edits;
 }

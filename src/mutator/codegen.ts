@@ -486,6 +486,62 @@ export function generateMetadataBlock(
   return block;
 }
 
+/** Element style fields in the order they are written. */
+const ELEMENT_STYLE_KEYS = [
+  'shape',
+  'color',
+  'icon',
+  'opacity',
+  'border',
+  'multiple',
+  'size',
+  'padding',
+  'textSize',
+  'iconPosition',
+  'iconColor',
+  'iconSize',
+] as const satisfies ReadonlyArray<keyof ElementStyle>;
+
+/** Relationship style fields in the order they are written. */
+const RELATIONSHIP_STYLE_KEYS = ['line', 'color', 'head', 'tail'] as const satisfies ReadonlyArray<
+  keyof RelationshipStyle
+>;
+
+/**
+ * The `[key, value text]` pairs of a style, in the order they are written.
+ * A string field is written when non-empty (an empty string makes no sense
+ * as a style value and is treated as unset); a boolean field whenever it is
+ * defined.
+ */
+function styleEntries<S extends object>(style: S, keys: ReadonlyArray<keyof S & string>): Array<[string, string]> {
+  const entries: Array<[string, string]> = [];
+  for (const key of keys) {
+    const value: unknown = style[key];
+    if (typeof value === 'boolean' || (typeof value === 'string' && value !== '')) entries.push([key, String(value)]);
+  }
+  return entries;
+}
+
+/** The `[key, value text]` pairs of an element style, in the order they are written. */
+export function elementStyleEntries(style: ElementStyle): Array<[string, string]> {
+  return styleEntries(style, ELEMENT_STYLE_KEYS);
+}
+
+/** The `[key, value text]` pairs of a relationship style, in the order they are written. */
+export function relationshipStyleEntries(style: RelationshipStyle): Array<[string, string]> {
+  return styleEntries(style, RELATIONSHIP_STYLE_KEYS);
+}
+
+/** A `style { ... }` block holding `entries`, with trailing newline. */
+function styleBlock(entries: Array<[string, string]>, innerIndent: string): string {
+  const styleIndent = innerIndent + '  ';
+  return (
+    `${innerIndent}style {\n` +
+    entries.map(([key, value]) => `${styleIndent}${key} ${value}\n`).join('') +
+    `${innerIndent}}\n`
+  );
+}
+
 /**
  * Generate a `style { ... }` block for an element.
  *
@@ -494,24 +550,7 @@ export function generateMetadataBlock(
  * @returns Complete style block string (including trailing newline)
  */
 export function generateStyleBlock(style: ElementStyle, innerIndent: string): string {
-  const styleIndent = innerIndent + '  ';
-  let result = `${innerIndent}style {\n`;
-  // Truthiness checks are intentional: empty string values are treated as unset
-  // because an empty string for shape/color/border makes no sense in the DSL.
-  if (style.shape) result += `${styleIndent}shape ${style.shape}\n`;
-  if (style.color) result += `${styleIndent}color ${style.color}\n`;
-  if (style.icon) result += `${styleIndent}icon ${style.icon}\n`;
-  if (style.opacity) result += `${styleIndent}opacity ${style.opacity}\n`;
-  if (style.border) result += `${styleIndent}border ${style.border}\n`;
-  if (style.multiple !== undefined) result += `${styleIndent}multiple ${style.multiple}\n`;
-  if (style.size) result += `${styleIndent}size ${style.size}\n`;
-  if (style.padding) result += `${styleIndent}padding ${style.padding}\n`;
-  if (style.textSize) result += `${styleIndent}textSize ${style.textSize}\n`;
-  if (style.iconPosition) result += `${styleIndent}iconPosition ${style.iconPosition}\n`;
-  if (style.iconColor) result += `${styleIndent}iconColor ${style.iconColor}\n`;
-  if (style.iconSize) result += `${styleIndent}iconSize ${style.iconSize}\n`;
-  result += `${innerIndent}}\n`;
-  return result;
+  return styleBlock(elementStyleEntries(style), innerIndent);
 }
 
 /**
@@ -525,12 +564,5 @@ export function generateRelationshipStyleBlock(
   style: RelationshipStyle,
   innerIndent: string,
 ): string {
-  const styleIndent = innerIndent + '  ';
-  let result = `${innerIndent}style {\n`;
-  if (style.line) result += `${styleIndent}line ${style.line}\n`;
-  if (style.color) result += `${styleIndent}color ${style.color}\n`;
-  if (style.head) result += `${styleIndent}head ${style.head}\n`;
-  if (style.tail) result += `${styleIndent}tail ${style.tail}\n`;
-  result += `${innerIndent}}\n`;
-  return result;
+  return styleBlock(relationshipStyleEntries(style), innerIndent);
 }

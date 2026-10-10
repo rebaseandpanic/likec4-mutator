@@ -319,3 +319,61 @@ export function buildReplaceTagsInPlaceEdit(
   const separator = /^[ \t]*$/.test(leading) ? '\n' + leading : ' ';
   return { offset: tagsCst.offset, end: tagsCst.end, newText: tags.map((t) => formatTag(t)).join(separator) };
 }
+
+/**
+ * The leading whitespace of the line holding `offset` when only whitespace
+ * precedes `offset` on that line, else undefined.
+ */
+export function ownLineIndent(fullText: string, offset: number): string | undefined {
+  const lineStart = fullText.lastIndexOf('\n', offset - 1) + 1;
+  const leading = fullText.substring(lineStart, offset);
+  return /^[ \t]*$/.test(leading) ? leading : undefined;
+}
+
+/** Where new entries of a `key value` block (`metadata { }`, `style { }`) go, see {@link blockEntryLayout}. */
+export interface BlockEntryLayout {
+  /** Indentation of an entry written on a line of its own. */
+  indent: string;
+  /** Edit that adds `entries` (complete `key value` texts) at the end of the block. */
+  append(entries: string[]): TextEdit;
+}
+
+/**
+ * How new entries are added to a `key value` block such as `metadata { }`
+ * or `style { }`: on their own lines just above the closing `}` of a block
+ * laid out over several lines, at the indentation of the last entry kept on
+ * a line of its own (else the `}` line's indentation plus one level); after
+ * the last entry kept on the line of a one-line block.
+ *
+ * @param block          - CST node of the block, ending with its `}`
+ * @param kept           - Source ranges of the entries that stay, in source order
+ * @param fallbackIndent - Entry indentation when nothing else determines it
+ */
+export function blockEntryLayout(
+  fullText: string,
+  block: CstNodeLike,
+  kept: ReadonlyArray<{ offset: number; end: number }>,
+  fallbackIndent: string,
+): BlockEntryLayout {
+  const lastOnOwnLine = [...kept].reverse().find((e) => ownLineIndent(fullText, e.offset) !== undefined);
+  const closingBrace = findClosingBraceOffset(block);
+  const closingIndent = ownLineIndent(fullText, closingBrace);
+  const indent =
+    (lastOnOwnLine && ownLineIndent(fullText, lastOnOwnLine.offset)) ??
+    (closingIndent !== undefined ? closingIndent + '  ' : fallbackIndent);
+  return {
+    indent,
+    append(entries: string[]): TextEdit {
+      if (closingIndent !== undefined) {
+        // Multi-line block: new lines just above the closing brace.
+        const lineStart = closingBrace - closingIndent.length;
+        return { offset: lineStart, end: lineStart, newText: entries.map((e) => `${indent}${e}\n`).join('') };
+      }
+      // One-line block: on the same line, after the last entry kept.
+      const lastKept = kept[kept.length - 1];
+      const at = lastKept ? lastKept.end : fullText.indexOf('{', block.offset) + 1;
+      const trailing = fullText[at] === '}' ? ' ' : '';
+      return { offset: at, end: at, newText: ` ${entries.join(' ')}${trailing}` };
+    },
+  };
+}

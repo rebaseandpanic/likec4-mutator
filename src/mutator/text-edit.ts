@@ -27,9 +27,24 @@ export interface TextEdit {
  * @param source  - Original source text
  * @param edits   - List of edits to apply (must not overlap)
  * @returns Updated source string
+ * @throws {Error} when two edits replace overlapping ranges, or an insertion
+ *   falls strictly inside a replaced range — the result would depend on the
+ *   order of application
  */
 export function applyEdits(source: string, edits: TextEdit[]): string {
   const indexed = edits.map((e, i) => ({ ...e, _idx: i }));
+  const ascending = [...indexed].sort((a, b) => a.offset - b.offset || a.end - b.end);
+  for (let i = 0; i < ascending.length; i++) {
+    const a = ascending[i];
+    for (let j = i + 1; j < ascending.length && ascending[j].offset < a.end; j++) {
+      const b = ascending[j];
+      if (b.offset > a.offset || b.end > b.offset) {
+        throw new Error(
+          `internal: overlapping text edits [${a.offset}, ${a.end}) and [${b.offset}, ${b.end})`,
+        );
+      }
+    }
+  }
   // Descending offset; at the same offset the replacement is applied first
   // and the insertions after it in reverse list order, so that each
   // insertion lands before the text of the ones applied earlier.

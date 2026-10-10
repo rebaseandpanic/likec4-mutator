@@ -294,7 +294,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 | `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags written for it (kind defaults still apply, see [Specification defaults](#specification-defaults)). |
 | `links` | REPLACE.  `[]` clears all links written for it (the kind links then apply). |
 | `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting), and so are comments in the block: patched keys are edited in place, new keys added at the end of the block. |
-| `style` | MERGE per-field (v0.4.0 BREAKING — was full replace).  Pass a complete style object to reproduce the old replace-all behaviour. |
+| `style` | MERGE per-field (v0.4.0 BREAKING — was full replace).  Pass a complete style object to reproduce the old replace-all behaviour.  The first `style { }` block of the body (the one LikeC4 reads) is edited in place: a patched field gets its new value wherever the block declares it, a missing field is added at the end of the block, and other fields, comments, `:` / `;` separators and indentation keep their text. |
 
 ```json
 {
@@ -324,7 +324,7 @@ Updates fields on an existing relationship.  Required: `op`, `source`, `target`,
 | `tags` | REPLACE.  `[]` clears all tags written for it (kind defaults still apply, see [Specification defaults](#specification-defaults)). |
 | `links` | REPLACE.  `[]` clears all links written for it (the kind links then apply). |
 | `metadata` | MERGE with `null`-deletion (same as `updateElement`). |
-| `style` | MERGE per-field. |
+| `style` | MERGE per-field, in place (same as `updateElement`). |
 
 ```json
 {

@@ -76,28 +76,12 @@ describe('applyEdits', () => {
     expect(applyEdits(source, edits)).toBe('XY1Y2Z');
   });
 
-  it('documents overlapping edits behavior: last applied (highest offset sorted first) wins for overlapping ranges', () => {
-    // applyEdits does NOT detect overlapping edits — callers must ensure edits
-    // are non-overlapping.  This test documents what actually happens when two
-    // edits cover overlapping byte ranges so that future maintainers understand
-    // the semantics rather than being surprised by the output.
-    //
-    // Edits are sorted by descending offset, so the edit with the higher offset
-    // is applied first to the original string, after which the remaining edits
-    // are applied to a string whose layout has already changed.  When ranges
-    // overlap the second (lower-offset) edit will overwrite part of what the
-    // first applied.
-    const source = 'abcde'; // offsets 0-4
-    // Edit A: replace [1,4) with 'XYZ'  → 'aXYZe'
-    // Edit B: replace [2,3) with '!'    → both overlap on index 2 of the original
-    const edits: TextEdit[] = [
-      { offset: 1, end: 4, newText: 'XYZ' }, // lower offset → applied second
-      { offset: 2, end: 3, newText: '!' },    // higher offset → applied first
-    ];
-    // After applying edit B first: 'ab!de'
-    // After applying edit A (offset 1, end 4) to 'ab!de': 'aXYZe'
-    // The documented (not necessarily desired) result:
-    expect(applyEdits(source, edits)).toBe('aXYZe');
+  it.each([
+    ['two replaced ranges overlap', [{ offset: 1, end: 4, newText: 'XYZ' }, { offset: 2, end: 3, newText: '!' }]],
+    ['two replacements start at the same offset', [{ offset: 1, end: 2, newText: 'X' }, { offset: 1, end: 3, newText: 'Y' }]],
+    ['an insertion falls inside a replaced range', [{ offset: 1, end: 4, newText: 'XYZ' }, { offset: 2, end: 2, newText: '!' }]],
+  ] as Array<[string, TextEdit[]]>)('rejects edits whose result would depend on the order: %s', (_, edits) => {
+    expect(() => applyEdits('abcde', edits)).toThrow(/overlapping text edits/);
   });
 
   it('puts insertions at the start of a replaced range before the replacement, in list order', () => {

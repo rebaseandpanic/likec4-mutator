@@ -4,6 +4,7 @@
 
 ### Bugfix
 - Text inserted into an existing block is laid out on lines of its own (lc4m-15.27). A property, tag, link, `style` or `metadata` block added to a one-line body (`a = service { description 'd' }`, `a -> b { }`), and an element, relationship or view added to a one-line parent body, `model { }` or `views { }` block, now spreads the block over several lines, indented one level deeper than its owner, with the closing `}` on its own line. Before, the new text was written on the `{` line and the `}` was moved to the end of the inserted text. Into a body already written over several lines, a property no longer gets the indentation of the `}` line added to its own and no longer pulls the `}` to the start of the line; inserted tags are no longer followed by an empty line.
+- `updateElement({ style })` and `updateRelationship({ style })` merge the patch into the existing `style { }` block in place (lc4m-15.27). Patched values are rewritten where they are written and missing fields added at the end of the block; comments, other fields, `:` / `;` separators and indentation are kept. Before, the whole block was regenerated, which dropped comments and could mis-indent it.
 
 ## [0.7.1] - 2026-10-08
 
