@@ -350,14 +350,60 @@ export function generateView(opts: GenerateViewOpts): string {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/** A line break in a value given by the caller: `\r\n`, `\n` or `\r`. */
+const LINE_BREAK = /\r\n|\r|\n/;
+
 /**
  * Escape backslashes and single quotes for use inside LikeC4 single-quoted
- * string literals.  Newline and tab characters are replaced with a space
- * because the grammar does not support embedded newlines or tab characters
- * in string tokens.
+ * string literals.  Line breaks (`\r\n`, `\n`, `\r`) and tab characters are
+ * replaced with a space: these values are written as single-line strings.
  */
 export function escapeString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, ' ').replace(/\t/g, ' ');
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r\n|[\r\n\t]/g, ' ');
+}
+
+/**
+ * A metadata string value as LikeC4 source text.  A value without line
+ * breaks is a single-quoted string (see {@link escapeString}).  A value with
+ * line breaks is a Markdown string (see {@link formatMarkdownString}), so its
+ * lines reach LikeC4's model unchanged.
+ *
+ * @param indent - Indentation of the line the value starts on
+ */
+export function formatMetadataString(value: string, indent: string): string {
+  return LINE_BREAK.test(value) ? formatMarkdownString(value, indent) : `'${escapeString(value)}'`;
+}
+
+/**
+ * A multi-line value as a LikeC4 Markdown string: three single quotes ending
+ * the current line, every line of the value on its own line one level deeper
+ * than `indent` (empty lines stay empty), and the closing three quotes on a
+ * line of their own at `indent`:
+ *
+ * ```
+ * manifest '''
+ *   apiVersion: v1
+ *   kind: Deployment
+ * '''
+ * ```
+ *
+ * LikeC4 reads a Markdown string's content with Langium's string escapes
+ * (so `\` is written `\\`) and ends it at the first three quotes in a row
+ * (so a `'` followed by another `'` is written `\'`); then, like every
+ * metadata value, it removes the indentation its lines have in common and
+ * trims it (`removeIndent`).  The added indentation is therefore removed
+ * again, and the value reads back as given when it has no leading or
+ * trailing whitespace and its non-empty lines do not all start with
+ * whitespace.  Lines are joined with `\n`; the mutator writes the file's
+ * line ending.
+ */
+export function formatMarkdownString(value: string, indent: string): string {
+  const lineIndent = indent + '  ';
+  const lines = value
+    .split(LINE_BREAK)
+    .map((line) => (line === '' ? '' : lineIndent + line.replace(/\\/g, '\\\\').replace(/'(?=')/g, "\\'")));
+  const quotes = "'''";
+  return `${quotes}\n${lines.join('\n')}\n${indent}${quotes}`;
 }
 
 /**
@@ -432,7 +478,9 @@ export function validateMetadataKey(key: string): string {
  * everything after the key, but excluding the leading space and trailing
  * newline.
  *
- * - Scalar string: emitted as `'value'` (escaped).
+ * - Scalar string: emitted as `'value'` (escaped), or as a Markdown string
+ *   when it has line breaks (see {@link formatMetadataString}); so is every
+ *   array item.
  * - One-element array: emitted inline as `['value']`.
  * - Multi-element array: emitted as a multi-line bracket list.
  * - Empty array: throws.  The LikeC4 grammar does not accept `[]`.
@@ -443,7 +491,7 @@ export function validateMetadataKey(key: string): string {
  */
 export function formatMetadataValue(value: string | string[], innerIndent: string): string {
   if (typeof value === 'string') {
-    return `'${escapeString(value)}'`;
+    return formatMetadataString(value, innerIndent);
   }
   if (!Array.isArray(value)) {
     throw new Error(
@@ -454,11 +502,11 @@ export function formatMetadataValue(value: string | string[], innerIndent: strin
     throw new Error('empty array not allowed by LikeC4 grammar');
   }
   if (value.length === 1) {
-    return `['${escapeString(value[0])}']`;
+    return `[${formatMetadataString(value[0], innerIndent)}]`;
   }
   // Multi-line: each entry on its own line, no trailing comma after the last.
   const itemIndent = innerIndent + '  ';
-  const items = value.map((v) => `${itemIndent}'${escapeString(v)}'`).join(',\n');
+  const items = value.map((v) => `${itemIndent}${formatMetadataString(v, itemIndent)}`).join(',\n');
   return `[\n${items}\n${innerIndent}]`;
 }
 

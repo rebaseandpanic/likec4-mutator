@@ -293,7 +293,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 | `title`, `summary`, `description`, `technology` | REPLACE.  Every declaration is rewritten (a body may repeat a property; LikeC4 reads the last one).  A summary or technology written after the title (`name = kind 'title' 'summary' 'technology'`) is what LikeC4 reads, so it is replaced there; an empty summary no longer overrides the body and is written into the body as well. |
 | `tags` | REPLACE (v0.4.0 BREAKING — was append).  `[]` clears all tags written for it (kind defaults still apply, see [Specification defaults](#specification-defaults)). |
 | `links` | REPLACE.  `[]` clears all links written for it (the kind links then apply). |
-| `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting), and so are comments in the block: patched keys are edited in place, new keys added at the end of the block. |
+| `metadata` | MERGE.  Map a key to `null` to delete it; map to a string or `string[]` to upsert.  Keys absent from the patch are preserved verbatim (including original array formatting), and so are comments in the block: patched keys are edited in place, new keys added at the end of the block.  A value with line breaks is written as a Markdown string (see [Multi-line metadata values](#multi-line-metadata-values)). |
 | `style` | MERGE per-field (v0.4.0 BREAKING — was full replace).  Pass a complete style object to reproduce the old replace-all behaviour.  The first `style { }` block of the body (the one LikeC4 reads) is edited in place: a patched field gets its new value wherever the block declares it, a missing field is added at the end of the block, and other fields, comments, `:` / `;` separators and indentation keep their text. |
 
 ```json
@@ -440,6 +440,25 @@ Which LikeC4 DSL constructs the library can read, add, update and remove — rul
 | metadata | `Record<string, string \| string[]>` | yes | yes (merge, `null` deletes a key) | `metadata { key 'val' }` or `metadata { key ['v1', 'v2'] }` |
 
 `getElement`, `listElements` and `getRelationships` report `title`, `summary`, `description` and `technology` as LikeC4 reads them: common indentation removed and trimmed, a technology written inline (`= kind 'Title' 'summary' 'technology'`, `-> target 'label' 'description' 'technology'`) joined into one line, a Markdown string (`'''...'''`) as its content. `summary '  text  '` reads as `'text'`; a whitespace-only Markdown summary or description reads as `''`; an empty Markdown `title` or `technology` is no value.
+
+### Multi-line metadata values
+
+A metadata value (or array item) with line breaks — YAML, JSON, any multi-line text — is written as a LikeC4 Markdown string, one level deeper than its key, wherever the library writes metadata (`addElement`, `addRelationship`, `updateElement`, `updateRelationship`):
+
+```typescript
+mutator.updateElement('app', { metadata: { manifest: 'apiVersion: v1\nkind: Deployment' } });
+```
+
+```
+    metadata {
+      manifest '''
+        apiVersion: v1
+        kind: Deployment
+      '''
+    }
+```
+
+LikeC4 (and the library) read it back as the value written.  As for any metadata value, LikeC4 removes the indentation shared by all lines and trims the value, so leading and trailing whitespace and common indentation are not kept.  A value without line breaks stays a single-quoted string.
 
 ### Element style properties
 
