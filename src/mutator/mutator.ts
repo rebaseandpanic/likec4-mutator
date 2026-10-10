@@ -11,7 +11,9 @@ import { C4Query } from '../query/query.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
   WorkspaceIndex,
+  resolveDocumentReferences,
   resolveReferenceText,
+  type ReferenceResolution,
   resolveRelations,
   type ExtendRelationBlockRef,
   type ResolvedRelation,
@@ -262,7 +264,15 @@ export class LikeC4Mutator {
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = addElementEdit(doc, parentFqn, opts);
-    this.applyEdit(filename, edit);
+    const before = this.referenceResolutions();
+    const snapshot = this.snapshot();
+    try {
+      this.applyEdit(filename, edit);
+      this.rejectChangedReferences(before, fqn);
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
     return fqn;
   }
 
@@ -899,6 +909,49 @@ export class LikeC4Mutator {
       );
     }
     return fqn;
+  }
+
+  /** Every element reference of every loaded file that the index resolves (see {@link resolveDocumentReferences}). */
+  private referenceResolutions(): Map<string, ReferenceResolution[]> {
+    const result = new Map<string, ReferenceResolution[]>();
+    for (const [file, doc] of this.documents) result.set(file, resolveDocumentReferences(doc.ast, this.workspace));
+    return result;
+  }
+
+  /**
+   * Throw when declaring element `fqn` changed what an existing reference
+   * links to: a reference that resolved before (`before`, taken before the
+   * declaration was written) now resolves to another element or not at all.
+   * A new name can do that by taking a unique descendant's name out of scope
+   * (`api` resolving to `app.api` becomes ambiguous once `other.api` exists)
+   * or by shadowing it.  References that did not resolve before are not
+   * considered: they are not changed by the call.
+   *
+   * @throws {InvalidWriteError} on `name`
+   */
+  private rejectChangedReferences(before: Map<string, ReferenceResolution[]>, fqn: string): void {
+    const after = this.referenceResolutions();
+    for (const [file, previous] of before) {
+      const current = after.get(file) ?? [];
+      // Declaring an element adds no reference, so both lists hold the same
+      // references in the same order.
+      if (current.length !== previous.length || current.some((ref, i) => ref.text !== previous[i]!.text)) {
+        throw new Error(`Internal error: the references of '${file}' changed while adding element '${fqn}'`);
+      }
+      previous.forEach((old, i) => {
+        const now = current[i]!.fqn;
+        if (old.fqn === undefined || now === old.fqn) return;
+        throw new InvalidWriteError(
+          'name',
+          `declaring '${fqn}' changes what an existing reference links to: the ${old.role} '${old.text}' in '${file}' ` +
+            `links to '${old.fqn}' and would ${
+              now === undefined
+                ? 'no longer resolve (LikeC4 would report: Could not resolve reference)'
+                : `link to '${now}' instead`
+            }`,
+        );
+      });
+    }
   }
 
   /** Ids of the views declared in every loaded file. */

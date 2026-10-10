@@ -62,6 +62,7 @@ interface RefLike {
 export interface WorkspaceDocumentAst {
   models?: Array<{ elements?: unknown[] }>;
   specifications?: unknown[];
+  views?: unknown[];
 }
 
 /** A document of the workspace together with the name of its file. */
@@ -146,6 +147,13 @@ export interface ResolvedRelation {
   targetText: string;
   /** True when both endpoints resolved to declared elements. */
   resolved: boolean;
+  /**
+   * FQN the written source reference links to; undefined when it does not
+   * resolve or the relation is sourceless (`-> x`, no reference written).
+   */
+  linkedSource: string | undefined;
+  /** FQN the target reference links to; undefined when it does not resolve. */
+  linkedTarget: string | undefined;
 }
 
 /** Name → FQN map of one scope container. */
@@ -480,6 +488,75 @@ export function resolveReferenceText(
   return resolver.resolveEndpoint(ref, chain);
 }
 
+/** One element reference written in a document, with the FQN LikeC4 links it to. */
+export interface ReferenceResolution {
+  /** What the reference is, e.g. `relationship source`, `view target` */
+  role: string;
+  /** The reference as written (`api`, `app.api`) */
+  text: string;
+  /** Linked FQN; undefined when the reference does not resolve */
+  fqn: string | undefined;
+}
+
+/**
+ * Every element reference of `ast` that this module resolves, in source order
+ * per kind, with the FQN it links to in `workspace`:
+ *  - the written source and the target of every relationship (model level,
+ *    in element bodies and in `extend X` bodies; see {@link resolveRelations});
+ *  - the source and target of every `extend a -> b { ... }` block;
+ *  - the X of every `extend X { ... }` block (a strict FQN: it resolves when
+ *    an element with exactly that FQN is declared);
+ *  - the element of every `view ... of X` (see {@link resolveReferenceText}).
+ *
+ * References of view rules, dynamic view steps and the deployment model are
+ * not included: their scopes are not reproduced by this module.
+ */
+export function resolveDocumentReferences(
+  ast: WorkspaceDocumentAst,
+  workspace: WorkspaceIndex,
+): ReferenceResolution[] {
+  const results: ReferenceResolution[] = [];
+  for (const rel of resolveRelations(ast, workspace)) {
+    const node = rel.node as AstNodeLike;
+    if (node.source) results.push({ role: 'relationship source', text: rel.sourceText, fqn: rel.linkedSource });
+    results.push({ role: 'relationship target', text: rel.targetText, fqn: rel.linkedTarget });
+  }
+
+  const models = ast.models ?? [];
+  const modelScopes = models.map((m) => computeLocalScope(m.elements ?? [], null).scope);
+  const resolver = new EndpointResolver(workspace, uniqueAcross(modelScopes));
+  models.forEach((model, i) => {
+    const chain: ScopeFrame[] = [{ scope: modelScopes[i] }];
+    for (const raw of model.elements ?? []) {
+      const item = raw as AstNodeLike;
+      if (item.$type === 'ExtendRelation') {
+        for (const role of ['source', 'target'] as const) {
+          const ref = item[role] as RefLike | undefined;
+          results.push({
+            role: `extend relationship ${role}`,
+            text: resolveFqnRef(ref),
+            fqn: resolver.resolveEndpoint(ref, chain),
+          });
+        }
+      } else if (isExtendElement(item)) {
+        const text = readStrictFqnRef(item.element);
+        if (text !== undefined) {
+          results.push({ role: 'extend target', text, fqn: workspace.has(text) ? text : undefined });
+        }
+      }
+    }
+  });
+
+  for (const block of (ast.views ?? []) as Array<{ views?: Array<{ viewOf?: { modelElement?: unknown } }> }>) {
+    for (const view of block.views ?? []) {
+      const ref = view.viewOf?.modelElement as RefLike | undefined;
+      if (!ref) continue;
+      results.push({ role: 'view target', text: resolveFqnRef(ref), fqn: resolver.resolveEndpoint(ref, []) });
+    }
+  }
+  return results;
+}
+
 /**
  * Every `extend a -> b { ... }` block of `ast` whose endpoints both resolve
  * (in the scope of its `model` block, like a model-level relation), in
@@ -568,11 +645,29 @@ class EndpointResolver {
       const resolvedSource = this.resolveRef(rel.source as RefLike, chain);
       const sourceFqn = resolvedSource ?? sourceText;
       const resolved = resolvedSource !== undefined && resolvedTarget !== undefined;
-      return { node: rel, sourceFqn, targetFqn, sourceText, targetText, resolved };
+      return {
+        node: rel,
+        sourceFqn,
+        targetFqn,
+        sourceText,
+        targetText,
+        resolved,
+        linkedSource: resolvedSource,
+        linkedTarget: resolvedTarget,
+      };
     }
     // Sourceless relation: the owner of the enclosing body is the source.
     const resolved = ownerFqn !== '' && resolvedTarget !== undefined;
-    return { node: rel, sourceFqn: ownerFqn, targetFqn, sourceText: ownerFqn, targetText, resolved };
+    return {
+      node: rel,
+      sourceFqn: ownerFqn,
+      targetFqn,
+      sourceText: ownerFqn,
+      targetText,
+      resolved,
+      linkedSource: undefined,
+      linkedTarget: resolvedTarget,
+    };
   }
 
   /** Resolve a relation endpoint reference; undefined when unresolvable. */

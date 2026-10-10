@@ -726,12 +726,14 @@ Writes LikeC4 would reject are refused the same way:
 
 | Call | Rejected when |
 | --- | --- |
-| `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`). |
+| `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`); the new name would change what an existing reference links to (field `name`, see below). |
 | `updateElement`, `updateRelationship` | a tag of `tags` is not declared. |
 | `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
 | `addView` | an element view's `target` does not resolve to an element. |
 
 Endpoints are resolved the way LikeC4 links them from the place they are written — the first `model` block of the first file that has one: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
+
+A new element can change how LikeC4 links references that are already written: with `app = service { api = service }`, a model-level `api -> other` links `api` to `app.api`, the only element of that name; once `other.api` exists, `api` is ambiguous and LikeC4 reports `Could not resolve reference`. A new direct child can also shadow a unique descendant (`app.api` linking to `app.inner.api` would link to a new `app.api`). `addElement` resolves the existing references again with the new element in place and is rejected, with nothing changed, when one that resolved before then resolves to another element or not at all. Checked are the references the library resolves: relationship endpoints (at model level, in element bodies and in `extend` bodies), the endpoints of `extend a -> b` blocks, the targets of `extend X` blocks and the `of` targets of element views — in every loaded file. References in view rules, dynamic view steps and the deployment model are not resolved by the library and not checked. References that did not resolve before the call are not considered.
 
 **Only what the call introduces is checked.** Problems already in the files — undeclared tags or kinds, dangling references, duplicates — are neither reported nor a reason to reject a valid write, so a workspace with unrelated LikeC4 errors still accepts valid edits. `validate()` still reports syntax errors only.
 
