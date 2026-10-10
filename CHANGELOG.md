@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.0] - 2026-10-10
 
 ### Breaking
 - Write calls check the identifiers and string parameters they introduce before anything is written, and throw the new `InvalidWriteError` (`field`, `detail`) naming the offending option; no file changes. `apply` exits with code 1 naming `mutations[i].<field>`; the single-purpose CLI commands name the option. Rejected now, written before:
