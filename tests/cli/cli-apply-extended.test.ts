@@ -219,7 +219,7 @@ describe('CLI apply extended', () => {
         mutations: [
           {
             op: 'addRelationship',
-            source: 'app',
+            source: 'app.db',
             target: 'app.api',
             label: 'delegates to',
             description: 'Routes incoming requests to the API',
@@ -312,7 +312,7 @@ describe('CLI apply extended', () => {
         mutations: [
           {
             op: 'addRelationship',
-            source: 'app',
+            source: 'app.api',
             target: 'app.db',
             label: 'stores data',
             technology: 'JDBC',

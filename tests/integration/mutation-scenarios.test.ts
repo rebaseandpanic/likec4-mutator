@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
 import { C4Query } from '../../src/query/query.js';
+import { expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 const fixturesDir = join(import.meta.dirname, '..', 'fixtures');
 
@@ -22,7 +23,7 @@ const parser = new C4Parser();
 // ---------------------------------------------------------------------------
 
 describe('Scenario 1: Add a complete service', () => {
-  it('should add service, database, relationship and view with 0 errors', () => {
+  it('should add service, database, relationship and view with 0 errors', async () => {
     const mutator = minimalMutator();
 
     // 1. Add a new service under `app` — include a description so that codegen
@@ -34,8 +35,9 @@ describe('Scenario 1: Add a complete service', () => {
       description: 'Handles incoming HTTP traffic',
     });
 
-    // 2. Add a database under the new service (gateway now has a body block)
-    mutator.addElement('app.gateway', {
+    // 2. Add a database next to the new service (LikeC4 rejects a
+    //    relationship between a parent and its child, so it is a sibling)
+    mutator.addElement('app', {
       name: 'cache',
       kind: 'database',
       title: 'Gateway Cache',
@@ -49,9 +51,10 @@ describe('Scenario 1: Add a complete service', () => {
     // 4. Add a view for the new service
     mutator.addView({ id: 'gatewayView', type: 'element', target: 'app.gateway', title: 'Gateway View' });
 
-    // 5. Validate — must have 0 errors
+    // 5. Validate — must have 0 errors, by the library and by LikeC4
     const errors = mutator.validate();
     expect(errors).toHaveLength(0);
+    await expectValidLikeC4(mutator.serialize());
 
     // 6. Verify all new elements exist via query
     const gateway = mutator.getElement('app.gateway');
@@ -59,7 +62,7 @@ describe('Scenario 1: Add a complete service', () => {
     expect(gateway!.kind).toBe('service');
     expect(gateway!.title).toBe('API Gateway');
 
-    const cache = mutator.getElement('app.gateway.cache');
+    const cache = mutator.getElement('app.cache');
     expect(cache).not.toBeNull();
     expect(cache!.kind).toBe('database');
     expect(cache!.technology).toBe('Redis');
@@ -69,9 +72,8 @@ describe('Scenario 1: Add a complete service', () => {
     expect(mutator.getElement('app.api')).not.toBeNull();
     expect(mutator.getElement('app.db')).not.toBeNull();
 
-    // 8. Verify the new relationship exists.  LikeC4 links `app.cache` to the
-    //    unique descendant `app.gateway.cache`, so that is the reported target.
-    const rels = mutator.getRelationships({ sourceFqn: 'app.gateway', targetFqn: 'app.gateway.cache' });
+    // 8. Verify the new relationship exists
+    const rels = mutator.getRelationships({ sourceFqn: 'app.gateway', targetFqn: 'app.cache' });
     expect(rels.length).toBeGreaterThan(0);
 
     // 9. Verify view appears in serialized output
@@ -489,10 +491,10 @@ views {
     expect(reparsed.errors).toHaveLength(0);
   });
 
-  it('should handle batch mutations on multi-file setup', () => {
+  it('should handle batch mutations on multi-file setup', async () => {
     const mutator = LikeC4Mutator.fromFiles({
-      'spec.c4': readFixture('minimal', 'spec.c4'),
-      'model.c4': readFixture('minimal', 'model.c4'),
+      'spec.c4': readFixture('minimal-split', 'spec.c4'),
+      'model.c4': readFixture('minimal-split', 'model.c4'),
     });
 
     // Apply mutations to model file (which contains the model block)
@@ -507,6 +509,7 @@ views {
     }
 
     expect(mutator.validate()).toHaveLength(0);
+    await expectValidLikeC4(mutator.serialize());
 
     const serialized = mutator.serialize();
     // Both files must be present in serialized output
@@ -514,7 +517,7 @@ views {
     expect(serialized['model.c4']).toBeTruthy();
 
     // Spec file should be unchanged
-    expect(serialized['spec.c4']).toBe(readFixture('minimal', 'spec.c4'));
+    expect(serialized['spec.c4']).toBe(readFixture('minimal-split', 'spec.c4'));
 
     // All batch elements must exist
     for (const item of batch) {

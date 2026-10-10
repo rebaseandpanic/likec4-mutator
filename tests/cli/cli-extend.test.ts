@@ -20,7 +20,7 @@ function writeProject(): string {
   mkdirSync(join(dir, 'ext'));
   writeFileSync(
     join(dir, 'base.c4'),
-    `specification {\n  element system\n}\nmodel {\n  app = system 'App' {\n    #a\n  }\n}\n`,
+    `specification {\n  element system\n  tag a\n  tag b\n  tag c\n}\nmodel {\n  app = system 'App' {\n    #a\n  }\n}\n`,
   );
   writeFileSync(join(dir, 'ext', 'more.c4'), `model {\n  extend app {\n    #b\n    metadata { k 'v' }\n  }\n}\n`);
   writeFileSync(join(dir, 'z.c4'), `model {\n\n  extend app {\n    #c\n  }\n}\n`);

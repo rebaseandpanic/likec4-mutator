@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Breaking
+- Write calls check the identifiers and string parameters they introduce before anything is written, and throw the new `InvalidWriteError` (`field`, `detail`) naming the offending option; no file changes. `apply` exits with code 1 naming `mutations[i].<field>`; the single-purpose CLI commands name the option. Rejected now, written before:
+  - an element name or view id that is not one LikeC4 identifier or is a reserved word (`this`, `it`, `self`, `super`, `likec4lib`, `global`) — an empty view id wrote an unnamed view;
+  - an element name already declared at the same FQN in a loaded file (a sibling in the parent's body or in an `extend` of the parent, or another root element), and a view id already used by a view of any type;
+  - a `kind` that is not one identifier, a relationship endpoint or view `target` that is not identifiers joined by `.`;
+  - an `autoLayout` that is not a direction optionally followed by whole-number rankSep and nodeSep;
+  - a style value that is not a value of its field (keyword sets of the installed grammar, a theme color or a custom color declared in a loaded file, a percentage from 0% to 100%, a library icon that exists, a URI other than `file://`, `none`, a boolean), and a style field the style type does not have;
+  - an `includes` item of a deployment view that uses `with { ... }`.
+  Such values could add other DSL than asked for (`autoLayout: 'LeftRight\n exclude a'` wrote an `exclude` rule) or produced text LikeC4 rejects or ignores.
+- Writes LikeC4 would reject semantically are refused before writing, with an `InvalidWriteError` naming the field: an undeclared element kind (`addElement`), an undeclared tag (`addElement`, `updateElement`, `addRelationship`, `updateRelationship`), a relationship endpoint that does not resolve, a self or parent-child relationship (`addRelationship`), and an element view `target` that does not resolve (`addView`). Endpoints are resolved the way LikeC4 links them from the `model` block they are written into (unique descendants included), so `addRelationship('app.gateway', 'app.cache')` is rejected when `app.cache` links to `app.gateway.cache`.
+- Only the values a call introduces are checked: problems already in the files do not block valid writes. Only the loaded files are known: a kind, tag, custom color or element declared in a file that is not loaded is rejected.
+
+### Added
+- `InvalidWriteError`, exported.
+
 ### Bugfix
 - Text inserted into an existing block is laid out on lines of its own (lc4m-15.27). A property, tag, link, `style` or `metadata` block added to a one-line body (`a = service { description 'd' }`, `a -> b { }`), and an element, relationship or view added to a one-line parent body, `model { }` or `views { }` block, now spreads the block over several lines, indented one level deeper than its owner, with the closing `}` on its own line. Before, the new text was written on the `{` line and the `}` was moved to the end of the inserted text. Into a body already written over several lines, a property no longer gets the indentation of the `}` line added to its own and no longer pulls the `}` to the start of the line; inserted tags are no longer followed by an empty line.
 - Metadata values (and array items) with line breaks are written as Markdown strings `'''...'''` instead of being flattened to one line (lc4m-15.27), so LikeC4 reads back the lines written — e.g. YAML or JSON payloads. Single-line values keep the `'...'` form.

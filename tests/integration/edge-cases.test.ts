@@ -10,6 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
+import { InvalidWriteError } from '../../src/mutator/write-checks.js';
+import { expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -39,6 +41,7 @@ views {
 
 /** Source that has only a specification block (no model, no views). */
 const SPEC_ONLY = `specification {
+  element system
   element service
   element database
 }
@@ -280,37 +283,29 @@ describe('Element with children', () => {
 // ===========================================================================
 
 describe('Relationship edge cases', () => {
-  it('should add relationship with non-existent source without throwing (no semantic validation)', () => {
-    // The library performs only syntactic operations; semantic reference
-    // resolution (whether the FQN actually exists) is not validated here.
+  it('rejects a relationship with a non-existent source (LikeC4: Could not resolve reference)', () => {
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MINIMAL_FULL });
-    expect(() =>
-      mutator.addRelationship('phantom', 'app', 'calls'),
-    ).not.toThrow();
+    expect(() => mutator.addRelationship('phantom', 'app', 'calls')).toThrow(
+      expect.objectContaining({ name: 'InvalidWriteError', field: 'source' }),
+    );
+    expect(mutator.serialize()['model.c4']).toBe(MINIMAL_FULL);
   });
 
-  it('should add a self-relationship (element -> itself)', () => {
+  it('rejects a self-relationship (LikeC4: Invalid parent-child relationship)', () => {
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MINIMAL_FULL });
-    expect(() =>
-      mutator.addRelationship('app', 'app', 'self loop'),
-    ).not.toThrow();
-
-    // The serialized text must contain the self-loop
-    const serialized = mutator.serialize()['model.c4'];
-    expect(serialized).toContain('app -> app');
-    // Validate: no parse errors
-    expect(mutator.validate()).toHaveLength(0);
+    expect(() => mutator.addRelationship('app', 'app', 'self loop')).toThrow(InvalidWriteError);
+    expect(mutator.serialize()['model.c4']).toBe(MINIMAL_FULL);
   });
 
-  it('should support multiple relationships between the same pair', () => {
+  it('should support multiple relationships between the same pair', async () => {
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MINIMAL_FULL });
 
-    mutator.addRelationship('app', 'app.api', 'first call');
-    mutator.addRelationship('app', 'app.api', 'second call');
+    mutator.addRelationship('app.db', 'app.api', 'first call');
+    mutator.addRelationship('app.db', 'app.api', 'second call');
 
-    const rels = mutator.getRelationships({ sourceFqn: 'app', targetFqn: 'app.api' });
-    expect(rels.length).toBeGreaterThanOrEqual(2);
-    expect(mutator.validate()).toHaveLength(0);
+    const rels = mutator.getRelationships({ sourceFqn: 'app.db', targetFqn: 'app.api' });
+    expect(rels).toHaveLength(2);
+    await expectValidLikeC4(mutator.serialize());
   });
 
   it('should add relationship with an empty label (label omitted)', () => {
@@ -620,18 +615,20 @@ describe('Minimal input variations', () => {
 // ===========================================================================
 
 describe('Element operations on model-only file', () => {
-  it('should add a top-level element to a model-only file', () => {
-    const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MODEL_ONLY });
+  // The kinds come from a specification in another file.
+  it('should add a top-level element to a model-only file', async () => {
+    const mutator = LikeC4Mutator.fromFiles({ 'spec.c4': SPEC_ONLY, 'model.c4': MODEL_ONLY });
     mutator.addElement(null, { name: 'ext', kind: 'system', title: 'External' });
     expect(mutator.getElement('ext')).not.toBeNull();
+    await expectValidLikeC4(mutator.serialize());
   });
 
-  it('should add relationship when model block exists', () => {
-    const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MODEL_ONLY });
-    // addRelationship does not validate whether source/target exist
-    expect(() =>
-      mutator.addRelationship('app', 'app.svc', 'internal'),
-    ).not.toThrow();
+  it('should add relationship when model block exists', async () => {
+    const mutator = LikeC4Mutator.fromFiles({ 'spec.c4': SPEC_ONLY, 'model.c4': MODEL_ONLY });
+    mutator.addElement(null, { name: 'ext', kind: 'system', title: 'External' });
+    mutator.addRelationship('app.svc', 'ext', 'calls');
+    expect(mutator.getRelationships({ sourceFqn: 'app.svc', targetFqn: 'ext' })).toHaveLength(1);
+    await expectValidLikeC4(mutator.serialize());
   });
 
   it('should throw when addView is called with no views block', () => {

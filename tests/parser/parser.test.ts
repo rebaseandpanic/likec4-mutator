@@ -147,8 +147,8 @@ model {
       expect(doc.errors).toHaveLength(0);
     });
 
-    it('should parse minimal/spec.c4', () => {
-      const source = readFixture('minimal', 'spec.c4');
+    it('should parse minimal-split/spec.c4', () => {
+      const source = readFixture('minimal-split', 'spec.c4');
       const doc = parser.parse(source);
       expect(doc.errors).toHaveLength(0);
     });

@@ -8,8 +8,10 @@
  */
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
+import { isSameHierarchy } from '@likec4/core/utils';
 import {
   WorkspaceIndex,
+  resolveReferenceText,
   resolveRelations,
   type ExtendRelationBlockRef,
   type ResolvedRelation,
@@ -47,6 +49,17 @@ import {
 } from './relationship-ops.js';
 import { addViewEdit, type GenerateViewOpts } from './view-ops.js';
 import { checkBraceBalance } from './brace-balance.js';
+import {
+  InvalidWriteError,
+  checkAutoLayout,
+  checkElementName,
+  checkKind,
+  checkReferenceForm,
+  checkStyle,
+  checkTags,
+  checkViewId,
+  checkViewIncludes,
+} from './write-checks.js';
 
 export type { AddElementOpts, UpdateElementPatch };
 export type { ElementStyle };
@@ -220,6 +233,10 @@ export class LikeC4Mutator {
    * @param opts      - Properties for the new element
    */
   addElement(parentFqn: string | null, opts: AddElementOpts): string {
+    checkElementName(opts.name);
+    checkKind(opts.kind, 'element', this.workspace);
+    checkTags(opts.tags, this.workspace);
+    checkStyle(opts.style, 'element', this.workspace);
     const filename = parentFqn
       ? this.findFileContaining(parentFqn)
       : this.findFileWithModel();
@@ -232,11 +249,21 @@ export class LikeC4Mutator {
       );
     }
 
+    const fqn = parentFqn ? `${parentFqn}.${opts.name}` : opts.name;
+    if (this.workspace.has(fqn)) {
+      // LikeC4 reports `Duplicate element name` for two declarations of one
+      // FQN anywhere in the project (`checkElement`, `FqnIndex.byFqn`).
+      throw new InvalidWriteError(
+        'name',
+        `an element '${fqn}' is already declared${parentFqn ? ` in '${parentFqn}'` : ' at the model root'} (in a loaded file)`,
+      );
+    }
+
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = addElementEdit(doc, parentFqn, opts);
     this.applyEdit(filename, edit);
-    return parentFqn ? `${parentFqn}.${opts.name}` : opts.name;
+    return fqn;
   }
 
   /**
@@ -284,6 +311,8 @@ export class LikeC4Mutator {
    * @returns The files that changed.
    */
   updateElement(fqn: string, props: UpdateElementPatch): UpdateElementResult {
+    checkTags(props.tags, this.workspace);
+    checkStyle(props.style, 'element', this.workspace);
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
 
@@ -415,11 +444,31 @@ export class LikeC4Mutator {
       style?: RelationshipStyle;
     },
   ): void {
+    checkReferenceForm(source, 'source');
+    checkReferenceForm(target, 'target');
+    checkTags(opts?.tags, this.workspace);
+    checkStyle(opts?.style, 'relationship', this.workspace);
     const filename = this.findFileWithModel();
     if (!filename) throw new Error('No file with a model block found');
 
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+    // The relationship is written into the first model block of `filename`;
+    // its endpoints link from there as LikeC4 links them.
+    const sourceFqn = this.resolveWritten(doc, filename, source, 'source', { model: 0 });
+    const targetFqn = this.resolveWritten(doc, filename, target, 'target', { model: 0 });
+    // LikeC4 rejects a relationship between an element and itself or one of
+    // its ancestors / descendants: `Invalid parent-child relationship`
+    // (language-server `relationChecks`, `isSameHierarchy` of the resolved
+    // endpoints).
+    if (isSameHierarchy(sourceFqn, targetFqn)) {
+      throw new InvalidWriteError(
+        'target',
+        sourceFqn === targetFqn
+          ? `'${target}' resolves to the source '${sourceFqn}' itself: LikeC4 rejects a relationship of an element with itself`
+          : `'${source}' (${sourceFqn}) and '${target}' (${targetFqn}) are parent and child: LikeC4 rejects such a relationship`,
+      );
+    }
     const edit = addRelationshipEdit(doc, source, target, label, opts);
     this.applyEdit(filename, edit);
   }
@@ -476,6 +525,8 @@ export class LikeC4Mutator {
    * @returns The files that changed.
    */
   updateRelationship(matcher: UpdateRelationshipMatcher, patch: UpdateRelationshipPatch): UpdateRelationshipResult {
+    checkTags(patch.tags, this.workspace);
+    checkStyle(patch.style, 'relationship', this.workspace);
     const matches = this.locateRelations(matcher);
     if (matches.length === 0) {
       throw new Error(formatNotFoundError(matcher));
@@ -610,11 +661,25 @@ export class LikeC4Mutator {
    * @param opts - Options for the new view
    */
   addView(opts: AddViewOpts): void {
+    checkViewId(opts.id);
+    if (this.viewIds().has(opts.id)) {
+      // LikeC4 reports `Duplicate view` for two views of one id in the
+      // project, whatever their types (`viewChecks`).
+      throw new InvalidWriteError('id', `a view '${opts.id}' is already declared (in a loaded file)`);
+    }
+    if (opts.type === 'element' && opts.target !== undefined && opts.target !== '') {
+      checkReferenceForm(opts.target, 'target');
+    }
+    checkViewIncludes(opts.includes, opts.type);
+    checkAutoLayout(opts.autoLayout);
     const filename = this.findFileWithViews();
     if (!filename) throw new Error('No file with a views block found');
 
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
+    if (opts.type === 'element' && opts.target !== undefined && opts.target !== '') {
+      this.resolveWritten(doc, filename, opts.target, 'target', 'views');
+    }
     const edit = addViewEdit(doc, opts);
     this.applyEdit(filename, edit);
   }
@@ -808,6 +873,43 @@ export class LikeC4Mutator {
       const { offset, end, newText } = buildRemovalEdit(this.document(file).fullText, node.$cstNode.offset, node.$cstNode.end);
       this.applyEdit(file, { offset, end, newText });
     }
+  }
+
+  /**
+   * The FQN an element reference written into `doc` at `position` links to,
+   * as LikeC4 resolves it (see {@link resolveReferenceText}).  Only the loaded
+   * files are known: a reference to an element of a file that is not loaded
+   * does not resolve and is rejected.
+   *
+   * @throws {InvalidWriteError} on `field` when the reference does not resolve
+   */
+  private resolveWritten(
+    doc: ParsedDocument,
+    filename: string,
+    reference: string,
+    field: string,
+    position: Parameters<typeof resolveReferenceText>[3],
+  ): string {
+    const fqn = resolveReferenceText(doc.ast, this.workspace, reference, position);
+    if (fqn === undefined) {
+      throw new InvalidWriteError(
+        field,
+        `'${reference}' does not resolve to an element of the loaded files when written into '${filename}' ` +
+          `(LikeC4 would report: Could not resolve reference)`,
+      );
+    }
+    return fqn;
+  }
+
+  /** Ids of the views declared in every loaded file. */
+  private viewIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const doc of this.documents.values()) {
+      for (const block of (doc.ast.views ?? []) as Array<{ views?: Array<{ name?: string }> }>) {
+        for (const view of block.views ?? []) if (view.name) ids.add(view.name);
+      }
+    }
+    return ids;
   }
 
   /** Latest parsed document of `filename`. */

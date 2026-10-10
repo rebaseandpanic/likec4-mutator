@@ -27,7 +27,7 @@ function newMutator(): LikeC4Mutator {
 
 function readWithArrays(): string {
   return readFileSync(
-    resolve(import.meta.dirname, '..', 'fixtures', 'minimal', 'with-arrays.c4'),
+    resolve(import.meta.dirname, '..', 'fixtures', 'arrays', 'with-arrays.c4'),
     'utf-8',
   );
 }

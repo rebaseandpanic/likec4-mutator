@@ -26,9 +26,14 @@ const mutator = LikeC4Mutator.fromFiles({
 specification {
   element service
   element database
+  tag internal
+  tag critical
+  tag deprecated
 }
 model {
-  app = service 'My App'
+  app = service 'My App' {
+    api = service 'API'
+  }
 }
 views {
   view index {
@@ -72,7 +77,7 @@ mutator.addElement('app', {
 });
 
 // Add relationship (all properties)
-mutator.addRelationship('app', 'app.db', 'reads/writes', {
+mutator.addRelationship('app.api', 'app.db', 'reads/writes', {
   description: 'Queries the main database',
   technology: 'JDBC',
   tags: ['internal'],
@@ -109,7 +114,7 @@ const { changedFiles } = mutator.updateElement('app.db', {
 
 // Update an existing relationship (=> { changedFiles })
 mutator.updateRelationship(
-  { source: 'app', target: 'app.db' },
+  { source: 'app.api', target: 'app.db' },
   {
     label: 'persists',
     description: 'Reads and writes user data',
@@ -122,8 +127,8 @@ mutator.updateRelationship(
 );
 
 // Remove
+mutator.removeRelationship('app.api', 'app.db');
 mutator.removeElement('app.db');
-mutator.removeRelationship('app', 'app.db');
 
 // Validate & serialize
 const errors = mutator.validate(); // [] = valid
@@ -464,18 +469,20 @@ LikeC4 (and the library) read it back as the value written.  As for any metadata
 
 | Property | Values |
 |----------|--------|
-| shape | rectangle, person, browser, mobile, cylinder, storage, queue, bucket, document |
-| color | primary, secondary, muted, slate, blue, indigo, sky, red, gray, green, amber |
-| icon | Library icons (`tech:postgresql`, `aws:lambda`) or URL |
-| opacity | Percentage (`40%`, `100%`) |
+| shape | rectangle, component, person, browser, mobile, cylinder, storage, queue, bucket, document |
+| color | primary, secondary, muted, slate, blue, indigo, sky, red, gray, green, amber, or a custom color declared in a specification (`color brand #3b82f6`) |
+| icon | An icon of LikeC4's built-in library (`tech:postgresql`, `aws:lambda`), a URI (`https://…`, `/…`, `./…`, `../…`, `@alias/…`; not `file://`) or `none` |
+| opacity | Percentage from `0%` to `100%` (`40%`) |
 | border | solid, dashed, dotted, none |
-| multiple | true, false |
-| size | xs, sm, md, lg, xl |
-| padding | xs, sm, md, lg, xl |
-| textSize | xs, sm, md, lg, xl |
+| multiple | true, false (a boolean) |
+| size | xs, sm, md, lg, xl, xsmall, small, medium, large, xlarge |
+| padding | Same as size |
+| textSize | Same as size |
 | iconPosition | left, right, top, bottom |
-| iconColor | Theme colors |
-| iconSize | xs, sm, md, lg, xl |
+| iconColor | Same as color |
+| iconSize | Same as size |
+
+Values are checked before writing (see [Rejected writes](#rejected-writes)); the keyword sets are taken from the grammar of the installed LikeC4.
 
 ### Relationship properties
 
@@ -494,7 +501,7 @@ LikeC4 (and the library) read it back as the value written.  As for any metadata
 | Property | Values |
 |----------|--------|
 | line | solid, dashed, dotted |
-| color | Theme colors |
+| color | Same as the element `color` |
 | head | normal, onormal, diamond, odiamond, crow, open, vee, dot, odot, none |
 | tail | Same as head |
 
@@ -700,6 +707,35 @@ mutator.addView({ id: 'prod', type: 'element', target: 'app', title: 'Deployment
 ## Line endings
 
 Text the library writes into a file uses that file's line ending — the one of its first line break (`\r\n` or `\n`; `\n` when the file has none).  Text kept from the file is never changed, so a file that already mixes line endings stays mixed.
+## Rejected writes
+
+Every write call checks the values it introduces before anything changes. A rejected call throws an `InvalidWriteError` (exported): `field` names the offending option in the terms of the call (`name`, `kind`, `id`, `target`, `source`, `autoLayout`, `tags[1]`, `style.color`, `includes[0]`), `detail` says what is wrong, and no file changes. `apply` reports the same as `mutations[i].<field>` (the element name of `addElement` is its `id`) with exit code 1 and writes nothing; the single-purpose CLI commands name the option (`--id`, `--kind`, `--tags`, ...).
+
+| Value | Accepted |
+| --- | --- |
+| element `name` (`addElement`), view `id` (`addView`) | One LikeC4 identifier (letters, digits, `_`, `-`; not starting with a digit or `-`; no `.`; not a keyword such as `title`), not a reserved word (`this`, `it`, `self`, `super`, `likec4lib`, `global`), and not used yet: no element of a loaded file has the same FQN (a sibling in the parent's body or in an `extend` of the parent, or another root element), no view of any type has the same id. |
+| `kind` (`addElement`) | One identifier. |
+| relationship `source` / `target` (`addRelationship`), view `target` (`addView`) | Identifiers joined by `.` (`app.api`). |
+| `autoLayout` (`addView`) | A direction (`TopBottom`, `LeftRight`, `BottomTop`, `RightLeft`), optionally followed by a whole-number rankSep and nodeSep (`LeftRight 120 40`). |
+| `includes` items (`addView`) | Exactly one `include` rule of the view's type; in a deployment view without `with { ... }`, which LikeC4 does not apply there. |
+| style values (`addElement`, `updateElement`, `addRelationship`, `updateRelationship`) | See [Element style properties](#element-style-properties) and [Relationship style properties](#relationship-style-properties); a field the style type does not have is rejected. |
+
+A value that would add other DSL than the property asked for (`autoLayout: 'LeftRight\n exclude a'`, `style: { color: 'red\n shape cylinder' }`) is rejected by these checks.
+
+Writes LikeC4 would reject are refused the same way:
+
+| Call | Rejected when |
+| --- | --- |
+| `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`). |
+| `updateElement`, `updateRelationship` | a tag of `tags` is not declared. |
+| `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
+| `addView` | an element view's `target` does not resolve to an element. |
+
+Endpoints are resolved the way LikeC4 links them from the place they are written — the first `model` block of the first file that has one: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
+
+**Only what the call introduces is checked.** Problems already in the files — undeclared tags or kinds, dangling references, duplicates — are neither reported nor a reason to reject a valid write, so a workspace with unrelated LikeC4 errors still accepts valid edits. `validate()` still reports syntax errors only.
+
+**Only the loaded files are known.** Declarations and elements of files that were not passed to `fromFiles` (or are outside `--dir`) are invisible: a kind, tag, custom color or endpoint declared only there is rejected, as the library cannot tell it from a typo. Load every file of the project (the CLI loads the whole `--dir` tree).
 
 ## How it works
 

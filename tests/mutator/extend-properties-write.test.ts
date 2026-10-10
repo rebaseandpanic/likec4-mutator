@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
-import { expectAgreesWithLikeC4 } from '../helpers/likec4-model.js';
+import { C4Parser } from '../../src/parser/parser.js';
+import { expectAgreesWithLikeC4, expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * `updateElement` applies the documented semantics — `tags` / `links`
@@ -263,13 +264,14 @@ describe('updateElement — what is left in place', () => {
     expect(m.validate()).toEqual([]);
   });
 
-  it('keeps elements and relationships declared inside an extend block', () => {
-    const ext = `model {\n  extend app {\n    #b\n    cache = service 'Cache' {\n      #c\n    }\n    cache -> app 'reads'\n  }\n}\n`;
+  it('keeps elements and relationships declared inside an extend block', async () => {
+    const ext = `model {\n  extend app {\n    #b\n    cache = service 'Cache' {\n      #c\n    }\n    store = service 'Store'\n    cache -> store 'reads'\n  }\n}\n`;
     const m = LikeC4Mutator.fromFiles({ 'base.c4': BASE, 'ext.c4': ext });
     m.updateElement('app', { tags: [] });
     expect(m.serialize()['ext.c4']).toBe(ext.replace('    #b\n', ''));
     expect(m.getElement('app.cache')!.tags).toEqual(['c']);
     expect(m.getRelationships({ sourceFqn: 'app.cache' })).toHaveLength(1);
+    await expectValidLikeC4(m.serialize());
   });
 
   it('does not touch extend blocks of descendants', () => {
@@ -344,13 +346,22 @@ describe('updateElement — failures change nothing', () => {
   });
 
   it('restores every file when the declaration edit fails after an extend file was edited', () => {
-    // ext1.c4 is edited first (load order); the style value then produces
-    // text that does not parse in base.c4.
+    // ext1.c4 is edited first (load order); the reparse of the edited base.c4
+    // then reports an error.  Every value of the call is valid, so the failure
+    // is injected at the parser, the boundary that judges the edited text.
     const files = { 'ext1.c4': EXT1, 'base.c4': BASE };
     const m = LikeC4Mutator.fromFiles(files);
-    expect(() =>
-      m.updateElement('app', { tags: [], style: { color: 'not a color' } as never }),
-    ).toThrow(/base\.c4/);
+    const parse = C4Parser.prototype.parse;
+    const spy = vi.spyOn(C4Parser.prototype, 'parse').mockImplementation(function (this: C4Parser, source: string) {
+      const doc = parse.call(this, source);
+      if (!source.startsWith(SPEC) || source === BASE) return doc;
+      return { ...doc, errors: [{ message: 'injected', line: 1, column: 1, offset: 0, length: 1 }] };
+    });
+    try {
+      expect(() => m.updateElement('app', { tags: [], style: { color: 'red' } })).toThrow(/base\.c4/);
+    } finally {
+      spy.mockRestore();
+    }
     expect(m.serialize()).toEqual(files);
     expect(m.getElement('app')!.tags).toEqual(['a', 'b', 'c']);
   });

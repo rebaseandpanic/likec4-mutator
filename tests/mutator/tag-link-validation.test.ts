@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { generateElement } from '../../src/index.js';
+import { expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * Tags and link URLs are emitted as bare tokens, so a value that is not a
@@ -16,6 +17,11 @@ const source = `specification {
   element service
   element actor
   tag ok
+  tag a-b
+  tag _1
+  tag element
+  tag trueish
+  tag false_x
 }
 model {
   withBody = service {
@@ -82,10 +88,11 @@ describe('tag names are validated against LikeC4 tag syntax', () => {
     },
   );
 
-  it.each(tagOperations)('$name accepts valid tag names (with or without a leading #)', ({ run }) => {
+  it.each(tagOperations)('$name accepts valid tag names (with or without a leading #)', async ({ run }) => {
     const m = fresh();
     run(m, ['a-b', '_1', 'element', '#ok', 'trueish', 'false_x']);
     expect(m.validate()).toEqual([]);
+    await expectValidLikeC4(m.serialize());
   });
 });
 

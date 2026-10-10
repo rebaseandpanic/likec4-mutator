@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
 import { C4Query } from '../../src/query/query.js';
+import { expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 const parser = new C4Parser();
 
@@ -111,10 +112,10 @@ describe('LikeC4Mutator.addElement', () => {
 
   it('should add element with tags and produce valid document', () => {
     const m = makeMutator();
-    m.addElement('app', { name: 'tagged', kind: 'service', tags: ['internal', 'backend'] });
+    m.addElement('app', { name: 'tagged', kind: 'service', tags: ['deprecated', 'backend'] });
 
     const src = m.serialize()['model.c4'];
-    expect(src).toContain('#internal');
+    expect(src).toContain('#deprecated');
     expect(src).toContain('#backend');
     expect(m.validate()).toHaveLength(0);
   });
@@ -502,8 +503,21 @@ model {
 // ---------------------------------------------------------------------------
 
 describe('LikeC4Mutator.addRelationship', () => {
+  // The minimal model plus a file declaring the target `external` and a tag
+  // the minimal model does not declare.
+  const EXTERNAL = `specification {
+  tag public
+}
+model {
+  external = system 'External'
+}
+`;
+  function makeRelationshipMutator(): LikeC4Mutator {
+    return LikeC4Mutator.fromFiles({ 'model.c4': readFixture('model.c4'), 'external.c4': EXTERNAL });
+  }
+
   it('should add a relationship and make it queryable', () => {
-    const m = makeMutator();
+    const m = makeRelationshipMutator();
     m.addRelationship('app', 'external', 'calls');
 
     const rels = m.getRelationships();
@@ -513,7 +527,7 @@ describe('LikeC4Mutator.addRelationship', () => {
   });
 
   it('should add a relationship without a label', () => {
-    const m = makeMutator();
+    const m = makeRelationshipMutator();
     m.addRelationship('app', 'external');
 
     const rels = m.getRelationships();
@@ -522,14 +536,14 @@ describe('LikeC4Mutator.addRelationship', () => {
   });
 
   it('should produce a parse-error-free document after adding relationship', () => {
-    const m = makeMutator();
+    const m = makeRelationshipMutator();
     m.addRelationship('app', 'external');
 
     expect(m.validate()).toHaveLength(0);
   });
 
   it('should add a relationship with a description', () => {
-    const m = makeMutator();
+    const m = makeRelationshipMutator();
     m.addRelationship('app', 'external', 'calls', { description: 'Calls the external system' });
 
     const src = m.serialize()['model.c4'];
@@ -538,7 +552,7 @@ describe('LikeC4Mutator.addRelationship', () => {
   });
 
   it('should add a relationship with technology and tags via opts object', () => {
-    const m = makeMutator();
+    const m = makeRelationshipMutator();
     m.addRelationship('app', 'external', 'calls', {
       technology: 'REST API',
       tags: ['async', 'internal'],
@@ -552,7 +566,7 @@ describe('LikeC4Mutator.addRelationship', () => {
   });
 
   it('should add a relationship with style properties', () => {
-    const m = makeMutator();
+    const m = makeRelationshipMutator();
     m.addRelationship('app', 'external', undefined, {
       style: { line: 'dashed', color: 'red' },
     });
@@ -564,8 +578,8 @@ describe('LikeC4Mutator.addRelationship', () => {
     expect(m.validate()).toHaveLength(0);
   });
 
-  it('should add a relationship with full properties', () => {
-    const m = makeMutator();
+  it('should add a relationship with full properties', async () => {
+    const m = makeRelationshipMutator();
     m.addRelationship('app', 'external', 'delegates', {
       description: 'Routes traffic to external API',
       technology: 'HTTPS',
@@ -586,6 +600,7 @@ describe('LikeC4Mutator.addRelationship', () => {
     expect(src).toContain('line dashed');
     expect(src).toContain('head diamond');
     expect(m.validate()).toHaveLength(0);
+    await expectValidLikeC4(m.serialize());
   });
 });
 

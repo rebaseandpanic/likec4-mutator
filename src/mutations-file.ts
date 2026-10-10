@@ -9,8 +9,18 @@
  * misspelled field would otherwise be silently ignored) and reports the first
  * violation with its JSON path, e.g. `mutations[2].links[0].url`.
  */
-import { viewIncludeExpression, type ElementStyle, type RelationshipStyle } from './mutator/codegen.js';
+import type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
 import type { MetadataPatch } from './mutator/metadata-ops.js';
+import {
+  InvalidWriteError,
+  checkElementName,
+  checkKind,
+  checkReferenceForm,
+  checkStyle,
+  checkTags,
+  checkViewId,
+  checkViewIncludes,
+} from './mutator/write-checks.js';
 
 export interface LinkSpec {
   url: string;
@@ -207,21 +217,28 @@ function optionalStringArray(obj: JsonObject, key: string, path: string): void {
 }
 
 /**
- * `includes` of addView: an array of strings, each holding exactly one include
- * rule of the view's type once trimmed and stripped of one leading `include`
- * keyword (no further rule, property or view).
+ * The JSON path of a field named by an {@link InvalidWriteError} raised for a
+ * mutation of `op` at `path`.  The library names fields after the options of
+ * its calls; `apply` names the element of addElement `id`.
  */
-function optionalViewIncludes(obj: JsonObject, path: string, type: AddViewMutation['type']): void {
-  optionalStringArray(obj, 'includes', path);
-  const value = obj.includes as string[] | undefined;
-  value?.forEach((item, i) => {
-    if (viewIncludeExpression(item, type) === undefined) {
-      throw new MutationsFileError(
-        `${path}.includes[${i}]`,
-        `expected one include rule's predicates such as '*' or 'app.api, app.db', got ${JSON.stringify(item)}`,
-      );
-    }
-  });
+export function mutationFieldPath(op: Mutation['op'], path: string, field: string): string {
+  const jsonField = op === 'addElement' && (field === 'name' || field.startsWith('name.')) ? `id${field.slice(4)}` : field;
+  return `${path}.${jsonField}`;
+}
+
+/**
+ * Run the library's value checks that need no loaded files (identifier and
+ * reference form, style values, include rules), reporting a violation with its
+ * JSON path.  Checks that depend on the loaded files (declared tags and kinds,
+ * duplicate names, resolved endpoints) run when the mutation is applied.
+ */
+function formChecks(op: Mutation['op'], path: string, run: () => void): void {
+  try {
+    run();
+  } catch (err) {
+    if (err instanceof InvalidWriteError) throw new MutationsFileError(mutationFieldPath(op, path, err.field), err.detail);
+    throw err;
+  }
 }
 
 const LINK_FIELDS = ['url', 'label'] as const;
@@ -399,6 +416,12 @@ function validateMutation(m: JsonObject, path: string): void {
       optionalLinks(m, path);
       optionalStyle(m, path, 'element');
       optionalMetadata(m, path, false);
+      formChecks('addElement', path, () => {
+        checkElementName(m.id as string);
+        checkKind(m.kind as string, 'element', undefined);
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as ElementStyle | undefined, 'element', undefined);
+      });
       return;
     case 'updateElement':
       requireString(m, 'fqn', path);
@@ -408,6 +431,10 @@ function validateMutation(m: JsonObject, path: string): void {
       optionalLinks(m, path);
       optionalStyle(m, path, 'element');
       optionalMetadata(m, path, true);
+      formChecks('updateElement', path, () => {
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as ElementStyle | undefined, 'element', undefined);
+      });
       return;
     case 'removeElement':
       requireString(m, 'fqn', path);
@@ -420,6 +447,12 @@ function validateMutation(m: JsonObject, path: string): void {
       optionalLinks(m, path);
       optionalStyle(m, path, 'relationship');
       optionalMetadata(m, path, false);
+      formChecks('addRelationship', path, () => {
+        checkReferenceForm(m.source as string, 'source');
+        checkReferenceForm(m.target as string, 'target');
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as RelationshipStyle | undefined, 'relationship', undefined);
+      });
       return;
     case 'removeRelationship':
       requireString(m, 'source', path);
@@ -435,6 +468,10 @@ function validateMutation(m: JsonObject, path: string): void {
       optionalLinks(m, path);
       optionalStyle(m, path, 'relationship');
       optionalMetadata(m, path, true);
+      formChecks('updateRelationship', path, () => {
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as RelationshipStyle | undefined, 'relationship', undefined);
+      });
       const updateFields = [
         'label',
         'description',
@@ -464,7 +501,14 @@ function validateMutation(m: JsonObject, path: string): void {
       }
       optionalString(m, 'target', path);
       optionalString(m, 'title', path);
-      optionalViewIncludes(m, path, m.type as AddViewMutation['type']);
+      optionalStringArray(m, 'includes', path);
+      formChecks('addView', path, () => {
+        checkViewId(m.id as string);
+        if (m.type === 'element' && typeof m.target === 'string' && m.target !== '') {
+          checkReferenceForm(m.target, 'target');
+        }
+        checkViewIncludes(m.includes as string[] | undefined, m.type as AddViewMutation['type']);
+      });
       return;
     default:
       throw new MutationsFileError(
