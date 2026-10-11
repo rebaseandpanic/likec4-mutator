@@ -1,6 +1,6 @@
 # Spec: Read and edit the LikeC4 deployment model
 
-**Date** 2026-10-12 · **Status** draft · **Task**: lc4m-15.28 (epic lc4m-15, stage 1) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
+**Date** 2026-10-12 · **Status** READY-FOR-PLANNING · **Task**: lc4m-15.28 (epic lc4m-15, stage 1) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
 **Type**: feature (+ two reference-stability bugfixes in existing operations) · **Based on**: README sections "Specification defaults", "`extend` blocks", "Rejected writes"; reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 01–07)
 
 Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein epic lc4m-15 (lc4m-15.28) are referenced as `D1`…`D14`.
