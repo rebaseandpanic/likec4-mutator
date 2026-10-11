@@ -35,7 +35,7 @@ Approach:
   - `toDeploymentElement` merges kind style with own style (LS:3266-3299).
   - `toDeploymentRelation` spreads the relationship kind spec, style included (LS:3301-3325).
   - Element and dynamic view bodies count as "model" for scoping (`_isModel`, LS:167-169), so deployment additions cannot change element-view references. Only deployment view bodies resolve deployment candidates first and elements third (LS:7600-7612).
-  - `extend X` resolves through `getScopeForStrictFqnRef`: project root nodes first, then direct child nodes (LS:7575-7579).
+  - `extend X` is a strict path: project root nodes first, then direct child nodes (`getScopeForStrictFqnRef`, LS:7575-7579). So no logical addition and no new node with a distinct id can change what an existing `extend <node>` target resolves to; a new node with the same path is a duplicate id.
   - Extend bodies add a frame through `genScopeExtendDeployment` / `genScopeExtendElement` (LS:7627-7628).
   - The project config `inferTechnologyFromIcon` reaches `MergedSpecification` (LS:3486), so the oracle can be built without icon inference (D10).
   - `FqnIndex.resolve(target)` (LS:2917-2921) returns the id of a linked `Element`, `DeploymentNode` or `DeployedInstance`. This is the independent oracle for linked reference targets.
@@ -70,7 +70,15 @@ Approach:
 | Release version 0.9.0 (minor; the spec's US-12 rejections are behaviour changes listed in CHANGELOG) | SC-007 "one minor release" | 1.0.0 |
 
 **Reference snapshot — definition.**
-- **Contents.** One record per reference occurrence: (file, frame path, role, text, occurrence) plus its resolution. Frames, references and occurrences in the keys come from the walk itself.
+- **Contents.** One record per reference occurrence: (file, frame path, role, text, occurrence) plus its resolution. References covered:
+  - logical relationship endpoints;
+  - `extend a -> b` endpoints;
+  - `extend X` targets;
+  - view `of` targets;
+  - `instanceOf` targets;
+  - deployment relation endpoints, including element parts;
+  - `extend <node>` targets;
+  - deployment-view rule references.
 - **Frame path.** Every resolution-bearing frame from the top-level block inwards. Each frame is a descriptor: type + identity + ordinal among siblings with the same descriptor in the parent frame.
   - Top-level blocks: `model#i`, `deployment#i`, `views#i`.
   - Element body `el:<fqn>#k`.
@@ -81,10 +89,11 @@ Approach:
   - View body `view:<name>#k`.
 - **Distinct extend scopes.** Two extend scopes with the same reference text get different keys.
 - **Repeated occurrences.** Repeated same-target extend blocks and repeated equal references keep their multiplicity through the ordinals.
-- **Explicit exclusion.** Removed references are excluded explicitly. A removing write passes the set of AST nodes it deletes (declarations, extend blocks, cascaded relations). Pre-write references inside those nodes are marked removed, and ordinals are computed over the remaining (surviving) items only.
+- **Explicit exclusion.** Removed references are excluded explicitly. A removing write passes the set of AST nodes it deletes (declarations, extend blocks, cascaded relations). Pre-write references inside those nodes are marked removed, and ordinals are computed over the surviving items only.
 - **Survivor matching.** Each surviving pre-write record must find the post-write record with the same key; a survivor without a match is an internal error, never a silent removal. Post-write records without a pre-write match must lie inside the text the write inserted (name-adding writes append at the end of their container); anything else is an internal error.
 - **Outcome.** A matched survivor whose resolution changed rolls back and throws `InvalidWriteError` on `name` (additions) or on the removal selector (`id` / `node`).
 - **Key semantics.** A key identifies one occurrence within a state and pairs the same surviving occurrence across states. Equal keys do not on their own claim equal resolution inputs.
+- **Strict-path targets** (`extend X` / `extend <node>`) stay in the snapshot so that survivors are matched and observed. A same-path addition is rejected earlier as a duplicate id or FQN, never by the snapshot. The snapshot can still observe them when a removal takes away a target's own path; that case is cascaded by design.
 
 No `[DECISION-NEEDED]`.
 
@@ -237,12 +246,18 @@ No new dependency.
 **T018** — `src/mutator/mutator.ts`. Mechanism: `removeElement` pre-check. It is rejected (field `fqn`, listing instance ids or endpoints) when the element or any element of its subtree is an `instanceOf` target or an endpoint element part. Nothing else in `removeElement` changes. Gate: spike 07 C rejected with sources byte-identical (smoke).
 
 **T019 [TEST]** — `tests/query/reference-snapshot.test.ts`, `tests/mutator/deployment-reference-stability.test.ts`. Mechanism: the G4 gate, executable without deployment writers.
-- **Direct snapshot tests** on parsed documents, with hand-written pre/post texts and an explicit removal set:
+- **Direct snapshot tests** on parsed documents, with hand-written pre/post texts and an explicit removal set. They own the extend-target and survivor-matching classes:
   - equal reference texts in distinct logical `extend a { }` / `extend b { }` scopes and in distinct deployment `extend p { }` / `extend q { }` scopes get distinct keys and their own resolutions;
-  - two same-target extend blocks (logical and deployment): deleting the first while marking it removed matches the survivor of the second, reports no change, and raises no internal error;
+  - `extend X` / `extend <node>` targets are observed with their strict-path resolutions;
+  - two same-target extend blocks (logical and deployment): deleting the first while marking it removed matches the survivor of the second (its body references and its target), reports no change, and raises no internal error;
   - a survivor whose target changes is reported;
   - an unmatched post-write reference outside the inserted range raises the internal error.
-- **Integration through existing logical writes:** `addElement` making an `instanceOf`, a deployment endpoint, an `extend <node>` target and a deployment-view rule ambiguous, unresolved or re-targeted → rejected with sources byte-identical; `removeElement` US-12 rejections (`instanceOf`, element-part endpoint); accepted neighbouring writes pass `expectValidLikeC4`.
+- **Integration through existing logical writes**, for the producer/reference combinations a logical addition can actually change. `addElement` is rejected (field `name`, sources byte-identical) when a new element makes ambiguous, unresolved or re-targeted:
+  - an `instanceOf` target (spike 07 D);
+  - an endpoint element part (a qualified step into an instance's element, e.g. a second `sub` below the element);
+  - a deployment-view rule reference resolved through the logical-element pass.
+  - Not included: `extend X` / `extend <node>` targets are strict paths, so a logical addition cannot re-target them. A same-path element is a duplicate FQN, rejected by the existing duplicate check.
+- **`removeElement`:** the US-12 rejections (`instanceOf` target, element-part endpoint) with sources byte-identical; accepted neighbouring writes pass `expectValidLikeC4`.
 - **SC-005:** a search of the existing tests for any pinning the US-12 defects; any found is rewritten to assert rejection.
 - Deployment-removal integration checks belong to T029, T033 and T039.
 
@@ -303,7 +318,8 @@ No new dependency.
 - `file` on a child rejected;
 - **explicit placement of a root node into a blockless file while other loaded files already have `deployment` blocks** (the new block lands in the chosen file, the others are unchanged).
 - Outputs pass `expectValidLikeC4`; values equal the oracle.
-- A new node making an existing reference (endpoint, `extend` target, view rule) ambiguous or re-targeted is rejected byte-identical.
+- Node-addition reference integration (snapshot rejection, field `name`, sources byte-identical): a new node that makes an existing **deployment relationship endpoint** or **deployment-view reference** ambiguous, unresolved or re-targeted. Examples: a second unique-descendant name in a container; a new root node taking a parentless name in the node pass ahead of an instance or a logical element.
+- Strict `extend <node>` paths, kept apart from snapshot rejection: a new node at the same path as an extend target, or at the path of an extend-body child, is rejected by the **duplicate-id check** (`name`) before writing. A node at any other path leaves every resolved extend target unchanged. No re-target of a resolved strict path is claimed or tested.
 - Gate: class green.
 
 **T029 [TEST]** — `tests/mutator/deployment-nodes-update-remove.test.ts`. Mechanism:
@@ -365,7 +381,7 @@ No new dependency.
 **T039 [TEST]** — `tests/mutator/deployment-extends-write.test.ts`. Mechanism:
 - US-11 acceptance; `extendedBy` provenance after the write; occurrence selection and ambiguity; removal with children; instance target rejected; no string or style properties written (INV-5).
 - **Explicit placement into a blockless file while other loaded files already have `deployment` blocks.**
-- Reference integration: removing one of two same-target `extend` blocks while the other survives (its references stay matched and unchanged); removing a block whose child made a name unique elsewhere re-targets a survivor → rejected byte-identical.
+- Reference integration: removing one of two same-target `extend` blocks while the other survives (its target and body references stay matched and unchanged); removing a block whose child made a name unique elsewhere re-targets a surviving endpoint or view reference → rejected byte-identical.
 - Gate: class green.
 
 ### Phase — US-13 — `apply`
@@ -382,7 +398,7 @@ No new dependency.
 
 ### Phase Polish
 
-- **T043** — `README.md`. Mechanism: consolidated "Deployment model" section (read API, write API, `apply` format, D9/D14 instance metadata examples, D2/D10 read exceptions, the D4/D11 placement rule with explicit `file` authoritative); "Rejected writes" table rows for the new ops; the US-12 behaviour changes in the `addElement` / `removeElement` text. Gate: examples executed in a smoke script against the library give the stated values.
+- **T043** — `README.md`. Mechanism: consolidated "Deployment model" section (read API, write API, `apply` format, D9/D14 instance metadata examples, D2/D10 read exceptions, the D4/D11 placement rule with explicit `file` authoritative); "Rejected writes" table rows for the new ops; the US-12 behaviour changes in the `addElement` / `removeElement` text (which deployment references `addElement` now checks). Gate: examples executed in a smoke script against the library give the stated values.
 - **T044** — `docs/likec4-coverage.md`. Mechanism: the rows listed in the Skein issue "Coverage rows to update" set to non-`no` with notes; `extend` of deployment relationships recorded as `n/a` with the grammar reason; no fingerprint update needed unless `--check` reports one. Gate: `npm run lint` passes (SC-001).
 - **T045** — `CHANGELOG.md`. Mechanism: `[0.9.0]` entry with Added (read and write API, `apply` ops, `getSpecification().deploymentNodeKinds`) and Breaking / behaviour changes (US-12 rejections, `getSpecification()` non-null for deployment-only specifications). Gate: entry matches README.
 - **T046** — `package.json`, `package-lock.json`, `docs/likec4-coverage.md` title line. Mechanism: version 0.9.0 in one commit (the coverage check ties both). Not pushed, tagged or published. Gate: `npm run lint && npm test && npm run build` green (SC-006, SC-007).
@@ -410,7 +426,7 @@ No new dependency.
 - T007, T008, T012 → T017 → T018 → T019. T017 blocks T025, T027, T030, T032, T038 (snapshot).
 - T020–T024 block G6–G8. T021 → T026, T031. T022 → T035. T023 → T024, T025, T030, T034, T038. T024 → T025, T034, T038.
 - G6 → G7 (instances live in nodes; removal cascade shared) → G8 (endpoints need instances; extend removal reuses T027).
-- Deployment-removal reference integration tests: T029 (after T027), T033 (after T032), T039 (after T038).
+- Node-addition reference integration: T028 (after T025). Deployment-removal reference integration: T029 (after T027), T033 (after T032), T039 (after T038).
 - All library ops (G6–G8) → G9. G9 → G10. T046 is last.
 - Strictly sequential, one executor; full `npm test` + `npm run lint` at the end of every group.
 
@@ -422,15 +438,16 @@ No new dependency.
    - INV-7 guard green;
    - `npm run lint` green.
 2. **G4** (US-12 + snapshot). STOP:
-   - direct snapshot tests green (distinct extend scopes, repeated same-target extends with one removed, explicit exclusion, internal-error paths);
-   - spike 07 C/D rejected through `addElement` / `removeElement`;
+   - direct snapshot tests green: distinct extend scopes, observed strict-path extend targets, repeated same-target extends with one removed, explicit exclusion, internal-error paths;
+   - `addElement` rejected for the applicable combinations (`instanceOf`, endpoint element parts, logical candidates in deployment-view rules; spike 07 D among them);
+   - `removeElement` US-12 rejections (spike 07 C);
    - SC-005 confirmed.
 3. **G5**. STOP: whole pre-existing suite green unchanged (refactors are behaviour-neutral); T024 explicit-file branch smoke.
 4. **G6 → G7 → G8**, each ending with STOP:
    - oracle values after each write and `expectValidLikeC4` on every output;
    - rejection classes with byte-identical sources;
    - explicit placement into a blockless file (T028, T037, T039);
-   - deployment-removal reference integration (T029, T033, T039);
+   - reference integration owned by the writer tests: node additions against endpoints and view references, with strict extend paths covered by duplicate-id rejection (T028); deployment removals (T029, T033, T039);
    - (SC-002, SC-003, SC-004).
 5. **G9**. STOP: `apply` exit 1 and nothing written on every error path (SC-004).
 6. **G10**. STOP: `npm run lint && npm test && npm run build`. The release is prepared but not pushed, tagged or published (SC-007).
@@ -440,11 +457,16 @@ No new dependency.
 - Scope-mirror drift (`DeploymentResolver` vs LS:7575-7647, including the unfiltered extend frame and the two-pass order). Every reference class is compared in T008 with its own LikeC4 observation (relation data, instance `element` data, linker targets) before any writer uses it.
 - Inline anchors for the `kind name` node form and for instances (no kind ref) may mis-target strings. T021 keeps elements byte-identical; node and instance titles and summaries are oracle-checked in T029/T033.
 - Text that does not read back as written: a body `icon` overriding `style.icon`, and the title escape of deployment titles. Mitigation: the placement rule in T021, the escape decision gated by an oracle test, read-back after every write in tests.
-- Snapshot survivor matching relies on name-adding writes appending at the end of their container and on removing writes passing their exact removal set. Both are enforced, not assumed: an unmatched survivor or an unmatched post-write reference outside the inserted range is an internal error. T019 (direct) and T029/T033/T039 (writers) exercise the extend-scope, multiplicity and removal classes. Keys pair occurrences; they make no claim of equal resolution inputs.
+- Snapshot survivor matching relies on name-adding writes appending at the end of their container and on removing writes passing their exact removal set. Both are enforced, not assumed: an unmatched survivor or an unmatched post-write reference outside the inserted range is an internal error. Coverage:
+  - T019 (direct) exercises the extend-scope, strict-path observation, multiplicity and removal classes;
+  - T028 exercises node additions;
+  - T029, T033 and T039 exercise the writer removals.
+  Keys pair occurrences; they make no claim of equal resolution inputs. Strict-path extend targets cannot be re-targeted by additions; same-path additions are duplicate ids.
 - Rollback: each group is a contiguous series of atomic commits on the working branch. Nothing is pushed; a failing group is reverted with `git revert` of its commits without touching earlier groups.
 
 ## Known residuals
 
+- RES-plan-1 · MAJOR · owner's round limit · stage 3, round 2 · correction of the last round without critique: T019 / T028 reference-integration gates restated as applicable producer/reference combinations (strict `extend` paths covered by direct snapshot tests and duplicate-id rejection, not by addition-driven re-targeting) → carrier: test-plan critique
 - `removeElement` does not check whether a removal makes a surviving reference re-target by gaining uniqueness (logical or deployment). This is pre-existing behaviour, kept by INV-8 / scope; it belongs to the general reference policy, lc4m-15.30.
 - `updateDeploymentRelationship` leaves inline description / technology that LikeC4 ignores on existing relation lines as written (no read effect; INV-5 concerns written text only).
 
@@ -472,7 +494,7 @@ No new dependency.
 | INV-5 | T020, T034, T035, T038, T039 |
 | INV-6 | T001, T004, T023 |
 | INV-7 | T003, T004, T009, T013, T017 (message and field unchanged), T021, T022 |
-| INV-8 | T017, T019, T025, T027, T029, T030, T032, T033, T038, T039 |
+| INV-8 | T017, T019 (direct gates incl. strict-path extend targets; logical-addition combinations), T025, T027, T028 (node additions; same-path = duplicate id), T029, T030, T032, T033, T038, T039 |
 | SC-001 | T044 |
 | SC-002 | T001, T002, T014, T015, T016, T028, T029, T033, T037, T039 |
 | SC-003 | T019, T028, T029, T033, T037, T039, T042 |
