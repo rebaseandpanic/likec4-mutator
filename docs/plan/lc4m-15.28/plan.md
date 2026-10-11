@@ -120,7 +120,7 @@ No new dependency.
     - an endpoint into an instance's element;
     - an `extend` in another file with tags, links, metadata and a child, and two `extend` blocks of one node;
     - kind defaults with style, an element with an icon only;
-    - a deployment view with include, exclude and style rules referencing nodes, instances and logical elements.
+    - a deployment view with include, exclude and style rules referencing nodes and instances; logical elements and element parts only in `style` rules (LikeC4 rejects them in include / exclude: "Deployment view predicate must reference deployment model", tests-rationale R-3).
   - At least one file has no `deployment` block (for explicit placement).
   - Gate: both pass `expectValidLikeC4` (asserted in T002's test file).
 
@@ -222,6 +222,7 @@ No new dependency.
 - Kind from `-[k]->` or `.k`; bidirectional flag.
 - Inline description and technology ignored; line tags win over body tags; kind tags prepended; kind title, description, technology and style applied when own is absent.
 - Unresolved endpoints are skipped.
+- Own empty strings follow the getter layer, as everywhere in reads (D2): an own `''` title reads as no title, an own `''` technology reads as the kind technology when the kind has one (spike 06).
 - `listDeploymentRelationships({ source, target, kind })`: an id filter also matches endpoints stepping into that instance's element.
 - `getRelationships()` is unchanged.
 - Gate: smoke against the helper.
@@ -335,7 +336,7 @@ No new dependency.
 - `element` checked with `checkReferenceForm` and resolved with the `instanceOf` scope from the node body (`element`).
 - The implicit id must be free, otherwise the call is rejected with a request for `name`.
 - Duplicate id; node must be a node (`node`); tags and style checks; no `file` (D11).
-- Reference snapshot (inserted range = the new instance, whose own `instanceOf` reference is the expected unmatched post-write record; D13 view example).
+- Reference snapshot (inserted range = the new instance, whose own `instanceOf` reference is the expected unmatched post-write record; D13 view example). Instance additions are checked against deployment relationship endpoints too: an unnamed second instance of an element can make a parentless endpoint unresolved (tests-rationale R-4).
 - Gate: smoke and oracle.
 
 **T031** — same files + README (D9 examples). Mechanism: `updateDeploymentInstance`.
@@ -343,6 +344,7 @@ No new dependency.
 - Metadata on the effective map: when the instance has no own map, the element's keys are copied into the own block first, then the patch is applied with `null` deletion; an emptied own block is removed (FOR-PLAN 5).
 - After applying, the D14 check reads the instance back; a patched key that does not read as requested rolls back and throws `metadata.<key>`.
 - The target element and extend blocks are never touched.
+- Tag / link / metadata updates are rejected while any loaded file has syntax errors (spec "Edge cases", same guard as T026).
 - Gate: smoke on spec example `{ tier }` / `{ region }`.
 
 **T032** — same files + README. Mechanism: `removeDeploymentInstance`. Removes the instance, its nested relationships, and every relationship whose endpoint is the instance or an element inside it. Rejected (`id`) when a deployment view references it. The pre-write snapshot gets an explicit removal set (instance node + cascaded relations); survivors are compared. Gate: smoke.
@@ -364,6 +366,7 @@ No new dependency.
 **T035** — same files + README. Mechanism: deployment relationship selector + `updateDeploymentRelationship`.
 - Selector `{ source: { id, element? }, target: { id, element? }, kind?, title? }`; a bidirectional relationship matches in either order; zero matches or ambiguity → `InvalidWriteError` naming candidates (D12, INV-3).
 - Patch through `relationPatchEdits('body-only')`; line tags replaced where present; `changedFiles`.
+- Tag / link / metadata updates are rejected while any loaded file has syntax errors (spec "Edge cases", same guard as T026).
 - Gate: smoke and oracle.
 
 **T036** — same files + README. Mechanism: `removeDeploymentRelationship` with the same selector, using `buildRemovalEdit`. Gate: smoke.
