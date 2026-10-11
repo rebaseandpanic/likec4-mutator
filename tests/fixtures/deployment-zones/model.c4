@@ -1,0 +1,26 @@
+model {
+  shop = system 'Shop' {
+    web = service 'Web' {
+      #public
+      description 'Storefront'
+    }
+    api = service 'API' {
+      technology 'Go'
+      link https://example.com/api 'API docs'
+      metadata {
+        owner 'team-a'
+        tier 'gold'
+      }
+      style {
+        color amber
+      }
+      handler = worker 'Handler'
+    }
+    db = store 'Database' {
+      icon tech:postgresql
+    }
+  }
+
+  shop.web -> shop.api 'calls'
+  shop.api -> shop.db 'reads'
+}

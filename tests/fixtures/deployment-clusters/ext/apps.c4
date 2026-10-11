@@ -1,0 +1,15 @@
+deployment {
+  extend main.k8s.apps {
+    #spot
+    link https://example.com/apps 'Apps namespace'
+    metadata {
+      region 'east'
+    }
+
+    workers = namespace {
+      instanceOf portal.backend
+    }
+
+    workers.backend -> apps.backendA 'drains'
+  }
+}

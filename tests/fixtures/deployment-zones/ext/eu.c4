@@ -1,0 +1,16 @@
+deployment {
+  extend prod.eu {
+    #internal
+    link https://example.com/eu-runbook 'Runbook'
+    metadata {
+      owner 'ops'
+      tier 'standard'
+    }
+
+    host vm3 {
+      instanceOf shop.web
+    }
+
+    vm3.web -> vm1.api 'proxies'
+  }
+}

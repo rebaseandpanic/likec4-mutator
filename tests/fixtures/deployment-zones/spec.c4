@@ -1,0 +1,49 @@
+specification {
+  element system
+  element service {
+    technology 'Node.js'
+  }
+  element store {
+    style {
+      shape storage
+    }
+  }
+  element worker
+
+  relationship calls
+  relationship syncs {
+    title 'Synchronizes'
+    technology 'TCP'
+    color green
+  }
+
+  tag public
+  tag internal
+  tag edge
+  tag primary
+  tag replica
+
+  deploymentNode environment {
+    #edge
+    title 'Environment'
+    style {
+      color gray
+      opacity 20%
+    }
+  }
+  deploymentNode zone {
+    summary 'Availability zone'
+    technology 'Zone'
+    link https://example.com/zones 'Zones'
+    style {
+      color green
+    }
+  }
+  deploymentNode host {
+    description 'Virtual host'
+    style {
+      shape rectangle
+      multiple true
+    }
+  }
+}

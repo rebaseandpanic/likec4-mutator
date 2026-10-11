@@ -1,0 +1,8 @@
+deployment {
+  extend main.k8s.apps {
+    #beta
+    link https://example.com/apps-dashboard 'Dashboard'
+
+    jobsWorker = instanceOf portal.backend.jobs 'Jobs worker'
+  }
+}

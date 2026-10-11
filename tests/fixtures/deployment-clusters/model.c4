@@ -1,0 +1,23 @@
+model {
+  portal = platform 'Portal' {
+    ui = frontend 'UI' {
+      #beta
+      technology 'React'
+    }
+    backend = component 'Backend' {
+      metadata {
+        region 'north'
+        costCenter 'cc-1'
+      }
+      jobs = queue 'Jobs' {
+        broker = component 'Broker'
+      }
+    }
+    storage = component 'Storage' {
+      icon tech:redis
+    }
+  }
+
+  portal.ui -> portal.backend 'submits'
+  portal.backend -> portal.storage 'caches'
+}

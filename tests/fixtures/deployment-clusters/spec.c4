@@ -1,0 +1,49 @@
+specification {
+  element platform
+  element component {
+    style {
+      shape component
+    }
+  }
+  element queue {
+    technology 'AMQP'
+    style {
+      shape queue
+    }
+  }
+  element frontend {
+    style {
+      shape browser
+    }
+  }
+
+  relationship publishes {
+    technology 'HTTPS'
+  }
+  relationship streams
+
+  tag managed
+  tag spot
+  tag critical
+  tag beta
+
+  deploymentNode cloud {
+    title 'Cloud account'
+    description 'Provider account'
+    link https://example.com/accounts 'Accounts'
+  }
+  deploymentNode cluster {
+    #managed
+    technology 'Kubernetes'
+    style {
+      color indigo
+      shape rectangle
+    }
+  }
+  deploymentNode namespace {
+    summary 'Namespace'
+    style {
+      opacity 40%
+    }
+  }
+}

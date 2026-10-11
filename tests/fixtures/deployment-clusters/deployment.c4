@@ -1,0 +1,72 @@
+deployment {
+  main = cloud {
+    #critical
+    metadata {
+      region 'west'
+    }
+
+    k8s = cluster 'Main cluster' {
+      #critical
+      summary 'Shared cluster'
+      style {
+        color sky
+      }
+
+      namespace apps {
+        ui = instanceOf portal.ui
+        backendA = instanceOf portal.backend 'Backend A'
+        backendB = instanceOf portal.backend 'Backend B' {
+          #spot
+          technology 'Java'
+          metadata {
+            costCenter 'cc-2'
+          }
+          -> ui 'notifies'
+        }
+
+        backendA -> backendB 'balances' {
+          #critical
+        }
+      }
+
+      namespace data {
+        instanceOf portal.storage
+        -[streams]-> apps.backendA 'feeds'
+      }
+    }
+  }
+
+  main.k8s.apps.ui -> main.k8s.apps.backendA 'submits'
+  main.k8s.apps.backendB <-> main.k8s.data.storage 'syncs'
+  main.k8s.apps.backendB -[publishes]-> main.k8s.apps.backendA.jobs.broker 'enqueues'
+  main.k8s.apps -[streams]<-> main.k8s.data 'replicates' {
+    description 'Cross-namespace replication'
+    metadata {
+      costCenter 'cc-3'
+    }
+    style {
+      color red
+    }
+  }
+  main.k8s.data.storage .publishes main.k8s.apps.backendB 'pushes' #beta
+}
+
+views {
+  deployment view cluster {
+    title 'Main cluster'
+    include main.k8s.**
+    exclude main.k8s.data.storage
+    style main.k8s.apps.backendA {
+      color green
+    }
+    style main.k8s.apps {
+      color slate
+    }
+    style portal.ui {
+      color amber
+    }
+    style main.k8s.apps.backendA.jobs {
+      color red
+    }
+  }
+}

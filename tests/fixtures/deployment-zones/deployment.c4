@@ -1,0 +1,75 @@
+deployment {
+  environment prod 'Production' {
+    #primary
+    metadata {
+      owner 'platform'
+    }
+
+    zone eu {
+      vm1 = host 'VM 1' {
+        technology 'KVM'
+        style {
+          color blue
+        }
+
+        api = instanceOf shop.api
+        api2 = instanceOf shop.api 'API replica' {
+          #replica
+          metadata {
+            tier 'silver'
+          }
+          style {
+            color red
+          }
+        }
+        instanceOf shop.db
+
+        api -> db 'queries'
+      }
+
+      host vm2 {
+        web = instanceOf shop.web 'Web' 'Public storefront' {
+          -> vm1.api 'requests' #public
+        }
+        -[syncs]-> vm1
+      }
+
+      vm2.web -> vm1.api.handler 'dispatches'
+    }
+  }
+
+  prod.eu.vm1.api -[calls]-> prod.eu.vm1.api2 'fails over' {
+    description 'Hot standby'
+    technology 'gRPC'
+    link https://example.com/failover 'Failover'
+    metadata {
+      owner 'team-a'
+    }
+    style {
+      line dotted
+    }
+  }
+  prod.eu.vm1.api2 <-> prod.eu.vm1.db 'replicates'
+  prod.eu.vm2 -[syncs]<-> prod.eu.vm1 'mirrors' #internal
+  prod.eu.vm2.web .calls prod.eu.vm1.api2 'falls back'
+}
+
+views {
+  deployment view production {
+    title 'Production'
+    include prod.**
+    exclude prod.eu.vm1.api2
+    style prod.eu.vm1 {
+      color amber
+    }
+    style prod.eu.vm2.web {
+      color sky
+    }
+    style shop.db {
+      color red
+    }
+    style prod.eu.vm1.api.handler {
+      color indigo
+    }
+  }
+}

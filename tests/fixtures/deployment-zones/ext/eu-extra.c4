@@ -1,0 +1,10 @@
+deployment {
+  extend prod.eu {
+    #edge
+    metadata {
+      tier 'premium'
+    }
+
+    cache = instanceOf shop.db 'Cache'
+  }
+}
