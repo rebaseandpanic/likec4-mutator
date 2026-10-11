@@ -229,4 +229,11 @@ These are setup conditions and review evidence. None of them is a test obligatio
 - **Rows 63 and 70 · resolved.** The syntax-error guard applies to instances and relationships too (plan T031, T035).
 - **Rows 88–91 · documented blind spot.** These rows prove refusal and atomicity for unsafe input. They do not prove that a dedicated form check exists, because a semantic lookup refuses the same input. No form-only product effect is claimed (R-7).
 
+- **Owner round limit — test-plan critique closed after round 2 (critics/tests-r2-codex.md); fixes applied without re-critique. Carrier: completeness critic (stage 5).**
+  - RES-tests-1 · MAJOR · owner limit · stage 4, round 2 · oracle self-checks I-2…I-4 turned into review evidence plus OP preconditions in rows 7–9, 13, 21, 22 (r2 #1) → carrier: completeness critic.
+  - RES-tests-2 · MAJOR · owner limit · stage 4, round 2 · logical-addition refusal and acceptance merged into row 32 (r2 #2) → carrier: completeness critic.
+  - RES-tests-3 · MAJOR · owner limit · stage 4, round 2 · rows 88–91 narrowed to refusal + atomicity with a named blind spot (r2 #3) → carrier: completeness critic.
+  - RES-tests-4 · MAJOR · owner limit · stage 4, round 2 · W split into Wv / Wi; rows 50, 62(c), 63, 70 on Wi (r2 #4) → carrier: completeness critic.
+  - RES-tests-5 · MAJOR · owner limit · stage 4, round 2 · last-round design edit without critique: spec SC-003 aligned with INV-1, plan T001 / T002 / T029 / T033 / T035 / T036 / T037 and delivery step 4 amended (commit 3300c23) → carrier: completeness critic.
+
 Rationale of rows: `docs/plan/lc4m-15.28/tests-rationale.md` (not part of the matrix).
