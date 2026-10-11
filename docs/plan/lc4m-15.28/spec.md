@@ -3,7 +3,7 @@
 **Date** 2026-10-12 · **Status** draft · **Task**: lc4m-15.28 (epic lc4m-15, stage 1) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
 **Type**: feature (+ two reference-stability bugfixes in existing operations) · **Based on**: README sections "Specification defaults", "`extend` blocks", "Rejected writes"; reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 01–07)
 
-Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein epic lc4m-15 (lc4m-15.28) are referenced as `D1`…`D13`.
+Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein epic lc4m-15 (lc4m-15.28) are referenced as `D1`…`D14`.
 
 ## Problem / Goal
 
@@ -71,7 +71,7 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 
 ### US-9 — Add, update and remove instances (P1)
 - **Acceptance**: Given a node and a resolvable element, when the caller adds an instance with optional name and properties, then it is written in the node's declaration body and reads back as US-3. Without a name the implicit name is the last segment of the written element reference; an instance is written unnamed only when that implicit id is free, otherwise the caller must give a name.
-- Update (D9): strings REPLACE the instance's own values; style MERGE per field into its own style; tags REPLACE its own tags (LikeC4 always appends the element's tags; they cannot be suppressed); links REPLACE its own links (`[]` removes them, and the element's links apply again); metadata is patched on the **effective** map: when the instance has no own metadata, the inherited keys are first copied into its own block, then keys are upserted, and `null` removes a key from the effective map (the element's map applies again only if the own block is removed because nothing would remain — then the effective map is the element's, documented). The referenced element is never changed. Patched tags, links and metadata keys are not stored in `extend` blocks (instances cannot be extended). The target element is not changeable. Documented with examples.
+- Update (D9): strings REPLACE the instance's own values; style MERGE per field into its own style; tags REPLACE its own tags (LikeC4 always appends the element's tags; they cannot be suppressed); links REPLACE its own links (`[]` removes them, and the element's links apply again); metadata is patched on the **effective** map: when the instance has no own metadata, the inherited keys are first copied into its own block, then keys are upserted, and `null` removes a key from the effective map. LikeC4 1.59.4 cannot express an empty own map (an empty `metadata { }` or values that normalize to nothing count as absent, and the element's map applies again), so (D14) a metadata patch is accepted only if, after the write, every patched key reads as requested — an upserted key with its value, a `null` key absent; otherwise it is rejected naming `metadata.<key>` and explaining that the override cannot be empty. Unpatched keys of the element may come back when the instance's own map becomes empty (own `{ tier }`, element `{ region }`, patch `{ tier: null }` → effective `{ region }`), documented. The referenced element is never changed. Patched tags, links and metadata keys are not stored in `extend` blocks (instances cannot be extended). The target element is not changeable. Documented with examples.
 - Remove: the instance, its nested relationships, and every deployment relationship whose endpoint is the instance (or an element inside it) are removed; rejected when a deployment view references it.
 - Rejected before writing: element reference that does not resolve as LikeC4 resolves `instanceOf` (document model scope and root elements); duplicate id; invalid name; undeclared tag; invalid style; target node id that is not a node.
 
@@ -111,7 +111,8 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 | D10 | No icon-derived technology in deployment reads | one rule across the library; project settings are not read | follow LikeC4's default getter |
 | D11 | `file` only where placement is a choice; loaded files only | the parent decides a child's place; no surprise files | `file` everywhere / create files |
 | D12 | Relationship selector carries the full endpoint (deployment id + element part) | nested endpoints are otherwise unaddressable | ids only |
-| D13 | Deployment-view references protected against every write of this feature | views break silently on additions too | protect only on removal |
+| D13 | Deployment-view references protected against every write of this feature (logical `removeElement` vs view references stays as today, lc4m-15.30) | views break silently on additions too | protect only on removal |
+| D14 | Instance metadata patch accepted only when every patched key reads as requested afterwards; else rejected | LikeC4 cannot express an empty override; no silently ignored deletion | let inheritance return silently; reject every patch emptying the own map |
 
 ### Component boundaries
 - **Deployment index** (new, read side): per workspace, built from all documents' `deployment` blocks in LikeC4 document order: nodes, instances, relationships, `extend <node>` blocks, by id; separate from the logical-model index, linked to it for `instanceOf` targets and for endpoints that step into elements.
@@ -126,14 +127,14 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 Read: documents → deployment index (with logical index for `instanceOf`) → info objects with effective values. Write: validate form → resolve and check semantics against both indices → compute edits per file → apply all files atomically → rebuild indices → reference-stability check (roll back on change) → result.
 
 ### Key invariants
-- **INV-1** An accepted write introduces no LikeC4 error (introduced-only rule, as for existing writes): a file set that passed `likec4 validate` before passes after (checked in tests by `expectValidLikeC4`); errors already present before the write may remain.
+- **INV-1** An accepted write of this feature, and an accepted `addElement` / `removeElement` with respect to deployment references (US-12), introduces no LikeC4 error (introduced-only rule, as for existing writes): a file set that passed `likec4 validate` before passes after (checked in tests by `expectValidLikeC4`); errors already present before the write may remain.
 - **INV-2** A rejected write changes no file and no in-memory state; the error names the offending field (`InvalidWriteError`), `apply` reports `mutations[i].<field>`.
 - **INV-3** Every write addressing a node, instance, relationship or extend block resolves to exactly one target; zero or several → explicit error naming the selector (and candidates when several).
-- **INV-4** Read values equal LikeC4 1.59.4's computed deployment model for every field listed in US-1…US-4, except the documented D2 summary/description rule.
+- **INV-4** Read values equal LikeC4 1.59.4's computed deployment model for every field listed in US-1…US-4, except the two documented exceptions: per-field summary / description (D2) and no icon-derived technology (D10).
 - **INV-5** Writes produce only text LikeC4 reads: no inline description / technology on deployment relationships, no inline technology on nodes / instances, no string or style properties and no source-less relationships in `extend` bodies.
 - **INV-6** Generic: no node kinds, tags, metadata keys or nesting depth are assumed; kinds and tags come from the loaded specification.
 - **INV-7** Existing logical-model reads (`getElement`, `listElements`, `getRelationships`, `getSpecification` existing fields) return exactly what they return today.
-- **INV-8** No accepted write changes the target that a surviving existing reference resolves to (logical and deployment references, `instanceOf`, `extend` targets, deployment view rules); references inside text the write removes on purpose (cascade) are not surviving.
+- **INV-8** No accepted write of this feature changes the target that a surviving existing reference resolves to (logical and deployment references, `instanceOf`, `extend` targets, deployment view rules); references inside text the write removes on purpose (cascade) are not surviving. For the existing logical operations only the US-12 additions apply: `addElement` keeps its current checks plus deployment references; `removeElement` keeps its current behaviour towards view references (logical and deployment views, including `view … of X` targets) — that policy is lc4m-15.30.
 
 ### Integration points and contracts
 | Surface | Contract |
@@ -184,8 +185,8 @@ No persistent data; `.c4` text only. No migration. Reads gain new info types for
 
 ## Success criteria
 - **SC-001** Every deployment-related row named in lc4m-15.28 "Coverage rows to update" has a non-`no` status in docs/likec4-coverage.md, or `n/a` with the grammar reason (extend of deployment relationships), and the coverage check passes.
-- **SC-002** For each read scenario (US-1…US-4) the test fixtures' values equal LikeC4's computed model field by field, in at least two unrelated fixtures (different kinds and metadata keys).
-- **SC-003** Every write in the test suite whose output is compared produces files that pass `expectValidLikeC4`.
+- **SC-002** For each read scenario (US-1…US-4), and after each deployment write (US-5…US-11, including the surviving entities after a removal), the library's values equal LikeC4's computed model field by field, with the D2 / D10 exceptions accounted for (including an inherited icon-only technology example), in at least two unrelated fixtures (different kinds and metadata keys).
+- **SC-003** Every successful deployment write in the test suite (and every successful `addElement` / `removeElement` touching deployment references) produces files that pass `expectValidLikeC4`.
 - **SC-004** Each rejection class of US-6…US-12 has a test showing rejection with the field named and sources byte-identical; the `apply` path exits 1 and writes nothing.
 - **SC-005** All pre-existing tests pass unchanged except tests that pinned the US-12 defects (rewritten to assert rejection).
 - **SC-006** `npm run lint` and `npm test` pass; README documents read API, write API and `apply` format for deployment, the instance patch rules (D9) and the read exceptions (D2, D10); CHANGELOG lists additions and the US-12 behaviour changes.
@@ -200,7 +201,7 @@ No persistent data; `.c4` text only. No migration. Reads gain new info types for
 - Q: Inline relation description / technology? → A: never written (D6).
 - Q: Endpoints into an instance's nested element? → A: allowed when they resolve (D7).
 - Q: Extend of relationships? → A: n/a (D8).
-- Q: Does an instance patch act on own or effective values? → A: metadata on the effective map, the rest on own values (D9).
+- Q: Does an instance patch act on own or effective values? → A: metadata on the effective map, the rest on own values (D9); a metadata patch whose patched keys cannot read as requested (empty override) is rejected (D14).
 - Q: Icon-derived technology? → A: not applied, as for logical elements (D10).
 - Q: Where may `file` be given? → A: root nodes, relationships, extend blocks; loaded files only (D11).
 - Q: How are nested-element relationship endpoints selected? → A: full endpoint in the selector (D12).
@@ -227,4 +228,4 @@ None yet.
 - `StrictFqnRef.value` reader for `extend <node>` targets (RECON A3).
 - `checkKind` for deployment node kinds; `checkStyle` reuse for nodes / instances / relations.
 - Reference-stability list must include `instanceOf`, deployment endpoints, `extend <node>` targets and deployment view rule references (RECON B4; D13); deployment views resolve both deployment and element candidates (RECON B4, LS:7609).
-- Whether an empty own `metadata { }` block counts as an own (empty) map in LikeC4 — needed for the D9 "last key removed" case; probe before choosing to remove the block.
+- An own metadata block left without attributes is removed (LikeC4 treats it as absent anyway, critique r2 probe); the D14 check runs on the effective map after the write.
