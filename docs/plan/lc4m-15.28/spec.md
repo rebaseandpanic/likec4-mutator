@@ -186,7 +186,7 @@ No persistent data; `.c4` text only. No migration. Reads gain new info types for
 ## Success criteria
 - **SC-001** Every deployment-related row named in lc4m-15.28 "Coverage rows to update" has a non-`no` status in docs/likec4-coverage.md, or `n/a` with the grammar reason (extend of deployment relationships), and the coverage check passes.
 - **SC-002** For each read scenario (US-1…US-4), and after each deployment write (US-5…US-11, including the surviving entities after a removal), the library's values equal LikeC4's computed model field by field, with the D2 / D10 exceptions accounted for (including an inherited icon-only technology example), in at least two unrelated fixtures (different kinds and metadata keys).
-- **SC-003** Every successful deployment write in the test suite (and every successful `addElement` / `removeElement` touching deployment references) produces files that pass `expectValidLikeC4`.
+- **SC-003** Every successful deployment write in the test suite (and every successful `addElement` / `removeElement` touching deployment references) on a valid input produces files that pass `expectValidLikeC4`; a successful write on an input that already has LikeC4 errors introduces no new error (INV-1).
 - **SC-004** Each rejection class of US-6…US-12 has a test showing rejection with the field named and sources byte-identical; the `apply` path exits 1 and writes nothing.
 - **SC-005** All pre-existing tests pass unchanged except tests that pinned the US-12 defects (rewritten to assert rejection).
 - **SC-006** `npm run lint` and `npm test` pass; README documents read API, write API and `apply` format for deployment, the instance patch rules (D9) and the read exceptions (D2, D10); CHANGELOG lists additions and the US-12 behaviour changes.
@@ -219,6 +219,9 @@ None.
 5. Instance writers (US-9).
 6. Relationship and extend writers (US-10, US-11).
 7. Reference stability (US-12) and `apply` ops (US-13); docs, coverage, release.
+
+## Changelog
+- 2026-10-12 · SC-003 aligned with INV-1 (introduced-only): on inputs that already have LikeC4 errors an accepted write must introduce no new error instead of producing a clean validation · found by the test-plan critique (round 2) · redo: test plan (convention Wi), plan T029 / T033 / T037 and delivery step 4 — done in the same change.
 
 ## Known residuals
 None yet.

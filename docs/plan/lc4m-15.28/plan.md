@@ -122,11 +122,11 @@ No new dependency.
     - kind defaults with style, an element with an icon only;
     - a deployment view with include, exclude and style rules referencing nodes and instances; logical elements and element parts only in `style` rules (LikeC4 rejects them in include / exclude: "Deployment view predicate must reference deployment model", tests-rationale R-3).
   - At least one file has no `deployment` block (for explicit placement).
-  - Gate: both pass `expectValidLikeC4` (asserted in T002's test file).
+  - Gate: both fixtures pass `expectValidLikeC4`, asserted as a precondition in the consuming product test files (tests.md convention P); nothing is added to `tests/likec4-validate-oracle.test.ts`.
 
 ### Phase Foundational (BLOCKING) — shared foundation and contracts
 
-**T002 [TEST]** — `tests/helpers/likec4-model.ts`, `tests/likec4-validate-oracle.test.ts`. Mechanism: the computed deployment model and the linked-reference oracle.
+**T002** — `tests/helpers/likec4-model.ts`. Mechanism: the computed deployment model and the linked-reference oracle.
 - `buildLikeC4Model` returns:
   - `deployments.elements` (`$data.deployments.elements`, instances with their `element` target), `deployments.relations` and `deployments.specification` (`$data.specification.deployments`);
   - a getter snapshot per deployment id (`model.deployment.element(id)`).
@@ -136,10 +136,7 @@ No new dependency.
   - D2: instance summary and description per field, own else element, from the data layer;
   - D10: the reference is built with `inferTechnologyFromIcon: false`.
 - Style is compared on the data layer: node `$data` style; instance = element `$data` style overridden per field by instance `$data` style; opacity number ↔ `'N%'`.
-- Gate:
-  - the oracle test reproduces literal values recorded in spikes 02, 04 and 06 (independent reference), including spike 03 #9, #20 and #21 reported as `null` targets;
-  - T001 fixtures validate clean;
-  - the existing oracle tests are unchanged and green.
+- Gate: the existing `tests/likec4-validate-oracle.test.ts` is unchanged and green; the helper gets no standalone test. Its assumptions are review evidence (spikes 02, 03, 04 and 06; code facts LS:3486, LS:2917-2921). Every consuming [TEST] task asserts the oracle preconditions it relies on inside its own product rows (tests.md convention OP: rows 7–9, 13, 21, 22).
 
 **T003** — `src/query/types.ts`, `src/index.ts`. Mechanism: the public read contract.
 - `DeploymentNodeInfo` (id, name, kind, parentId, effective strings, tags, links, metadata, style, fromSpecification, declared, extendedBy, children, instances, file, sourceRange).
@@ -328,6 +325,7 @@ No new dependency.
 - US-8: cascade, view rejection, extend-body children.
 - Deployment-removal reference integration: removing a node so that a surviving reference's name becomes unique and re-targets → rejected byte-identical; removing a node with two same-target extend blocks keeps survivors matched.
 - Survivors equal the oracle; rejections leave sources byte-identical.
+- Accepted writes on a valid input pass `expectValidLikeC4`; the accepted title update under a syntax error (tests.md row 50) is checked by read-back and an unchanged LikeC4 error set (INV-1 introduced-only).
 - Gate: class green.
 
 ### Phase — US-9 — Instances
@@ -350,7 +348,7 @@ No new dependency.
 **T032** — same files + README. Mechanism: `removeDeploymentInstance`. Removes the instance, its nested relationships, and every relationship whose endpoint is the instance or an element inside it. Rejected (`id`) when a deployment view references it. The pre-write snapshot gets an explicit removal set (instance node + cascaded relations); survivors are compared. Gate: smoke.
 
 **T033 [TEST]** — `tests/mutator/deployment-instances-write.test.ts`. Mechanism:
-- US-9 acceptance and every rejection class (D14 rejections included), two fixtures, oracle values after each write, `expectValidLikeC4`.
+- US-9 acceptance and every rejection class (D14 rejections included), two fixtures, oracle values after each write on a valid input and `expectValidLikeC4`; on inputs that already have LikeC4 errors (syntax error, ambiguous reference — tests.md rows 62(c), 63) the accepted write is checked by read-back and an unchanged LikeC4 error set (INV-1 introduced-only).
 - Reference integration: a second instance making a view rule's unqualified name ambiguous → rejected; removing one of two same-named instances so a surviving ambiguous reference becomes resolvable stays accepted (it did not resolve before); a removal that re-targets a resolved survivor → rejected byte-identical.
 - Gate: class green.
 
@@ -367,13 +365,14 @@ No new dependency.
 **T035** — same files + README. Mechanism: deployment relationship selector + `updateDeploymentRelationship`.
 - Selector `{ source: { id, element? }, target: { id, element? }, kind?, title? }`; a bidirectional relationship matches in either order; zero matches or ambiguity → `InvalidWriteError` naming candidates (D12, INV-3).
 - Patch through `relationPatchEdits('body-only')`; line tags replaced where present; `changedFiles`.
+- Selector errors: a relationship selector that matches nothing or several relationships is reported on `source` (candidates named for several); a malformed selector endpoint is reported on the same sub-paths as T034 (`source.id`, `source.element`, `target.id`, `target.element`).
 - Tag / link / metadata updates are rejected while any loaded file has syntax errors (spec "Edge cases", same guard as T026).
 - Gate: smoke and oracle.
 
-**T036** — same files + README. Mechanism: `removeDeploymentRelationship` with the same selector, using `buildRemovalEdit`. Gate: smoke.
+**T036** — same files + README. Mechanism: `removeDeploymentRelationship` with the same selector, using `buildRemovalEdit`. Selector errors as in T035. Gate: smoke.
 
 **T037 [TEST]** — `tests/mutator/deployment-relationships-write.test.ts`. Mechanism:
-- US-10 add, update, remove; every connector the API writes; element-part endpoints; ambiguity and rejection classes; two fixtures; oracle and `expectValidLikeC4`.
+- US-10 add, update, remove; every connector the API writes; element-part endpoints; ambiguity and rejection classes; two fixtures; oracle and `expectValidLikeC4` on valid inputs; the accepted update under a syntax error (tests.md row 70) checked by read-back and an unchanged LikeC4 error set (INV-1 introduced-only).
 - **Explicit placement into a blockless file while other loaded files already have `deployment` blocks:** endpoints resolve from the new block's position, the relationship lands in the chosen file.
 - Gate: class green.
 
@@ -448,7 +447,7 @@ No new dependency.
    - SC-005 confirmed.
 3. **G5**. STOP: whole pre-existing suite green unchanged (refactors are behaviour-neutral); T024 explicit-file branch smoke.
 4. **G6 → G7 → G8**, each ending with STOP:
-   - oracle values after each write and `expectValidLikeC4` on every output;
+   - oracle values after each write and `expectValidLikeC4` on every output from a valid input; on inputs that already have LikeC4 errors, read-back plus an unchanged LikeC4 error set (INV-1 introduced-only);
    - rejection classes with byte-identical sources;
    - explicit placement into a blockless file (T028, T037, T039);
    - reference integration owned by the writer tests: node additions against endpoints and view references, with strict extend paths covered by duplicate-id rejection (T028); deployment removals (T029, T033, T039);
