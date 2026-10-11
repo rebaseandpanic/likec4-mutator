@@ -23,7 +23,7 @@ No expected value comes from the library's own output.
   - the output passes `expectValidLikeC4` (SC-002, SC-003, INV-1).
 - **Wi (accepted write on an input that already has LikeC4 errors: syntax errors or ambiguous references; rows 50, 62(c), 63, 70):**
   - the library reads back every written value as requested;
-  - LikeC4's error set after the write equals the set before. The sets are compared as multisets of `<file>: <message>` with line numbers dropped, because the write moves lines. Precedents: `tests/mutator/semantic-write-checks.test.ts` ("adds no error") and `tests/mutator/add-element-references.test.ts`.
+  - LikeC4's error set after the write equals the set before (rows 50, 63, 70: an unrelated syntax error stays). Exception, row 62(c): the removal is expected to resolve an existing ambiguity, so there the set after the write is a sub-multiset of the set before (errors may disappear, none may appear). The sets are compared as multisets of `<file>: <message>` with line numbers dropped, because the write moves lines. Precedents: `tests/mutator/semantic-write-checks.test.ts` ("adds no error") and `tests/mutator/add-element-references.test.ts`.
   - Old errors may remain (INV-1 introduced-only). No clean validation is required.
   - Blind spot: the surviving entities are not compared with the oracle, because LikeC4's model of an invalid input is best effort.
 - **2F (both fixtures):** the row runs on `tests/fixtures/deployment-zones/` and on `tests/fixtures/deployment-clusters/` (T001), with the entity names of each fixture.
@@ -206,7 +206,7 @@ These are setup conditions and review evidence. None of them is a test obligatio
 | SC-002 (on the valid fixtures) | 13–27, 83–85, and Wv in rows 39–41, 43–45, 47–49, 52–56, 59–62(b), 64, 66–67, 69, 71, 73–74, 93. Wi rows (50, 62(c), 63, 70) have no oracle comparison of survivors, by design |
 | SC-003 (accepted writes on valid inputs) | Wv rows, plus rows 32, 36, 92 and 75 |
 | SC-004 | BI rejections in rows 32, 36, 41–42, 44, 50–51, 53, 55, 57–58, 60–63, 65, 68, 70, 72–74, 86–91, 93, 76–78 |
-| INV-1 (introduced-only) | Wv rows (clean before, clean after) and Wi rows 50, 62(c), 63 and 70 (unchanged error set) |
+| INV-1 (introduced-only) | Wv rows (clean before, clean after) and Wi rows 50, 63 and 70 (unchanged error set) and 62(c) (no new error; the resolved ambiguity error disappears) |
 | INV-2 | = BI |
 | INV-3 | 42, 51, 68, 73, 87 |
 | INV-4 | 13–27, 83–85 |

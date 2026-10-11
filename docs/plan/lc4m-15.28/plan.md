@@ -348,7 +348,7 @@ No new dependency.
 **T032** — same files + README. Mechanism: `removeDeploymentInstance`. Removes the instance, its nested relationships, and every relationship whose endpoint is the instance or an element inside it. Rejected (`id`) when a deployment view references it. The pre-write snapshot gets an explicit removal set (instance node + cascaded relations); survivors are compared. Gate: smoke.
 
 **T033 [TEST]** — `tests/mutator/deployment-instances-write.test.ts`. Mechanism:
-- US-9 acceptance and every rejection class (D14 rejections included), two fixtures, oracle values after each write on a valid input and `expectValidLikeC4`; on inputs that already have LikeC4 errors (syntax error, ambiguous reference — tests.md rows 62(c), 63) the accepted write is checked by read-back and an unchanged LikeC4 error set (INV-1 introduced-only).
+- US-9 acceptance and every rejection class (D14 rejections included), two fixtures, oracle values after each write on a valid input and `expectValidLikeC4`; on inputs that already have LikeC4 errors the accepted write is checked by read-back and LikeC4's error set: unchanged for the title/technology update under a syntax error (tests.md row 63); for the removal that resolves an existing ambiguity (row 62(c)) the set after is a sub-multiset of the set before — the ambiguity error may disappear, no error may appear (INV-1 introduced-only).
 - Reference integration: a second instance making a view rule's unqualified name ambiguous → rejected; removing one of two same-named instances so a surviving ambiguous reference becomes resolvable stays accepted (it did not resolve before); a removal that re-targets a resolved survivor → rejected byte-identical.
 - Gate: class green.
 
@@ -447,7 +447,7 @@ No new dependency.
    - SC-005 confirmed.
 3. **G5**. STOP: whole pre-existing suite green unchanged (refactors are behaviour-neutral); T024 explicit-file branch smoke.
 4. **G6 → G7 → G8**, each ending with STOP:
-   - oracle values after each write and `expectValidLikeC4` on every output from a valid input; on inputs that already have LikeC4 errors, read-back plus an unchanged LikeC4 error set (INV-1 introduced-only);
+   - oracle values after each write and `expectValidLikeC4` on every output from a valid input; on inputs that already have LikeC4 errors, read-back plus no new LikeC4 error (unchanged set where the write cannot touch the existing error; a sub-multiset where it is meant to resolve it, tests.md row 62(c)) (INV-1 introduced-only);
    - rejection classes with byte-identical sources;
    - explicit placement into a blockless file (T028, T037, T039);
    - reference integration owned by the writer tests: node additions against endpoints and view references, with strict extend paths covered by duplicate-id rejection (T028); deployment removals (T029, T033, T039);
