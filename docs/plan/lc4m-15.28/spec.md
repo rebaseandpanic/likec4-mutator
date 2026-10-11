@@ -3,13 +3,13 @@
 **Date** 2026-10-12 · **Status** draft · **Task**: lc4m-15.28 (epic lc4m-15, stage 1) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
 **Type**: feature (+ two reference-stability bugfixes in existing operations) · **Based on**: README sections "Specification defaults", "`extend` blocks", "Rejected writes"; reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 01–07)
 
-Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein epic lc4m-15 (lc4m-15.28) are referenced as `D1`…`D8`.
+Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein epic lc4m-15 (lc4m-15.28) are referenced as `D1`…`D13`.
 
 ## Problem / Goal
 
 The `deployment { … }` part of the LikeC4 DSL — deployment node kinds, nested nodes, `instanceOf` instances, deployment relationships and `extend <node>` blocks — is neither read nor written by the library. Users edit it as text, which is fragile (instance blocks repeat across nodes, instance names are implicit, nothing validates before writing).
 
-Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, and add / update / remove every deployment construct through the library and `apply`, rejecting before writing anything LikeC4 would reject. The result of any accepted write passes `likec4 validate`.
+Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, and add / update / remove every deployment construct through the library and `apply`, rejecting before writing anything LikeC4 would reject. An accepted write introduces no `likec4 validate` error (INV-1).
 
 ## Scope
 
@@ -17,13 +17,14 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 - Reading: deployment node kinds (with defaults), nodes, instances, deployment relationships, `extend <node>` provenance.
 - Writing: the `deployment { }` block (creation), nodes, instances, deployment relationships, `extend <node>` blocks.
 - `apply` operations for every write.
-- Reference stability for deployment references: writes to the logical model and to the deployment model must not silently break or re-target existing deployment references (two existing defects, US-12).
+- Reference stability for deployment references: writes to the logical model and to the deployment model must not silently break or re-target existing deployment references, including references in deployment view rules (two existing defects, US-12; D13).
 - Test helper: expose LikeC4's computed deployment model to tests.
 - Coverage table rows for the deployment grammar.
 
 **Not in scope**
-- Deployment views (`deployment view …`) — read/write of views is stage 2 (lc4m-15.29). Here views are only consulted to protect them on removal (US-8).
+- Deployment views (`deployment view …`) — read/write of views is stage 2 (lc4m-15.29). Here their references are only consulted to protect them (US-8, US-12, D13).
 - General reference policy, rename / move (lc4m-15.30). Removal of referenced constructs is rejected here instead (D5).
+- `removeElement` against references to the removed element in view rules (logical or deployment views): unchanged here, part of the general reference policy (lc4m-15.30). US-12 covers only `instanceOf` and deployment relationship endpoints.
 - Single-purpose CLI commands (lc4m-15.31).
 - Styling beyond reading and writing `style { }` fields of nodes, instances and relations (notation, icons catalogue: lc4m-15.32).
 - Logical-model elements and relations themselves (unchanged except US-12).
@@ -44,15 +45,16 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 
 ### US-3 — Read instances (P1)
 - **Acceptance**: Given named and unnamed instances, several instances of one element in one node (named), instances inside `extend` bodies, when the caller lists or gets instances, then each is reported with: id, name (explicit, or the last segment of the `instanceOf` reference as written), parent node id, target element FQN, effective title, summary, description, technology, tags, links, metadata, style, `declared`, file, source range. Listing is filterable by node id and by element FQN.
-- Effective values follow LikeC4's computed model: title, technology, links, metadata come from the instance when it has them, else from the element (an instance metadata map replaces the element's whole map; an empty instance title stays `''`); tags = instance tags then element tags without duplicates; style = element style overridden per field by instance style. **Exception (D2):** summary and description are reported per field (instance value, else element value) without LikeC4's display fallback between summary and description; documented.
+- Effective values follow LikeC4's computed model: title, technology, links, metadata come from the instance when it has them, else from the element (an instance metadata map replaces the element's whole map; an empty instance title stays `''`); tags = instance tags then element tags without duplicates; style = element style overridden per field by instance style. **Exceptions (D2, D10):** summary and description are reported per field (instance value, else element value) without LikeC4's display fallback between summary and description; technology is never derived from an icon (LikeC4's default `inferTechnologyFromIcon` is not applied — the library reads no project settings, the same rule as for logical elements). Both documented.
 
 ### US-4 — Read deployment relationships (P1)
-- **Acceptance**: Given relationships at the top of `deployment`, nested in node and instance bodies (including source-less ones), in `extend` bodies, with every connector form (`->`, `<->`, `-[k]->`, `-[k]<->`, `.k`), with endpoints that are nodes, instances, or elements nested inside an instance's element (`prod.db.replLog`), when the caller lists them, then each is reported with: source and target (deployment id, plus the element FQN when the endpoint steps into an instance's element), kind, bidirectional flag, effective title, description, technology, tags, links, metadata, style, kind defaults, `declared`, file, source range. Listing is filterable by source id, target id and kind.
+- **Acceptance**: Given relationships at the top of `deployment`, nested in node and instance bodies (including source-less ones), in `extend` bodies, with every connector form (`->`, `<->`, `-[k]->`, `-[k]<->`, `.k`), with endpoints that are nodes, instances, or elements nested inside an instance's element (`prod.db.replLog`), when the caller lists them, then each is reported with: source and target (deployment id, plus the element FQN when the endpoint steps into an instance's element), kind, bidirectional flag, effective title, description, technology, tags, links, metadata, style, kind defaults, `declared`, file, source range. Listing is filterable by source id, target id and kind; a source / target filter by deployment id also matches endpoints that step into that instance's element.
 - Effective values follow LikeC4: inline description and technology on the relation line are ignored (LikeC4 parses but ignores them); line tags win over body tags; the kind's tags are prepended; the kind's title / description / technology apply when own is absent.
 - `getRelationships()` (logical model) returns exactly what it returns today; deployment relationships are not mixed into it.
 
 ### US-5 — Create the deployment block (P1)
-- **Acceptance**: Given a workspace without any `deployment` block, when the caller adds a root node or a relationship, then a `deployment { }` block is created in the chosen file (`file` option) or, by default, appended at the end of the first file (LikeC4 document order) that has a `model` block; if no file has a `model` block, the first file. With an existing block, root additions go into the first `deployment` block of the chosen file, or of the first file (document order) that has one (D4).
+- **Acceptance**: Given a workspace without any `deployment` block, when the caller adds a root node or a relationship, then a `deployment { }` block is created in the chosen file (`file` option) or, by default, appended at the end of the first file (LikeC4 document order) that has a `model` block; if no file has a `model` block, the first file. With no loaded file at all the write is rejected. With an existing block, root additions go into the first `deployment` block of the chosen file, or of the first file (document order) that has one (D4).
+- **File option (D11):** `file` is accepted only where placement is a choice — a root node, a relationship, an `extend` block. For a child node or an instance (placed in the parent's declaration body) a `file` option is rejected. The file must be one of the loaded files; no new file is created; an unknown file is rejected naming `file`.
 
 ### US-6 — Add a node (P1)
 - **Acceptance**: Given a declared deployment node kind, when the caller adds a node under a parent id (or at the root) with name, kind and optional title, summary, description, technology, tags, links, metadata, style, then the node is written in the parent's declaration body (creating `{ }` when the parent has none) and reading it back returns the requested values (after kind defaults, as US-2). Technology is written in the body (the grammar has no inline technology for nodes).
@@ -69,15 +71,15 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 
 ### US-9 — Add, update and remove instances (P1)
 - **Acceptance**: Given a node and a resolvable element, when the caller adds an instance with optional name and properties, then it is written in the node's declaration body and reads back as US-3. Without a name the implicit name is the last segment of the written element reference; an instance is written unnamed only when that implicit id is free, otherwise the caller must give a name.
-- Update: same semantics as nodes (US-7), except there is no kind; the target element is not changeable.
+- Update (D9): strings REPLACE the instance's own values; style MERGE per field into its own style; tags REPLACE its own tags (LikeC4 always appends the element's tags; they cannot be suppressed); links REPLACE its own links (`[]` removes them, and the element's links apply again); metadata is patched on the **effective** map: when the instance has no own metadata, the inherited keys are first copied into its own block, then keys are upserted, and `null` removes a key from the effective map (the element's map applies again only if the own block is removed because nothing would remain — then the effective map is the element's, documented). The referenced element is never changed. Patched tags, links and metadata keys are not stored in `extend` blocks (instances cannot be extended). The target element is not changeable. Documented with examples.
 - Remove: the instance, its nested relationships, and every deployment relationship whose endpoint is the instance (or an element inside it) are removed; rejected when a deployment view references it.
 - Rejected before writing: element reference that does not resolve as LikeC4 resolves `instanceOf` (document model scope and root elements); duplicate id; invalid name; undeclared tag; invalid style; target node id that is not a node.
 
 ### US-10 — Add, update and remove deployment relationships (P1)
 - **Acceptance (add)**: Given resolvable endpoints, when the caller adds a relationship with optional kind (declared relationship kind), bidirectional flag, title, description, technology, tags, links, metadata, style, then it is written at the top level of a `deployment` block (US-5 file rule); description and technology go into the body, never on the line (INV-5); it reads back as US-4.
 - Endpoints are written as the caller gives them and must resolve, from the insertion point, by LikeC4's deployment scoping, to a node, an instance, or an element nested inside an instance's element (D7-revised). Rejected: unresolved endpoint, a model-only FQN, self or parent–child pair (LikeC4's deployment hierarchy check), undeclared kind or tag, invalid style.
-- **Update**: selected by source and target ids, optionally narrowed by kind and title; strings REPLACE (every declaration LikeC4 reads), tags / links REPLACE, metadata MERGE with `null`, style MERGE per field. More than one match without a narrowing selector → explicit ambiguity error naming the candidates.
-- **Remove**: same selector; ambiguity → explicit error.
+- **Update** (D12): selected by source and target endpoints — each a deployment id plus, when the endpoint steps into an instance's element, that element part, exactly as reads report them — optionally narrowed by kind and title; a bidirectional relationship matches either endpoint order; strings REPLACE (every declaration LikeC4 reads), tags / links REPLACE, metadata MERGE with `null`, style MERGE per field. More than one match without a narrowing selector → explicit ambiguity error naming the candidates.
+- **Remove**: same selector; ambiguity → explicit error. Relationships that the selector cannot tell apart (same endpoints, kind, title) can only be removed or updated once disambiguated by the caller's edits; the error names them.
 
 ### US-11 — Create and remove `extend <node>` blocks (P2)
 - **Acceptance**: Given a node, when the caller creates an `extend` block for it in a chosen file with tags, links and/or metadata, then the block is appended to a `deployment` block of that file (created if needed) and the node's effective values include its contribution (provenance in `extendedBy`). Removing selects the block by node id and file (plus a 1-based occurrence when the file holds several blocks for that node; otherwise ambiguity error); children declared inside the removed block are removed with it, following US-8 rules for their references.
@@ -86,7 +88,7 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 
 ### US-12 — Reference stability across the logical and deployment models (P1, bugfix)
 **Current**: `removeElement` removes an element referenced by `instanceOf` (LikeC4 then reports `Could not resolve reference`); `addElement` can make an existing `instanceOf api` ambiguous and is not rejected (spike 07 C/D).
-**Expected**: `removeElement` is rejected, listing the instances, when the element or any element of its subtree is the target of an `instanceOf` or of a deployment relationship endpoint stepping into an instance's element. `addElement`, `addDeploymentNode` and `addDeploymentInstance` are rejected (sources unchanged) when the new name would change the resolution of any existing reference — logical-model references as today, plus `instanceOf` targets, deployment relationship endpoints and `extend <node>` targets.
+**Expected**: `removeElement` is rejected, listing the instances, when the element or any element of its subtree is the target of an `instanceOf` or of a deployment relationship endpoint stepping into an instance's element. `addElement`, `addDeploymentNode` and `addDeploymentInstance` — and every other write of this feature that adds a name — are rejected (sources unchanged) when the new name would change the resolution of any existing reference — logical-model references as today, plus `instanceOf` targets, deployment relationship endpoints, `extend <node>` targets, and references in deployment view rules (include / exclude predicates, relationship predicates, style targets, every rule that names an element of the view), whether the change makes the reference ambiguous, unresolved or re-targeted (D13). Example: a second instance of an element whose implicit name a view rule uses unqualified makes the rule ambiguous → rejected.
 **Unchanged**: everything else `removeElement` / `addElement` do.
 
 ### US-13 — Batch operations through `apply` (P1)
@@ -100,11 +102,16 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 | D1 | Nodes and instances are addressed by their LikeC4 deployment id; reads can filter instances by element | the id is unique in any valid model; one addressing scheme, no "first match" | path + element FQN (+ name) selector (two ways to address, ambiguity handling twice) |
 | D2 | Effective values = LikeC4's computed model (getter layer) with provenance; summary / description per field | callers see what diagrams and view filters see; provenance explains it | raw data layer (no instance inheritance); getter cross-fallback (would report a description the user never wrote) |
 | D3 | Fix US-12 defects in this run | deployment references are part of the deployment model's integrity; otherwise INV-1 does not hold | separate task |
-| D4 | Optional `file` on every add; default: first file with a `deployment` block, else end of first file with a `model` block, else first file | predictable, no new files, compatible with lc4m-15.30 file choice | always first file; a new file |
+| D4 | Optional `file` for root additions (see D11); default: first file with a `deployment` block, else end of first file with a `model` block, else first file | predictable, no new files, compatible with lc4m-15.30 file choice | always first file; a new file |
 | D5 | Remove cascades deployment relationships; rejects when deployment views reference the removed thing | view rules are the user's intent; silently editing them is worse than refusing | cascade into views; reject on any relationship |
 | D6 | Never write inline description / technology on deployment relationships | LikeC4 ignores them | mirror model-relation inline form |
 | D7 | Relationship endpoints: node, instance, or element nested in an instance's element | documented LikeC4 scenario (`vm2.db -> vm1.db.repl_log`) | nodes and instances only |
 | D8 | Only `extend <node>`; extend of relationships `n/a` | grammar | — |
+| D9 | Instance metadata patched on the effective map (copy-on-write of inherited keys); tags / links / strings on own values | no silent loss of inherited keys; LikeC4 replaces the whole map | patch only own values (loses inherited keys on first patch) |
+| D10 | No icon-derived technology in deployment reads | one rule across the library; project settings are not read | follow LikeC4's default getter |
+| D11 | `file` only where placement is a choice; loaded files only | the parent decides a child's place; no surprise files | `file` everywhere / create files |
+| D12 | Relationship selector carries the full endpoint (deployment id + element part) | nested endpoints are otherwise unaddressable | ids only |
+| D13 | Deployment-view references protected against every write of this feature | views break silently on additions too | protect only on removal |
 
 ### Component boundaries
 - **Deployment index** (new, read side): per workspace, built from all documents' `deployment` blocks in LikeC4 document order: nodes, instances, relationships, `extend <node>` blocks, by id; separate from the logical-model index, linked to it for `instanceOf` targets and for endpoints that step into elements.
@@ -119,14 +126,14 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 Read: documents → deployment index (with logical index for `instanceOf`) → info objects with effective values. Write: validate form → resolve and check semantics against both indices → compute edits per file → apply all files atomically → rebuild indices → reference-stability check (roll back on change) → result.
 
 ### Key invariants
-- **INV-1** An accepted write introduces no LikeC4 error: every file set that passed `likec4 validate` before passes after (checked in tests by `expectValidLikeC4`). Errors already present before the write may remain (introduced-only rule, as for existing writes).
+- **INV-1** An accepted write introduces no LikeC4 error (introduced-only rule, as for existing writes): a file set that passed `likec4 validate` before passes after (checked in tests by `expectValidLikeC4`); errors already present before the write may remain.
 - **INV-2** A rejected write changes no file and no in-memory state; the error names the offending field (`InvalidWriteError`), `apply` reports `mutations[i].<field>`.
 - **INV-3** Every write addressing a node, instance, relationship or extend block resolves to exactly one target; zero or several → explicit error naming the selector (and candidates when several).
 - **INV-4** Read values equal LikeC4 1.59.4's computed deployment model for every field listed in US-1…US-4, except the documented D2 summary/description rule.
 - **INV-5** Writes produce only text LikeC4 reads: no inline description / technology on deployment relationships, no inline technology on nodes / instances, no string or style properties and no source-less relationships in `extend` bodies.
 - **INV-6** Generic: no node kinds, tags, metadata keys or nesting depth are assumed; kinds and tags come from the loaded specification.
 - **INV-7** Existing logical-model reads (`getElement`, `listElements`, `getRelationships`, `getSpecification` existing fields) return exactly what they return today.
-- **INV-8** No accepted write changes the target an existing reference resolves to (logical and deployment references, `instanceOf`, `extend` targets).
+- **INV-8** No accepted write changes the target that a surviving existing reference resolves to (logical and deployment references, `instanceOf`, `extend` targets, deployment view rules); references inside text the write removes on purpose (cascade) are not surviving.
 
 ### Integration points and contracts
 | Surface | Contract |
@@ -181,17 +188,23 @@ No persistent data; `.c4` text only. No migration. Reads gain new info types for
 - **SC-003** Every write in the test suite whose output is compared produces files that pass `expectValidLikeC4`.
 - **SC-004** Each rejection class of US-6…US-12 has a test showing rejection with the field named and sources byte-identical; the `apply` path exits 1 and writes nothing.
 - **SC-005** All pre-existing tests pass unchanged except tests that pinned the US-12 defects (rewritten to assert rejection).
-- **SC-006** `npm run lint` and `npm test` pass; README documents read API, write API and `apply` format for deployment; CHANGELOG lists additions and the US-12 behaviour changes.
+- **SC-006** `npm run lint` and `npm test` pass; README documents read API, write API and `apply` format for deployment, the instance patch rules (D9) and the read exceptions (D2, D10); CHANGELOG lists additions and the US-12 behaviour changes.
+- **SC-007** One minor release is prepared (version in package.json and docs/likec4-coverage.md, CHANGELOG entry) and is not pushed, tagged or published without the owner's explicit command.
 
 ## Clarifications
 - Q: How are instances addressed? → A: by LikeC4 id; filter by element in reads (D1).
 - Q: What are "effective" instance values? → A: LikeC4 getter semantics with provenance, per-field summary/description (D2).
 - Q: Fix `removeElement` / `addElement` gaps here? → A: yes (D3).
-- Q: Where does a new `deployment` block go? → A: optional `file`; default rule D4.
+- Q: Where does a new `deployment` block go? → A: optional `file` (D11); default rule D4.
 - Q: Removing referenced nodes? → A: cascade relationships, reject when deployment views reference (D5).
 - Q: Inline relation description / technology? → A: never written (D6).
 - Q: Endpoints into an instance's nested element? → A: allowed when they resolve (D7).
 - Q: Extend of relationships? → A: n/a (D8).
+- Q: Does an instance patch act on own or effective values? → A: metadata on the effective map, the rest on own values (D9).
+- Q: Icon-derived technology? → A: not applied, as for logical elements (D10).
+- Q: Where may `file` be given? → A: root nodes, relationships, extend blocks; loaded files only (D11).
+- Q: How are nested-element relationship endpoints selected? → A: full endpoint in the selector (D12).
+- Q: Are deployment views protected against additions? → A: yes, against every write (D13).
 - **Testing**: unit level only (vitest; `npm test`; integration / e2e / smoke / mutation not provided by the project). Oracles: `expectValidLikeC4` (likec4 validate 1.59.4 in-process) and LikeC4's computed model via `buildLikeC4Model`, extended to deployments.
 
 ## Open questions / [NEEDS CLARIFICATION]
@@ -213,4 +226,5 @@ None yet.
 - Generalize the inline-string anchor (after `kind` / `name` / `target`) instead of forking title editing (RECON A3).
 - `StrictFqnRef.value` reader for `extend <node>` targets (RECON A3).
 - `checkKind` for deployment node kinds; `checkStyle` reuse for nodes / instances / relations.
-- Reference-stability list must include `instanceOf`, deployment endpoints and `extend <node>` targets (RECON B4).
+- Reference-stability list must include `instanceOf`, deployment endpoints, `extend <node>` targets and deployment view rule references (RECON B4; D13); deployment views resolve both deployment and element candidates (RECON B4, LS:7609).
+- Whether an empty own `metadata { }` block counts as an own (empty) map in LikeC4 — needed for the D9 "last key removed" case; probe before choosing to remove the block.
