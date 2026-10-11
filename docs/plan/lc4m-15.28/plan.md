@@ -359,6 +359,7 @@ No new dependency.
 **T034** — `src/mutator/deployment-ops.ts`, `src/mutator/mutator.ts`, README. Mechanism: `addDeploymentRelationship`.
 - Written at the top level of the T024 block (`file` authoritative when given).
 - Endpoints in reference form, resolved from the insertion point by `DeploymentResolver`; model-only FQNs and unresolved endpoints are rejected (D7).
+- Error fields of endpoint problems: `source.id` / `target.id` for the deployment part, `source.element` / `target.element` for the element part (the same paths in `apply`: `mutations[i].source.element`).
 - `isSameHierarchy` on the deployment parts is rejected (`target`); kind (`checkKind` relationship), tags and style checks.
 - Description and technology go into the body (D6).
 - Gate: smoke and oracle.
