@@ -6,7 +6,7 @@
  * computes from the same sources.
  */
 import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
-import { URI } from 'langium';
+import { AstUtils, URI, type AstNode, type LangiumDocument } from 'langium';
 import { expect } from 'vitest';
 
 /** A string value of the LikeC4 model: plain, or `{ md }` / `{ txt }` for Markdown-or-string properties. */
@@ -36,6 +36,75 @@ export interface LikeC4ModelRelation extends LikeC4ModelElement {
   isBidirectional?: boolean;
 }
 
+/** Style data of the computed LikeC4 model (`style` of an element, node or kind): opacity is a number there. */
+export type LikeC4ModelStyle = Record<string, string | number | boolean | undefined>;
+
+/**
+ * A deployment node or instance of the computed LikeC4 model
+ * (`$data.deployments.elements`), as far as the tests read it.  Nodes carry
+ * `kind`; instances carry `element`, the FQN of the element they deploy, and
+ * only their own values (inheritance from the element is a getter rule).
+ */
+export interface LikeC4DeploymentElement extends LikeC4ModelElement {
+  id: string;
+  kind?: string;
+  element?: string;
+  style?: LikeC4ModelStyle;
+}
+
+/** An endpoint of a computed deployment relation: the deployment id, plus the element FQN when it steps into an instance's element. */
+export interface LikeC4DeploymentEndpoint {
+  deployment: string;
+  element?: string;
+}
+
+/** A deployment relation of the computed LikeC4 model (`$data.deployments.relations`): style fields are top-level there. */
+export interface LikeC4DeploymentRelation extends LikeC4ModelElement {
+  id: string;
+  source: LikeC4DeploymentEndpoint;
+  target: LikeC4DeploymentEndpoint;
+  kind?: string;
+  isBidirectional?: boolean;
+  line?: string;
+  color?: string;
+  head?: string;
+  tail?: string;
+}
+
+/** A deployment node kind of the computed specification (`$data.specification.deployments`). */
+export interface LikeC4DeploymentKind extends LikeC4ModelElement {
+  style?: LikeC4ModelStyle;
+}
+
+/**
+ * The values LikeC4's model getters (`model.deployment.element(id)`,
+ * `model.deployment.relationships()`) report — what diagrams and view
+ * filters use.  Rich text is reduced to its source text, `null` to absent.
+ */
+export interface LikeC4DeploymentGetters {
+  title?: string;
+  summary?: string;
+  description?: string;
+  technology?: string;
+  tags: readonly string[];
+  links: ReadonlyArray<{ url: string; title?: string }>;
+  metadata: Record<string, string | string[]>;
+}
+
+/** The deployment model of {@link LikeC4ModelResult}. */
+export interface LikeC4DeploymentModel {
+  /** Nodes and instances by deployment id (`$data` layer). */
+  elements: Record<string, LikeC4DeploymentElement>;
+  /** Deployment relations, in the order of the model (`$data` layer). */
+  relations: LikeC4DeploymentRelation[];
+  /** Deployment node kinds by name. */
+  specification: Record<string, LikeC4DeploymentKind>;
+  /** Getter values by deployment id, for every node and instance. */
+  getters: Record<string, LikeC4DeploymentGetters>;
+  /** Getter values by relation id, for every deployment relation. */
+  relationGetters: Record<string, LikeC4DeploymentGetters>;
+}
+
 /** Result of {@link buildLikeC4Model}. */
 export interface LikeC4ModelResult {
   /** `<file>:<line>: <message>` for every diagnostic LikeC4 reported. */
@@ -48,12 +117,20 @@ export interface LikeC4ModelResult {
   relations: LikeC4ModelRelation[];
   /** Computed views by id: the title LikeC4 shows and the folder path the title puts the view in (`''` for none). */
   views: Record<string, { title: string | null; folder: string }>;
+  /** The computed deployment model. */
+  deployments: LikeC4DeploymentModel;
 }
 
 /** Project configuration for {@link buildLikeC4Model}, as in `likec4.config.json`. */
 export interface LikeC4ProjectOptions {
   /** LikeC4's `implicitViews` setting: generate a view for every element without one. */
   implicitViews?: boolean;
+  /**
+   * LikeC4's `inferTechnologyFromIcon` setting (default `true`): an element
+   * without a technology takes one derived from its icon.  It reaches the
+   * model builder through `MergedSpecification` (LS:3486).
+   */
+  inferTechnologyFromIcon?: boolean;
 }
 
 /** Project name used when {@link LikeC4ProjectOptions} are given. */
@@ -119,7 +196,46 @@ export async function buildLikeC4Model(
   const relations = Object.values(model?.$data?.relations ?? {}) as unknown as LikeC4ModelRelation[];
   const views: LikeC4ModelResult['views'] = {};
   for (const view of model?.views() ?? []) views[view.id] = { title: view.title, folder: view.folder.path };
-  return { diagnostics, errors, elements, relations, views };
+  const deployments: LikeC4DeploymentModel = {
+    elements: (model?.$data?.deployments?.elements ?? {}) as unknown as Record<string, LikeC4DeploymentElement>,
+    relations: Object.values(model?.$data?.deployments?.relations ?? {}) as unknown as LikeC4DeploymentRelation[],
+    specification: (model?.$data?.specification?.deployments ?? {}) as unknown as Record<string, LikeC4DeploymentKind>,
+    getters: {},
+    relationGetters: {},
+  };
+  if (model) {
+    for (const id of Object.keys(deployments.elements)) {
+      deployments.getters[id] = getterValues(model.deployment.element(id) as unknown as DeploymentGetterSource);
+    }
+    for (const relation of model.deployment.relationships()) {
+      deployments.relationGetters[relation.id] = getterValues(relation as unknown as DeploymentGetterSource);
+    }
+  }
+  return { diagnostics, errors, elements, relations, views, deployments };
+}
+
+/** The getters of a LikeC4 deployment node, instance or relation model that {@link getterValues} reads. */
+interface DeploymentGetterSource {
+  title: string | null;
+  summary: { $source: LikeC4ModelString | null };
+  description: { $source: LikeC4ModelString | null };
+  technology: string | null;
+  tags: readonly string[];
+  links: ReadonlyArray<{ url: string; title?: string }>;
+  metadata: Record<string, string | string[]>;
+}
+
+/** Snapshot the getter values of one deployment model object. */
+function getterValues(source: DeploymentGetterSource): LikeC4DeploymentGetters {
+  return {
+    title: source.title ?? undefined,
+    summary: plainText(source.summary.$source ?? undefined),
+    description: plainText(source.description.$source ?? undefined),
+    technology: source.technology ?? undefined,
+    tags: source.tags,
+    links: source.links,
+    metadata: source.metadata,
+  };
 }
 
 /**
@@ -284,4 +400,301 @@ export async function expectRelationshipsAgreeWithLikeC4(
   );
   const reported = actual.map((r) => canonical({ ...r, source: r.sourceFqn, target: r.targetFqn }));
   expect(reported.sort()).toEqual(expected.sort());
+}
+
+/** Where a linked reference points, as LikeC4's linker resolved it. */
+export type LinkedTarget = { model: string } | { deployment: string } | { deployment: string; element: string };
+
+/** One reference of a linked LikeC4 workspace — see {@link linkedReferences}. */
+export interface LinkedReference {
+  /** `<file>:<line>` of the reference (1-based line). */
+  at: string;
+  /** `instanceOf` target, `extend <node>` target, or a reference in a deployment view body. */
+  role: 'instanceOf' | 'extend' | 'deploymentView';
+  /** The reference as written. */
+  text: string;
+  /** The target LikeC4 resolved it to; `null` when LikeC4 left it unresolved, an ambiguous name included. */
+  target: LinkedTarget | null;
+}
+
+/** A Langium cross-reference as the linked AST holds it. */
+interface LinkedRef {
+  ref?: AstNode;
+}
+
+/** A `FqnRef` / `StrictFqnRef` of the linked AST: `a.b.c` is `c` with the parent chain `b`, `a`. */
+interface FqnRefNode extends AstNode {
+  value: LinkedRef;
+  parent?: FqnRefNode;
+}
+
+/**
+ * The references of `files` that LikeC4's linker resolves, with their
+ * targets: every `instanceOf` target, every `extend <node>` target and every
+ * topmost reference in a deployment view body (include / exclude, relation
+ * predicates and style rules alike).  Independent of the library: the
+ * targets are what LikeC4's own linker bound
+ * (`services.likec4.FqnIndex.resolve`, LS:2917-2921).  A reference to an
+ * element through an instance (`prod.api.sub`) reports the instance's
+ * deployment id with the element's FQN.  References are listed per file in
+ * the order of the source.
+ */
+export async function linkedReferences(
+  files: Record<string, string>,
+  project?: LikeC4ProjectOptions,
+): Promise<LinkedReference[]> {
+  const { services, documents } = await buildWorkspace(files, project);
+  const fqnIndex = services.likec4.FqnIndex;
+  const fqn = (node: AstNode): string => fqnIndex.resolve(node as Parameters<typeof fqnIndex.resolve>[0]);
+  const targetOf = (ref: FqnRefNode): LinkedTarget | null => {
+    const resolved = ref.value.ref;
+    if (!resolved) return null;
+    if (resolved.$type === 'DeploymentNode' || resolved.$type === 'DeployedInstance') {
+      return { deployment: fqn(resolved) };
+    }
+    for (let step = ref.parent; step; step = step.parent) {
+      const via = step.value.ref;
+      if (via?.$type === 'DeployedInstance') return { deployment: fqn(via), element: fqn(resolved) };
+    }
+    return { model: fqn(resolved) };
+  };
+  const result: LinkedReference[] = [];
+  const report = (document: LangiumDocument, role: LinkedReference['role'], ref: FqnRefNode, written: AstNode): void => {
+    const cst = written.$cstNode!;
+    result.push({
+      at: `${document.uri.path.slice(SOURCES.length)}:${cst.range.start.line + 1}`,
+      role,
+      text: cst.text,
+      target: targetOf(ref),
+    });
+  };
+  for (const document of documents) {
+    for (const node of AstUtils.streamAst(document.parseResult.value)) {
+      if (node.$type === 'DeployedInstance') {
+        const target = (node as AstNode & { target?: AstNode & { modelElement?: FqnRefNode } }).target;
+        if (target?.modelElement) report(document, 'instanceOf', target.modelElement, target);
+      } else if (node.$type === 'ExtendDeployment') {
+        const ref = (node as AstNode & { deploymentNode?: FqnRefNode }).deploymentNode;
+        if (ref) report(document, 'extend', ref, ref);
+      } else if (
+        node.$type === 'FqnRef' &&
+        node.$container?.$type !== 'FqnRef' &&
+        AstUtils.getContainerOfType(node, (n): n is AstNode => n.$type === 'DeploymentView')
+      ) {
+        report(document, 'deploymentView', node as FqnRefNode, node);
+      }
+    }
+  }
+  return result;
+}
+
+/** A style as the library reports it: opacity as written (`'40%'`). */
+export type ReportedStyle = Record<string, string | boolean | undefined>;
+
+/** A deployment node or instance as the library reports it, as far as the comparison reads it. */
+export interface ReportedDeploymentElement extends EffectiveValues {
+  id: string;
+  style?: ReportedStyle;
+}
+
+/** A deployment relationship endpoint as the library reports it. */
+export interface ReportedDeploymentEndpoint {
+  id: string;
+  element?: string;
+}
+
+/** A deployment relationship as the library reports it, as far as the comparison reads it. */
+export interface ReportedDeploymentRelationship extends Omit<EffectiveValues, 'summary'> {
+  source: ReportedDeploymentEndpoint;
+  target: ReportedDeploymentEndpoint;
+  kind?: string;
+  bidirectional?: boolean;
+  style?: ReportedStyle;
+}
+
+/**
+ * The reference for the deployment comparisons: `files` built with
+ * `inferTechnologyFromIcon: false` — the library derives no technology from
+ * icons (D10) — and without errors.
+ */
+async function deploymentReference(files: Record<string, string>): Promise<LikeC4ModelResult> {
+  const reference = await buildLikeC4Model(files, { inferTechnologyFromIcon: false });
+  expect(reference.errors).toEqual([]);
+  return reference;
+}
+
+/** A computed style in the library's shape: opacity `N` is `'N%'`; no field → absent. */
+function reportedStyle(style: LikeC4ModelStyle | undefined): ReportedStyle | undefined {
+  const result: ReportedStyle = {};
+  for (const [key, value] of Object.entries(style ?? {})) {
+    if (value === undefined) continue;
+    result[key] = key === 'opacity' && typeof value === 'number' ? `${value}%` : (value as string | boolean);
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/** LikeC4 links in the library's shape (`title` is `label`); none → absent. */
+function reportedLinks(
+  links: ReadonlyArray<{ url: string; title?: string }> | null | undefined,
+): Array<{ url: string; label?: string }> | undefined {
+  if (!links || links.length === 0) return undefined;
+  return links.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title }));
+}
+
+/** Assert one reported deployment node or instance against its expected values; `id` names it in failures. */
+function expectSameDeploymentValues(
+  actual: ReportedDeploymentElement,
+  expected: Omit<ReportedDeploymentElement, 'id'>,
+  id: string,
+): void {
+  expect(actual.title, `${id} title`).toBe(expected.title);
+  expect(actual.summary, `${id} summary`).toBe(expected.summary);
+  expect(actual.description, `${id} description`).toBe(expected.description);
+  expect(actual.technology, `${id} technology`).toBe(expected.technology);
+  expect(actual.tags, `${id} tags`).toEqual(expected.tags);
+  expect(actual.links, `${id} links`).toEqual(expected.links);
+  expect(actual.metadata, `${id} metadata`).toEqual(expected.metadata);
+  if (expected.metadata) expect(Object.keys(actual.metadata!), `${id} metadata order`).toEqual(Object.keys(expected.metadata));
+  expect(actual.style, `${id} style`).toEqual(expected.style);
+}
+
+/** Getter tags / metadata in the library's shape: none → absent. */
+function nonEmpty<T extends object>(value: T): T | undefined {
+  return Object.keys(value).length > 0 ? value : undefined;
+}
+
+/**
+ * Assert that `actual` — every deployment node the library reports for
+ * `files` — has exactly the ids of LikeC4's computed nodes, and each node's
+ * effective values equal LikeC4's (`files` must build without errors):
+ * - title, technology, tags (kind tags appended), links and metadata as the
+ *   getters report them;
+ * - summary and description per field from the `$data` layer (D2: no
+ *   fallback between the two, which the getters add);
+ * - style from the `$data` layer (kind style overridden per field by own
+ *   style), opacity `N` as `'N%'`; no theme defaults.
+ * The reference is built without icon inference (D10).  An empty tag list,
+ * link list, metadata map or style compares as absent.
+ */
+export async function expectDeploymentNodesAgreeWithLikeC4(
+  files: Record<string, string>,
+  actual: ReportedDeploymentElement[],
+): Promise<void> {
+  const reference = await deploymentReference(files);
+  const nodes = Object.values(reference.deployments.elements).filter((e) => e.element === undefined);
+  expect(actual.map((n) => n.id).sort()).toEqual(nodes.map((n) => n.id).sort());
+  for (const node of nodes) {
+    const getters = reference.deployments.getters[node.id]!;
+    expectSameDeploymentValues(
+      actual.find((n) => n.id === node.id)!,
+      {
+        title: getters.title,
+        summary: plainText(node.summary),
+        description: plainText(node.description),
+        technology: getters.technology,
+        tags: nonEmpty([...getters.tags]),
+        links: reportedLinks(getters.links),
+        metadata: nonEmpty(getters.metadata),
+        style: reportedStyle(node.style),
+      },
+      node.id,
+    );
+  }
+}
+
+/**
+ * Assert that `actual` — every deployment instance the library reports for
+ * `files` — has exactly the ids of LikeC4's computed instances, and each
+ * instance's effective values equal LikeC4's (`files` must build without
+ * errors):
+ * - title, technology, tags (own then the element's), links and metadata
+ *   (own map, else the element's whole map) as the getters report them;
+ * - summary and description per field, own else the element's, from the
+ *   `$data` layer (D2: the getters fall back between the two);
+ * - technology from a build without icon inference (D10);
+ * - style: the element's `$data` style overridden per field by the
+ *   instance's, opacity `N` as `'N%'`.
+ * An empty tag list, link list, metadata map or style compares as absent.
+ */
+export async function expectDeploymentInstancesAgreeWithLikeC4(
+  files: Record<string, string>,
+  actual: ReportedDeploymentElement[],
+): Promise<void> {
+  const reference = await deploymentReference(files);
+  const instances = Object.values(reference.deployments.elements).filter((e) => e.element !== undefined);
+  expect(actual.map((i) => i.id).sort()).toEqual(instances.map((i) => i.id).sort());
+  for (const instance of instances) {
+    const getters = reference.deployments.getters[instance.id]!;
+    const element = reference.elements[instance.element!] as LikeC4ModelElement & { style?: LikeC4ModelStyle };
+    expect(element, `${instance.id} element ${instance.element}`).toBeDefined();
+    expectSameDeploymentValues(
+      actual.find((i) => i.id === instance.id)!,
+      {
+        title: getters.title,
+        summary: plainText(instance.summary) ?? plainText(element.summary),
+        description: plainText(instance.description) ?? plainText(element.description),
+        technology: getters.technology,
+        tags: nonEmpty([...getters.tags]),
+        links: reportedLinks(getters.links),
+        metadata: nonEmpty(getters.metadata),
+        style: reportedStyle({ ...element.style, ...instance.style }),
+      },
+      instance.id,
+    );
+  }
+}
+
+/**
+ * Assert that the library reports the same deployment relationships as
+ * LikeC4 computes for `files` (which must build without errors), compared as
+ * a multiset: endpoints `{ id, element? }`, kind, bidirectional flag (absent
+ * is `false`), and
+ * - title and technology as the getters report them (an own `''` title is
+ *   no title; an own `''` technology falls back to the kind's);
+ * - description, tags (kind tags prepended, line tags over body tags),
+ *   links and metadata from the `$data` layer;
+ * - style from the `$data` layer's `line`, `color`, `head` and `tail`.
+ * An empty tag list, link list, metadata map or style compares as absent.
+ */
+export async function expectDeploymentRelationshipsAgreeWithLikeC4(
+  files: Record<string, string>,
+  actual: ReportedDeploymentRelationship[],
+): Promise<void> {
+  const reference = await deploymentReference(files);
+  const endpoint = (e: LikeC4DeploymentEndpoint): ReportedDeploymentEndpoint =>
+    e.element === undefined ? { id: e.deployment } : { id: e.deployment, element: e.element };
+  const canonical = (r: ReportedDeploymentRelationship): string =>
+    JSON.stringify([
+      r.source.id,
+      r.source.element ?? null,
+      r.target.id,
+      r.target.element ?? null,
+      r.kind ?? null,
+      r.bidirectional ?? false,
+      r.title ?? null,
+      r.description ?? null,
+      r.technology ?? null,
+      r.tags ?? null,
+      r.links ?? null,
+      r.metadata ?? null,
+      r.metadata ? Object.keys(r.metadata) : null,
+      r.style ? Object.entries(r.style).filter(([, v]) => v !== undefined).sort() : null,
+    ]);
+  const expected = reference.deployments.relations.map((r) => {
+    const getters = reference.deployments.relationGetters[r.id]!;
+    return canonical({
+      source: endpoint(r.source),
+      target: endpoint(r.target),
+      kind: r.kind,
+      bidirectional: r.isBidirectional === true,
+      title: getters.title,
+      description: plainText(r.description),
+      technology: getters.technology,
+      tags: r.tags && r.tags.length > 0 ? [...r.tags] : undefined,
+      links: reportedLinks(r.links),
+      metadata: r.metadata && Object.keys(r.metadata).length > 0 ? r.metadata : undefined,
+      style: reportedStyle({ line: r.line, color: r.color, head: r.head, tail: r.tail }),
+    });
+  });
+  expect(actual.map(canonical).sort()).toEqual(expected.sort());
 }
