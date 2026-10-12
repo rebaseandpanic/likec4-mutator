@@ -4,11 +4,14 @@
  * `SpecificationParser.parseSpecification` / `parseElementSpecificationNode`):
  * tags (`parseTags`), links (`parseLinks`) and the string properties through
  * `parseBaseProps` — the last declaration of a key counts.  A relationship
- * kind has no summary (`parseSpecification` drops it).
+ * kind has no summary (`parseSpecification` drops it).  The style of a kind
+ * is read by `style-read.ts`.
  */
 import { readContribution, readDeclared, type Decorations } from './extend-merge.js';
 import { markdownAsString, markdownOrString, readMarkdownOrString, type MarkdownOrString } from './likec4-text.js';
+import type { ElementStyle, RelationshipStyle } from '../mutator/codegen.js';
 import { toSourceRange } from './source-range.js';
+import { readKindElementStyle, readKindRelationshipStyle } from './style-read.js';
 import type { KindDefaults } from './types.js';
 
 /** A kind declaration as the read API reports it and as merging uses it. */
@@ -17,6 +20,12 @@ export interface KindSpec {
   defaults: KindDefaults;
   /** Tags (LikeC4 order, without duplicates) and links (labels normalized) as LikeC4 applies them */
   contribution: Decorations;
+  /**
+   * Style written by the kind: an element style for an element or deployment
+   * node kind, a relationship style for a relationship kind; absent when the
+   * kind writes none.  Not part of `defaults`, which logical reads report.
+   */
+  style?: ElementStyle | RelationshipStyle;
 }
 
 /**
@@ -82,5 +91,10 @@ export function readKindSpec(node: KindNode, file: string | undefined, relations
     ...(declared.links && { links: declared.links }),
   };
   const { tags, links } = readContribution(node);
-  return { defaults, contribution: { ...(tags && { tags }), ...(links && { links }) } };
+  const style = relationship ? readKindRelationshipStyle(node.props) : readKindElementStyle(node.props);
+  return {
+    defaults,
+    contribution: { ...(tags && { tags }), ...(links && { links }) },
+    ...(style && { style }),
+  };
 }
