@@ -100,11 +100,10 @@ export class DeploymentQuery {
   /**
    * The node with deployment id `id`; null when no node has it.  When the id
    * is declared more than once (a LikeC4 error), the first declaration in
-   * LikeC4 document order is reported.
+   * LikeC4 document order that is part of the model is reported.
    */
   node(id: string): DeploymentNodeInfo | null {
-    if (!this.isReported(id)) return null;
-    const declaration = this.index.declarations(id).find((d) => d.type === 'node');
+    const declaration = this.index.declarations(id).find((d) => d.type === 'node' && this.isDeclarationReported(d));
     return declaration ? this.toNodeInfo(declaration) : null;
   }
 
@@ -116,9 +115,8 @@ export class DeploymentQuery {
   listNodes(filter?: DeploymentNodeFilter): DeploymentNodeInfo[] {
     const out: DeploymentNodeInfo[] = [];
     for (const id of this.index.ids()) {
-      if (!this.isReported(id)) continue;
       for (const declaration of this.index.declarations(id)) {
-        if (declaration.type !== 'node') continue;
+        if (declaration.type !== 'node' || !this.isDeclarationReported(declaration)) continue;
         if (filter?.parentId !== undefined && declaration.parentId !== filter.parentId) continue;
         if (filter?.kind !== undefined && kindOf(declaration.node) !== filter.kind) continue;
         out.push(this.toNodeInfo(declaration));
@@ -130,11 +128,13 @@ export class DeploymentQuery {
   /**
    * The instance with deployment id `id`; null when no instance has it.
    * When the id is declared more than once (a LikeC4 error), the first
-   * declaration in LikeC4 document order is reported.
+   * declaration in LikeC4 document order that is part of the model is
+   * reported.
    */
   instance(id: string): DeploymentInstanceInfo | null {
-    if (!this.isReported(id)) return null;
-    const declaration = this.index.declarations(id).find((d) => d.type === 'instance');
+    const declaration = this.index
+      .declarations(id)
+      .find((d) => d.type === 'instance' && this.isDeclarationReported(d));
     return declaration ? this.toInstanceInfo(declaration) : null;
   }
 
@@ -145,9 +145,8 @@ export class DeploymentQuery {
   listInstances(filter?: DeploymentInstanceFilter): DeploymentInstanceInfo[] {
     const out: DeploymentInstanceInfo[] = [];
     for (const id of this.index.ids()) {
-      if (!this.isReported(id)) continue;
       for (const declaration of this.index.declarations(id)) {
-        if (declaration.type !== 'instance') continue;
+        if (declaration.type !== 'instance' || !this.isDeclarationReported(declaration)) continue;
         if (filter?.nodeId !== undefined && declaration.parentId !== filter.nodeId) continue;
         const info = this.toInstanceInfo(declaration);
         if (filter?.element !== undefined && info.element !== filter.element) continue;
@@ -178,16 +177,26 @@ export class DeploymentQuery {
     return out;
   }
 
-  /**
-   * True when `id` is part of the model: declared — an instance with an
-   * `instanceOf` target that resolves — and its parent (if any) is part of
-   * the model.  LikeC4 drops an instance whose target does not resolve, and
-   * a declaration whose parent is not in its model (`No parent found`), e.g.
-   * one inside an `extend` block of a node that does not exist.
-   */
+  /** True when `id` is part of the model: at least one of its declarations is (see {@link isDeclarationReported}). */
   private isReported(id: string): boolean {
-    const [declaration] = this.index.declarations(id);
-    if (!declaration) return false;
+    return this.index.declarations(id).some((d) => this.isDeclarationReported(d));
+  }
+
+  /**
+   * True when a declaration is part of LikeC4's model: a node of a kind a
+   * specification declares, or an instance whose `instanceOf` target
+   * resolves, whose parent (if any) is part of the model.  LikeC4 drops a
+   * node of an undeclared kind and an instance whose target does not
+   * resolve (`parseDeploymentNode` / `toDeploymentElement`,
+   * `parseDeployedInstance`), then every declaration whose parent is not in
+   * its model (`No parent found`) — the descendants of a dropped node, or a
+   * declaration inside an `extend` block of a node that does not exist —
+   * and every relationship with an endpoint outside it.
+   */
+  private isDeclarationReported(declaration: DeploymentDeclaration): boolean {
+    if (declaration.type === 'node' && this.workspace.deploymentNodeKind(kindOf(declaration.node)) === undefined) {
+      return false;
+    }
     if (declaration.type === 'instance' && this.resolver.instanceElement(declaration.node) === undefined) return false;
     return declaration.parentId === undefined || this.isReported(declaration.parentId);
   }
@@ -339,7 +348,7 @@ export class DeploymentQuery {
   }
 
   private typeOf(id: string): DeploymentDeclaration['type'] | undefined {
-    return this.index.declarations(id)[0]?.type;
+    return this.index.declarations(id).find((d) => this.isDeclarationReported(d))?.type;
   }
 }
 

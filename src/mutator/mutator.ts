@@ -270,8 +270,11 @@ export class LikeC4Mutator {
    * Return the deployment node with deployment id `id` (parent id + `.` +
    * name, e.g. 'prod.eu.vm1'), with its effective values as LikeC4 computes
    * them and their provenance (see {@link DeploymentNodeInfo}).  Returns null
-   * when no node has the id.  An id declared more than once (a LikeC4 error)
-   * is reported from its first declaration in LikeC4 document order.
+   * when no node has the id, or when LikeC4 leaves the node out of its model:
+   * a node of a kind no specification declares, a node below one, or a node
+   * declared in an `extend` block of a node that does not exist.  An id
+   * declared more than once (a LikeC4 error) is reported from its first
+   * declaration in LikeC4 document order.
    */
   getDeploymentNode(id: string): DeploymentNodeInfo | null {
     return this.deploymentQuery.node(id);

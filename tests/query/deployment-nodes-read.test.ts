@@ -495,6 +495,50 @@ describe('read edge cases', () => {
     expect(mutator.getDeploymentNode('nosuch.orphan')).toBeNull();
   });
 
+  it('a node of an undeclared kind is left out with everything below it and its relationships, as LikeC4 leaves them out', async () => {
+    const files = {
+      'm.c4': `specification {
+  element service
+  deploymentNode vm
+}
+model {
+  app = service
+}
+deployment {
+  vm valid {
+    instanceOf app
+  }
+  unknown ghost {
+    vm child {
+      instanceOf app
+    }
+    instanceOf app
+  }
+  ghost -> valid 'from ghost'
+  valid.app -> ghost.child.app 'into ghost'
+  valid -> valid.app 'kept'
+}
+`,
+    };
+    const { deployments, errors } = await buildLikeC4Model(files);
+    // OP: LikeC4 reports the kind and keeps neither ghost nor anything below it.
+    expect(errors.some((e) => e.includes("named 'unknown'"))).toBe(true);
+    const lc4Ids = Object.keys(deployments.elements).sort();
+    expect(lc4Ids).toEqual(['valid', 'valid.app']);
+    expect(deployments.relations.map((r) => r.title)).toEqual(['kept']);
+
+    const mutator = LikeC4Mutator.fromFiles(files);
+    const reported = [
+      ...mutator.listDeploymentNodes().map((n) => n.id),
+      ...mutator.listDeploymentInstances().map((i) => i.id),
+    ].sort();
+    expect(reported).toEqual(lc4Ids);
+    expect(mutator.listDeploymentRelationships().map((r) => r.title)).toEqual(['kept']);
+    for (const id of ['ghost', 'ghost.child']) expect(mutator.getDeploymentNode(id), id).toBeNull();
+    for (const id of ['ghost.app', 'ghost.child.app']) expect(mutator.getDeploymentInstance(id), id).toBeNull();
+    expect(mutator.listDeploymentNodes({ kind: 'unknown' })).toEqual([]);
+  });
+
   it('a root node declared in two files is listed once per declaration', () => {
     const mutator = LikeC4Mutator.fromFiles({
       'a.c4': `${SPEC}deployment {\n  zone prod 'A'\n}\n`,

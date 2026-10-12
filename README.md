@@ -803,7 +803,7 @@ The effective values are LikeC4's (`DeploymentNodeInfo`):
 
 - `extendedBy` lists every `extend <node>` block whose written path is exactly the node's id — `extend prod.vm1` extends `prod.vm1`, never another node named `vm1` — including blocks that only add children. `children` (nodes) and `instances` include those declared in `extend` bodies.
 - `declared` holds the tags, links and metadata of the node's own body as written, `fromSpecification` the kind's declaration (`DeploymentNodeKindDefaults`).
-- A node whose kind no specification declares is still reported (LikeC4 leaves it out of its model), with its own values only. A node declared inside an `extend` block of a node that does not exist is not reported, as LikeC4 drops it. An id declared twice (a LikeC4 error) is listed once per declaration; `getDeploymentNode` returns the first in document order.
+- Only what LikeC4 keeps in its model is reported. A node whose kind no specification declares is left out, and with it everything below it — child nodes and instances — and every relationship with an endpoint there; so is a node declared inside an `extend` block of a node that does not exist. An id declared twice (a LikeC4 error) is listed once per declaration; `getDeploymentNode` returns the first in document order.
 
 #### Instances
 
@@ -933,7 +933,7 @@ The effective values are LikeC4's (`DeploymentRelationshipInfo`):
 | `metadata` | the first `metadata { ... }` block |
 | `style` | the kind's style overridden field by field by the own `style { ... }`. A bidirectional relationship always has a `tail`, as LikeC4 computes it: the one written, else the `head`, else `'normal'` |
 
-- A relationship whose source or target does not resolve (an unknown or ambiguous name) is not listed, as LikeC4 drops it. Deployment relationships cannot be extended.
+- A relationship whose source or target does not resolve (an unknown or ambiguous name), or resolves to a node or instance LikeC4 leaves out of its model, is not listed, as LikeC4 drops it. Deployment relationships cannot be extended.
 - `declared` holds the tags, links and metadata written in the relationship, `fromSpecification` the kind's declaration with its style.
 
 ## Slashes in titles
