@@ -99,6 +99,7 @@ import {
   checkAutoLayout,
   checkElementName,
   checkKind,
+  checkMetadata,
   checkReferenceForm,
   checkStyle,
   checkTags,
@@ -933,6 +934,7 @@ export class LikeC4Mutator {
     checkKind(opts.kind, 'deploymentNode', this.workspace);
     checkTags(opts.tags, this.workspace);
     checkStyle(opts.style, 'element', this.workspace);
+    checkMetadata(opts.metadata);
     if (parentId !== null && opts.file !== undefined) {
       throw new InvalidWriteError(
         'file',
@@ -1013,6 +1015,7 @@ export class LikeC4Mutator {
   updateDeploymentNode(id: string, patch: UpdateDeploymentNodePatch): UpdateDeploymentNodeResult {
     checkTags(patch.tags, this.workspace);
     checkStyle(patch.style, 'element', this.workspace);
+    checkMetadata(patch.metadata);
     const declaration = nodeDeclaration(this.deployments, id, 'id');
     if (declaration.file === undefined) throw new Error(`Internal error: declaration of '${id}' has no file name`);
 
@@ -1139,6 +1142,7 @@ export class LikeC4Mutator {
     checkReferenceForm(opts.element, 'element');
     checkTags(opts.tags, this.workspace);
     checkStyle(opts.style, 'element', this.workspace);
+    checkMetadata(opts.metadata);
     if (opts.file !== undefined) {
       throw new InvalidWriteError(
         'file',
@@ -1235,6 +1239,7 @@ export class LikeC4Mutator {
   updateDeploymentInstance(id: string, patch: UpdateDeploymentInstancePatch): UpdateDeploymentInstanceResult {
     checkTags(patch.tags, this.workspace);
     checkStyle(patch.style, 'element', this.workspace);
+    checkMetadata(patch.metadata);
     const declaration = instanceDeclaration(this.deployments, id, 'id');
     if (declaration.file === undefined) throw new Error(`Internal error: declaration of '${id}' has no file name`);
     const metadataKeys = patch.metadata ? Object.keys(patch.metadata) : [];

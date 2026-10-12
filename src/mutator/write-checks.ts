@@ -121,6 +121,33 @@ export function checkFile(file: string, loadedFiles: Iterable<string>, field = '
 }
 
 /**
+ * Metadata upserts (entries other than `null`): each key one `Id` token,
+ * each value a string or a non-empty list of strings (the LikeC4 grammar has
+ * no `[]`).  `null` entries — deletions — are not checked: they write no
+ * text.
+ *
+ * @throws {InvalidWriteError} on `<field>.<key>`
+ */
+export function checkMetadata(
+  metadata: Readonly<Record<string, string | readonly string[] | null>> | undefined,
+  field = 'metadata',
+): void {
+  if (metadata === undefined) return;
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value === null) continue;
+    if (!isLikeC4Id(key)) {
+      throw new InvalidWriteError(`${field}.${key}`, `${quote(key)} is not a metadata key: expected ${ID_RULE}`);
+    }
+    if (Array.isArray(value) ? value.length === 0 || value.some((item) => typeof item !== 'string') : typeof value !== 'string') {
+      throw new InvalidWriteError(
+        `${field}.${key}`,
+        `${JSON.stringify(value)} is not a metadata value: a string or a non-empty list of strings (LikeC4 has no empty list)`,
+      );
+    }
+  }
+}
+
+/**
  * Tags: each one `Id` token after an optional leading `#` and — when
  * `workspace` is given — declared by a specification (`tag name`).
  */
