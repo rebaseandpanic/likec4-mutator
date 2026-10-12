@@ -1146,6 +1146,17 @@ Rejected, with nothing changed:
 - an undeclared tag, an invalid style value, metadata LikeC4 cannot hold — `tags[i]`, `style.<field>`, `metadata.<key>`;
 - a `tags`, `links` or `metadata` update while a loaded file has syntax errors (`validate()` is not empty) — that field. A title, description, technology or style update is still accepted.
 
+#### Removing deployment relationships
+
+`removeDeploymentRelationship(selector)` removes the one relationship the selector picks — the same selector as for [updating](#updating-deployment-relationships) — wherever it is declared: at the top level of a `deployment` block, in a node or instance body, or in an `extend` block. Nothing else changes. It returns `{ removedRelationships }` with that relationship, as for [removing nodes](#removing-nodes).
+
+```typescript
+mutator.removeDeploymentRelationship({ source: { id: 'prod.eu.vm1.api' }, target: { id: 'prod.eu.vm1.db' } });
+// { removedRelationships: [{ source: { id: 'prod.eu.vm1.api' }, target: { id: 'prod.eu.vm1.db' }, title: 'queries' }] }
+```
+
+Rejected, with nothing changed: no relationship matches, or several do — `source`, naming the candidates; a malformed endpoint — `source.id`, `source.element`, `target.id`, `target.element`.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

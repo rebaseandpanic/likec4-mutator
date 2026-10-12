@@ -43,6 +43,7 @@ export type {
   DeploymentRelationshipSelector,
   RemoveDeploymentInstanceResult,
   RemoveDeploymentNodeResult,
+  RemoveDeploymentRelationshipResult,
   RemoveElementResult,
   UpdateDeploymentInstancePatch,
   UpdateDeploymentInstanceResult,

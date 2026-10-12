@@ -214,6 +214,12 @@ export interface RemoveDeploymentNodeResult {
 export type RemoveDeploymentInstanceResult = RemoveDeploymentNodeResult;
 
 /**
+ * Result of {@link LikeC4Mutator.removeDeploymentRelationship}: the one
+ * relationship removed, listed as for {@link RemoveDeploymentNodeResult}.
+ */
+export type RemoveDeploymentRelationshipResult = RemoveDeploymentNodeResult;
+
+/**
  * Result of {@link LikeC4Mutator.updateRelationship}.
  */
 export interface UpdateRelationshipResult {
@@ -1447,6 +1453,34 @@ export class LikeC4Mutator {
       { inlineStrings: 'body-only' },
     );
     return { changedFiles: this.applyEditGroups(new Map(edits.length > 0 ? [[relation.file, edits]] : [])) };
+  }
+
+  /**
+   * Remove the deployment relationship `selector` selects, as for
+   * {@link updateDeploymentRelationship}: by its endpoints as
+   * {@link listDeploymentRelationships} reports them, optionally narrowed by
+   * kind and title; a bidirectional relationship matches its endpoints in
+   * either order.  The relationship's text is removed wherever it is
+   * declared — at the top level of a `deployment` block, in a node or
+   * instance body, or in an `extend` block; nothing else changes.
+   *
+   * @param selector - Endpoints and optional kind / title of the relationship
+   * @returns The removed relationship, with its endpoints and title as read
+   *   before the removal.
+   * @throws {InvalidWriteError} on `source` when no relationship or several
+   *   match (naming them); on `source.id`, `source.element`, `target.id`,
+   *   `target.element` for a malformed endpoint
+   */
+  removeDeploymentRelationship(selector: DeploymentRelationshipSelector): RemoveDeploymentRelationshipResult {
+    checkSelectorForm(selector);
+    const { relation, info } = selectDeploymentRelationship(
+      this.deployments.relations(),
+      this.listDeploymentRelationships(),
+      selector,
+    );
+    this.removeDeploymentConstruct(relation.file, relation.node);
+    const { source, target, title } = info;
+    return { removedRelationships: [{ source, target, ...(title !== undefined && { title }) }] };
   }
 
   // ---------------------------------------------------------------------------
