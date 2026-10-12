@@ -193,6 +193,78 @@ describe('apply runs every deployment op (row 75)', () => {
   });
 });
 
+/**
+ * Between prod.eu.vm2 and prod.eu.vm1 the fixture declares two relationships
+ * of kind `syncs` (spec: title 'Synchronizes', technology 'TCP'): one with
+ * the kind's title, one titled 'mirrors'.  The batch first adds a third of
+ * kind `calls`, so `matchKind` and `matchTitle` each have to narrow.
+ */
+describe('apply narrows a deployment relationship selector by matchKind and matchTitle (row 75)', () => {
+  const VM2 = { id: 'prod.eu.vm2' };
+  const VM1 = { id: 'prod.eu.vm1' };
+  const ADD_CALLS = { op: 'addDeploymentRelationship', source: VM2, target: VM1, kind: 'calls', title: 'pings' };
+
+  /** The relationships between vm2 and vm1, in either direction, by title (code-unit order). */
+  function pair(m: LikeC4Mutator): Array<{ kind?: string; title?: string; technology?: string }> {
+    return m
+      .listDeploymentRelationships()
+      .filter((r) => [r.source, r.target].every((e) => e.element === undefined && (e.id === VM1.id || e.id === VM2.id)))
+      .filter((r) => r.source.id !== r.target.id)
+      .map((r) => ({ kind: r.kind, title: r.title, technology: r.technology }))
+      .sort((a, b) => ((a.title ?? '') < (b.title ?? '') ? -1 : 1));
+  }
+
+  it.each<[string, Record<string, unknown>, ReturnType<typeof pair>]>([
+    [
+      'update by matchKind',
+      { op: 'updateDeploymentRelationship', source: VM2, target: VM1, matchKind: 'calls', technology: 'ICMP' },
+      [
+        { kind: 'syncs', title: 'Synchronizes', technology: 'TCP' },
+        { kind: 'syncs', title: 'mirrors', technology: 'TCP' },
+        { kind: 'calls', title: 'pings', technology: 'ICMP' },
+      ],
+    ],
+    [
+      'update by matchTitle',
+      { op: 'updateDeploymentRelationship', source: VM2, target: VM1, matchTitle: 'mirrors', technology: 'rsync' },
+      [
+        { kind: 'syncs', title: 'Synchronizes', technology: 'TCP' },
+        { kind: 'syncs', title: 'mirrors', technology: 'rsync' },
+        { kind: 'calls', title: 'pings', technology: undefined },
+      ],
+    ],
+    [
+      'remove by matchKind',
+      { op: 'removeDeploymentRelationship', source: VM2, target: VM1, matchKind: 'calls' },
+      [
+        { kind: 'syncs', title: 'Synchronizes', technology: 'TCP' },
+        { kind: 'syncs', title: 'mirrors', technology: 'TCP' },
+      ],
+    ],
+    [
+      'remove by matchTitle',
+      { op: 'removeDeploymentRelationship', source: VM2, target: VM1, matchTitle: 'Synchronizes' },
+      [
+        { kind: 'syncs', title: 'mirrors', technology: 'TCP' },
+        { kind: 'calls', title: 'pings', technology: undefined },
+      ],
+    ],
+  ])('%s touches only the selected relationship', async (_, mutation, expected) => {
+    // Precondition: the two syncs relationships the selector has to tell apart.
+    expect(pair(LikeC4Mutator.fromFiles(readTree(ZONES)))).toEqual([
+      { kind: 'syncs', title: 'Synchronizes', technology: 'TCP' },
+      { kind: 'syncs', title: 'mirrors', technology: 'TCP' },
+    ]);
+    const output = mkdtempSync(join(tmpdir(), 'likec4-mutator-apply-deployment-out-'));
+    const result = runApply(zonesCopy(), [ADD_CALLS, mutation], { output });
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    const out = readTree(output);
+    await expectValidLikeC4(out);
+    expect(pair(LikeC4Mutator.fromFiles(out))).toEqual(expected);
+  });
+});
+
 /** A valid mutation of each op on deployment-zones, to which a case adds a field. */
 const VALID: Record<string, Record<string, unknown>> = {
   addDeploymentNode: { op: 'addDeploymentNode', parent: 'prod.eu', name: 'vm4', kind: 'host' },
