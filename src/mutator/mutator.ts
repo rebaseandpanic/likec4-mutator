@@ -23,7 +23,7 @@ import {
   type ReferenceSnapshot,
   type TextRange,
 } from '../query/reference-snapshot.js';
-import { forEachElementDeclaration } from '../query/fqn.js';
+import { forEachElementDeclaration, resolveFqnRef } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
   WorkspaceIndex,
@@ -494,12 +494,20 @@ export class LikeC4Mutator {
    * result.  The operation is atomic: when any step fails, no file is
    * changed.
    *
+   * The removal is rejected, with no file changed, while the deployment
+   * model refers to the element or one of its descendants: as the element of
+   * an instance (`instanceOf`), or as the element part of a deployment
+   * relationship endpoint that steps into an instance's element.
+   *
    * @param fqn - FQN of the element to remove
    * @returns The relationships that were removed.
+   * @throws {InvalidWriteError} on `fqn` when the deployment model refers to
+   *   the element or its subtree, listing the instances and endpoints
    */
   removeElement(fqn: string): RemoveElementResult {
     const filename = this.findFileContaining(fqn);
     if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
+    this.rejectDeploymentReferences(fqn);
 
     const isDependent = (r: { sourceFqn: string; targetFqn: string }): boolean =>
       isSameOrDescendant(r.sourceFqn, fqn) || isSameOrDescendant(r.targetFqn, fqn);
@@ -1055,6 +1063,52 @@ export class LikeC4Mutator {
       );
     }
     return fqn;
+  }
+
+  /**
+   * Throw when the deployment model refers to element `fqn` or an element of
+   * its subtree: an instance deploys it (`instanceOf`), or a deployment
+   * relationship endpoint steps into it through an instance.  Removing the
+   * element would leave such a reference unresolved (LikeC4: Could not
+   * resolve reference).
+   *
+   * @throws {InvalidWriteError} on `fqn`, listing the instances and endpoints
+   */
+  private rejectDeploymentReferences(fqn: string): void {
+    const resolver = new DeploymentResolver(this.deployments, this.workspace);
+    const instances: string[] = [];
+    for (const id of this.deployments.ids()) {
+      for (const declaration of this.deployments.declarations(id)) {
+        if (declaration.type !== 'instance') continue;
+        const element = resolver.instanceElement(declaration.node);
+        if (element === undefined || !isSameOrDescendant(element, fqn)) continue;
+        const entry = `'${id}' (instanceOf '${element}')`;
+        if (!instances.includes(entry)) instances.push(entry);
+      }
+    }
+    const endpoints: string[] = [];
+    for (const relation of this.deployments.relations()) {
+      for (const role of ['source', 'target'] as const) {
+        const ref = relation.node[role] as Parameters<DeploymentResolver['resolveReference']>[0] | undefined;
+        if (!ref) continue;
+        const target = resolver.resolveReference(ref);
+        if (!target || !('deployment' in target) || target.element === undefined) continue;
+        if (!isSameOrDescendant(target.element, fqn)) continue;
+        endpoints.push(
+          `${role} '${resolveFqnRef(ref)}' in '${relation.file ?? ''}' (element '${target.element}' of instance '${target.deployment}')`,
+        );
+      }
+    }
+    if (instances.length === 0 && endpoints.length === 0) return;
+    const parts = [
+      ...(instances.length > 0 ? [`instances ${instances.join(', ')}`] : []),
+      ...(endpoints.length > 0 ? [`deployment relationship endpoints ${endpoints.join(', ')}`] : []),
+    ];
+    throw new InvalidWriteError(
+      'fqn',
+      `'${fqn}' cannot be removed while the deployment model refers to it or its descendants: ${parts.join('; ')} ` +
+        `(LikeC4 would report: Could not resolve reference)`,
+    );
   }
 
   /**
