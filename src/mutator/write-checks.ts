@@ -78,12 +78,13 @@ export function checkReferenceForm(reference: string, field: string): void {
 
 /**
  * A kind reference: one `Id` token and — when `workspace` is given — declared
- * by a specification of the loaded files.  Relationship kinds are checked the
- * same way against `relationship` declarations.
+ * by a specification of the loaded files.  Relationship and deployment node
+ * kinds are checked the same way against `relationship` and
+ * `deploymentNode` declarations.
  */
 export function checkKind(
   kind: string,
-  of: 'element' | 'relationship',
+  of: 'element' | 'relationship' | 'deploymentNode',
   workspace: WorkspaceIndex | undefined,
   field = 'kind',
 ): void {
@@ -91,12 +92,31 @@ export function checkKind(
     throw new InvalidWriteError(field, `${quote(kind)} is not ${ID_RULE}`);
   }
   if (!workspace) return;
-  const declared = of === 'element' ? workspace.elementKind(kind) : workspace.relationshipKind(kind);
+  const declared =
+    of === 'element'
+      ? workspace.elementKind(kind)
+      : of === 'relationship'
+        ? workspace.relationshipKind(kind)
+        : workspace.deploymentNodeKind(kind);
   if (declared === undefined) {
     throw new InvalidWriteError(
       field,
       `${of} kind '${kind}' is not declared by a specification of the loaded files (\`specification { ${of} ${kind} }\`)`,
     );
+  }
+}
+
+/**
+ * The file a write is placed in: one of the loaded files.  No file is
+ * created.
+ *
+ * @param loadedFiles - Names of the loaded files
+ */
+export function checkFile(file: string, loadedFiles: Iterable<string>, field = 'file'): void {
+  const loaded = [...loadedFiles];
+  if (typeof file !== 'string' || !loaded.includes(file)) {
+    const known = loaded.length > 0 ? loaded.map((f) => `'${f}'`).join(', ') : 'none';
+    throw new InvalidWriteError(field, `${quote(file)} is not a loaded file (loaded: ${known}); no file is created`);
   }
 }
 
