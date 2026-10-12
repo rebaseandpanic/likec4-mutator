@@ -730,8 +730,17 @@ mutator.getDeploymentNodeKind('vm');
 //   tags: ['infra'], style: { shape: 'rectangle', color: 'secondary', opacity: '40%' } }
 ```
 
-- The defaults are the values LikeC4 computes for the kind: title, summary, description and technology normalized as for an element kind; tags of every comma-separated group in LikeC4's order (the last group first) without duplicates — `#a, #b` reads as `['b', 'a']`; link labels read as one line; and `style`: the kind's first `style { ... }` block, the last value of a repeated field, no theme defaults. The `fromSpecification` of a node reports the kind's tags and links as written.
+- The defaults are the values LikeC4 computes for the kind: title, summary, description and technology normalized as for an element kind; tags of every comma-separated group in LikeC4's order (the last group first) without duplicates — `#a, #b` reads as `['b', 'a']`; link labels read as one line; and `style`: the kind's first `style { ... }` block, the last value of a repeated field, no theme defaults, with `opacity` and `icon` as written (see [Style values as written](#style-values-as-written)). The `fromSpecification` of a node reports the kind's tags and links as written.
 - A kind declared more than once is taken as for an element kind: the last declaration of the last file in LikeC4 document order.
+
+#### Style values as written
+
+The style of a deployment node kind, a node and an instance is reported as LikeC4 computes it (no theme defaults; size aliases such as `small` read as `sm`; a hex color inside `style { ... }` is ignored, as LikeC4 ignores it), except for two fields, which keep the form they are written in — a value the library reads is a value it can write back:
+
+- `opacity` keeps its written spelling: `opacity 40%` reads as `'40%'`, `opacity 040%` as `'040%'` and `opacity 150%` as `'150%'`, where LikeC4 computes the numbers 40, 40 and 100 (clamped to 0…100).
+- `icon` keeps relative paths (`./img/db.svg`), root-relative paths (`/img/db.svg`) and image aliases (`@/db.svg`) as written; LikeC4 resolves them to URLs. Library icons (`tech:postgresql`), `none` and absolute URLs read as LikeC4 reads them.
+
+A relative icon path is relative to the file that declares it: a node or instance that inherits the icon of a kind or element declared in another file reports the path written there (`./img/db.svg`), which LikeC4 resolves against that other file. Copied into another file, the same text can resolve to a different URL. Root-relative paths and image aliases depend on the consumer's project — its root folder and its `imageAliases` (`@` stands for `./images` by default) — which the library does not read.
 
 #### Deployment nodes
 
@@ -799,7 +808,7 @@ The effective values are LikeC4's (`DeploymentNodeInfo`):
 | `tags` | own — or the kind's when the node has none — then those of the `extend` blocks, then the kind's appended, without duplicates |
 | `links` | own — or the kind's when the node has none — then those of the `extend` blocks |
 | `metadata` | own, then the `extend` blocks, merged as for elements |
-| `style` | the kind's style overridden field by field by the node's own `style { ... }` |
+| `style` | the kind's style overridden field by field by the node's own `style { ... }`; `opacity` and `icon` as written (see [Style values as written](#style-values-as-written)) |
 
 - `extendedBy` lists every `extend <node>` block whose written path is exactly the node's id — `extend prod.vm1` extends `prod.vm1`, never another node named `vm1` — including blocks that only add children. `children` (nodes) and `instances` include those declared in `extend` bodies.
 - `declared` holds the tags, links and metadata of the node's own body as written, `fromSpecification` the kind's declaration (`DeploymentNodeKindDefaults`).
@@ -870,9 +879,9 @@ The effective values are LikeC4's (`DeploymentInstanceInfo`):
 | `summary`, `description`, `technology`, `links` | own, else the element's (as `getElement` reports it) |
 | `metadata` | the own map, else the element's map — an own map replaces the element's whole map, keys are not merged |
 | `tags` | own, then the element's, without duplicates |
-| `style` | the element's style (its kind's style overridden by its own) overridden field by field by the instance's own `style { ... }` |
+| `style` | the element's style (its kind's style overridden by its own) overridden field by field by the instance's own `style { ... }`; `opacity` and `icon` as written (see [Style values as written](#style-values-as-written)) |
 
-- Two documented differences from LikeC4's model getters: summary and description are inherited field by field — LikeC4 shows the description as the summary (and the reverse) when only one of them is set, the library does not; and no technology is derived from an icon (LikeC4's `inferTechnologyFromIcon`, on by default), as for elements.
+- Three documented differences from LikeC4's computed values: summary and description are inherited field by field — LikeC4 shows the description as the summary (and the reverse) when only one of them is set, the library does not; no technology is derived from an icon (LikeC4's `inferTechnologyFromIcon`, on by default), as for elements; and style `opacity` and `icon` keep their written form, also when inherited from the element (see [Style values as written](#style-values-as-written)).
 - An instance whose `instanceOf` reference does not resolve is not reported, as LikeC4 drops it. Instances cannot be extended; `declared` holds the tags, links and metadata of the instance's own body as written.
 
 #### Relationships
