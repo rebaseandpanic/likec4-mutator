@@ -128,12 +128,14 @@ mutator.updateRelationship(
 
 // Remove
 mutator.removeRelationship('app.api', 'app.db');
-mutator.removeElement('app.db');
+mutator.removeElement('app.db'); // rejected while a deployment instance deploys it — see "Rejected writes"
 
 // Validate & serialize
 const errors = mutator.validate(); // [] = valid
 const files = mutator.serialize(); // { 'model.c4': '...' }
 ```
+
+The deployment model (`deployment { ... }`: nodes, instances, their relationships and `extend <node>` blocks) has its own read and write methods — see [Deployment model](#deployment-model).
 
 ## CLI
 
@@ -744,7 +746,18 @@ model {
 
 ## Deployment model
 
-The `deployment { ... }` part of the model is read through workspace-level methods: ids span files, so they are not per-file reads.
+The `deployment { ... }` part of the model is read and written through workspace-level methods: ids span files, so they are not per-file operations. Nodes and instances are addressed by their LikeC4 deployment id (`prod.eu.vm1`), relationships by their endpoints.
+
+| | Nodes | Instances | Relationships | `extend <node>` blocks |
+| --- | --- | --- | --- | --- |
+| Read | `getDeploymentNode`, `listDeploymentNodes`; kinds: `getSpecification().deploymentNodeKinds`, `getDeploymentNodeKind` | `getDeploymentInstance`, `listDeploymentInstances` | `listDeploymentRelationships` | `extendedBy` of a node |
+| Add | `addDeploymentNode` | `addDeploymentInstance` | `addDeploymentRelationship` | `addDeploymentExtend` |
+| Update (`{ changedFiles }`) | `updateDeploymentNode` | `updateDeploymentInstance` | `updateDeploymentRelationship` | — |
+| Remove (`{ removedRelationships }`) | `removeDeploymentNode` | `removeDeploymentInstance` | `removeDeploymentRelationship` | `removeDeploymentExtend` |
+
+Every write is also an `apply` operation with the same fields — see [Deployment operations](#deployment-operations).
+
+**Where new text goes.** A child node and an instance go into the body of their parent's declaration; `file` is not accepted for them. A root node, a relationship and an `extend` block go into a `deployment` block, and there the explicit `file` decides: the first `deployment` block of that file, else a new block at its end (the file must be loaded; no file is created). Without `file` — not allowed for `addDeploymentExtend` — the first `deployment` block of the first file in LikeC4's document order that has one; else a new block at the end of the first file with a `model` block; else of the first file. Details per write under [Writing](#writing).
 
 ### Reading
 
@@ -931,6 +944,42 @@ The effective values are LikeC4's (`DeploymentInstanceInfo`):
 | `style` | the element's style (its kind's style overridden by its own) overridden field by field by the instance's own `style { ... }`; `opacity` and `icon` as written (see [Style values as written](#style-values-as-written)) |
 
 - Three documented differences from LikeC4's computed values: summary and description are inherited field by field — LikeC4 shows the description as the summary (and the reverse) when only one of them is set, the library does not; no technology is derived from an icon (LikeC4's `inferTechnologyFromIcon`, on by default), as for elements; and style `opacity` and `icon` keep their written form, also when inherited from the element (see [Style values as written](#style-values-as-written)).
+
+```
+// model/shop.c4
+specification {
+  element store
+  deploymentNode vm
+}
+model {
+  db = store 'Database' {
+    description 'Primary store'
+    icon tech:postgresql
+  }
+  files = store 'Files' {
+    icon ./img/files.svg
+  }
+}
+
+// deployment.c4
+deployment {
+  vm vm1 {
+    instanceOf db
+    instanceOf files
+  }
+}
+```
+
+```typescript
+const db = mutator.getDeploymentInstance('vm1.db')!;
+db.description;  // 'Primary store'
+db.summary;      // undefined — LikeC4 shows 'Primary store' as the summary too
+db.technology;   // undefined — LikeC4 derives 'Postgresql' from the icon
+
+mutator.getDeploymentInstance('vm1.files')!.style;
+// { icon: './img/files.svg' } — relative to model/shop.c4, where LikeC4 resolves it;
+// written as is into deployment.c4 it would point into the folder of deployment.c4
+```
 - An instance whose `instanceOf` reference does not resolve is not reported, as LikeC4 drops it. Instances cannot be extended; `declared` holds the tags, links and metadata of the instance's own body as written.
 
 #### Relationships
@@ -998,21 +1047,23 @@ The effective values are LikeC4's (`DeploymentRelationshipInfo`):
 
 Deployment writes address nodes and instances by their deployment id, as the reads do. A rejected write throws an `InvalidWriteError` naming the option (see [Rejected writes](#rejected-writes)) and changes no file.
 
+The examples below run on one workspace. `deployment.c4` declares the environment `prod` with the zone `prod.eu` and the hosts `prod.eu.vm1` (instances `api` and `api2` of `shop.api`, and `db` of `shop.db`) and `prod.eu.vm2` (instance `web` of `shop.web`), relationships between them, and a deployment view whose rules name `prod.eu.vm1` and elements inside it. `ext/eu.c4` and `ext/eu-extra.c4` extend `prod.eu` — the first with the tag `#internal`, the metadata key `owner`, the host `vm3` and the relationship `vm3.web -> vm1.api 'proxies'`, the second with the tag `#edge`. The logical model declares `shop.web`, `shop.api` with its child `shop.api.handler`, and `shop.db`.
+
 #### Adding nodes
 
 `addDeploymentNode(parentId, opts)` adds a node under the node `parentId`, or a root node when `parentId` is `null`, and returns its id. It is written in the `name = kind` form: the title inline (an empty title is written as `''`), summary, description, technology, tags, links, style and metadata in the body — a node has no inline technology.
 
 ```typescript
-mutator.addDeploymentNode('prod', {
-  name: 'vm3',
-  kind: 'vm',
-  title: 'VM 3',
+mutator.addDeploymentNode('prod.eu', {
+  name: 'vm4',
+  kind: 'host',
+  title: 'VM 4',
   technology: 'KVM',
   tags: ['primary'],
   style: { color: 'blue' },
 });
-// 'prod.vm3', written at the end of the body of `prod`:
-//   vm3 = vm 'VM 3' {
+// 'prod.eu.vm4', written at the end of the body of `eu`:
+//   vm4 = host 'VM 4' {
 //     #primary
 //     technology 'KVM'
 //     style {
@@ -1020,7 +1071,9 @@ mutator.addDeploymentNode('prod', {
 //     }
 //   }
 
-mutator.addDeploymentNode(null, { name: 'stage', kind: 'environment', file: 'deployment.c4' }); // 'stage'
+mutator.addDeploymentNode(null, { name: 'stage', kind: 'environment', file: 'deployment.c4' });
+// 'stage', written at the end of the first deployment block of deployment.c4:
+//   stage = environment
 ```
 
 - **A child node** goes at the end of the body of its parent's declaration; a declaration without a body gets one. Children the parent has in `extend` blocks do not change this place. `file` is not accepted for a child node.
@@ -1040,7 +1093,8 @@ mutator.addDeploymentNode(null, { name: 'stage', kind: 'environment', file: 'dep
 
 ```typescript
 mutator.updateDeploymentNode('prod.eu', { title: 'Europe', tags: ['primary'], metadata: { owner: null } });
-// { changedFiles: ['deployment.c4', 'ext/eu.c4'] }
+// { changedFiles: ['deployment.c4', 'ext/eu-extra.c4', 'ext/eu.c4'] }
+// the tags of both extend blocks of prod.eu and the owner key of ext/eu.c4 are removed
 ```
 
 Rejected, with nothing changed: an `id` no node has, that is an instance or that is declared more than once (`id`, naming the declarations); an undeclared tag or an invalid style value; a `tags`, `links` or `metadata` update while any loaded file has syntax errors (field `tags`, `links` or `metadata`: an `extend` block could hide in that file); the other fields can still be updated then.
@@ -1055,8 +1109,11 @@ Rejected, with nothing changed: an `id` no node has, that is an instance or that
 `removedRelationships` lists each removed relationship as `listDeploymentRelationships()` reported it before the call: `{ source, target, title? }`, endpoints as `{ id, element? }`.
 
 ```typescript
+mutator.removeDeploymentNode('prod.eu.vm3'); // declared in the extend block of ext/eu.c4
+// { removedRelationships: [{ source: { id: 'prod.eu.vm3.web' }, target: { id: 'prod.eu.vm1.api' }, title: 'proxies' }] }
+
 mutator.removeDeploymentNode('prod.eu.vm1');
-// { removedRelationships: [{ source: { id: 'prod.eu.vm2.web' }, target: { id: 'prod.eu.vm1.api' }, title: 'requests' }, ...] }
+// rejected on id: the deployment view refers to prod.eu.vm1 and to elements inside it
 ```
 
 Rejected, with nothing changed (field `id`):
@@ -1256,11 +1313,14 @@ Every write call checks the values it introduces before anything changes. A reje
 | Value | Accepted |
 | --- | --- |
 | element `name` (`addElement`), view `id` (`addView`) | One LikeC4 identifier (letters, digits, `_`, `-`; not starting with a digit or `-`; no `.`; not a keyword such as `title`), not a reserved word (`this`, `it`, `self`, `super`, `likec4lib`, `global`), and not used yet: no element of a loaded file has the same FQN (a sibling in the parent's body or in an `extend` of the parent, or another root element), no view of any type has the same id. |
-| `kind` (`addElement`) | One identifier. |
+| node `name` (`addDeploymentNode`), instance `name` (`addDeploymentInstance`) | One LikeC4 identifier, not a reserved word, and an id (the parent's id + `.` + name; for an unnamed instance the last segment of `element`) no node or instance of a loaded file has — children declared in `extend` blocks included. |
+| `kind` (`addElement`, `addDeploymentNode`) | One identifier. |
+| `element` (`addDeploymentInstance`), endpoint `id` and `element` (deployment relationships), `node` (`addDeploymentExtend`, `removeDeploymentExtend`) | Identifiers joined by `.`. |
+| `occurrence` (`removeDeploymentExtend`) | A whole number from 1. |
 | relationship `source` / `target` (`addRelationship`), view `target` (`addView`) | Identifiers joined by `.` (`app.api`). |
 | `autoLayout` (`addView`) | A direction (`TopBottom`, `LeftRight`, `BottomTop`, `RightLeft`), optionally followed by a whole-number rankSep and nodeSep (`LeftRight 120 40`). |
 | `includes` items (`addView`) | Exactly one `include` rule of the view's type; in a deployment view without `with { ... }`, which LikeC4 does not apply there. |
-| style values (`addElement`, `updateElement`, `addRelationship`, `updateRelationship`) | See [Element style properties](#element-style-properties) and [Relationship style properties](#relationship-style-properties); a field the style type does not have is rejected. |
+| style values (`addElement`, `updateElement`, `addRelationship`, `updateRelationship` and the add / update writes of deployment nodes, instances and relationships) | See [Element style properties](#element-style-properties) and [Relationship style properties](#relationship-style-properties); a field the style type does not have is rejected. |
 
 A value that would add other DSL than the property asked for (`autoLayout: 'LeftRight\n exclude a'`, `style: { color: 'red\n shape cylinder' }`) is rejected by these checks, and so is a style value with a comment (`// ...`, `/* ... */`) or a separator (`color: 'red;'`): a style value is written in place of the existing one, where `red // x` would comment out a field that follows on the same line. Only what LikeC4 lexes as a comment counts: `//` inside a URI (`icon: 'https://example.com/a.svg'`) is accepted. `autoLayout` and `includes` items are written on lines of their own, so a trailing comment there (`'* // every element'`) is accepted and ends with the line.
 
@@ -1274,7 +1334,14 @@ Writes LikeC4 would reject are refused the same way:
 | `addView` | an element view's `target` does not resolve to an element. |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
+| `removeElement` | the deployment model refers to the element or an element of its subtree: as the element of an instance (`instanceOf`, LikeC4 would report `Could not resolve reference`) or as the element part of a deployment relationship endpoint (`prod.api.handler`). Field `fqn`; the error lists the instances and endpoints. |
+| `updateDeploymentNode` | `id` is not one declared node; a tag is not declared; `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating nodes](#updating-nodes)). |
+| `updateDeploymentInstance` | `id` is not one declared instance; a tag is not declared; a patched metadata key would not read as requested, as LikeC4 cannot hold an empty own map (`metadata.<key>`); `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating instances](#updating-instances)). |
+| `removeDeploymentNode`, `removeDeploymentInstance` | `id` is not one declared node (instance); a rule of a deployment view refers to it or to something below it; the removal would change what a surviving reference links to (field `id`). |
 | `addDeploymentRelationship` | an endpoint does not resolve to a node or instance, or its element part to an element of that instance (LikeC4: `DeploymentRelation target '…' not resolved`); the endpoints are one node or instance, or a parent and its descendant (LikeC4: `Invalid parent-child relationship`); `kind` is not declared as a relationship kind; a tag is not declared (fields `source.id`, `source.element`, `target.id`, `target.element`, `target`, `kind`, `tags[i]`; see [Adding deployment relationships](#adding-deployment-relationships)). |
+| `updateDeploymentRelationship`, `removeDeploymentRelationship` | the selector matches no relationship or several (field `source`, naming the candidates); `tags`, `links` or `metadata` of an update while a loaded file has syntax errors. |
+| `addDeploymentExtend` | `node` is not one declared node, or is an instance (LikeC4: `ExtendDeployment allows only DeploymentNode`); nothing to contribute (`tags`); a tag is not declared; `file` is missing or not loaded. |
+| `removeDeploymentExtend` | the file has no such block, or a rule of a deployment view refers to something declared in it, or the removal would change what a surviving reference links to (`node`); several blocks of the node in the file and no valid `occurrence` (`occurrence`). |
 
 Endpoints are resolved the way LikeC4 links them from the place they are written — the first `model` block of the first file that has one: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
 
