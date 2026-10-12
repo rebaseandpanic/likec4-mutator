@@ -225,7 +225,37 @@ export function updateRelationshipEdit(
     throw new Error(formatAmbiguousError(matched, matcher));
   }
 
-  const rel = matched[0] as RelationAstNode;
+  return relationPatchEdits(matched[0] as RelationAstNode, fullText, patch, { inlineStrings: 'rewrite' });
+}
+
+/** Options of {@link relationPatchEdits}. */
+export interface RelationPatchOptions {
+  /**
+   * Where a patched description or technology goes when the relation line
+   * already has one: `'rewrite'` replaces the line's string (model
+   * relationships: LikeC4 reads it over the body); `'body-only'` leaves the
+   * line as written and writes the body (deployment relationships: LikeC4
+   * parses the line's strings but ignores them).
+   */
+  inlineStrings: 'rewrite' | 'body-only';
+}
+
+/**
+ * Build the TextEdits that apply `patch` to the relation `rel` (a model or
+ * deployment relationship) of a document whose text is `fullText`: the
+ * title is replaced or inserted inline, strings REPLACE every declaration
+ * LikeC4 reads, tags and links REPLACE, metadata MERGE with `null`
+ * deleting a key, style MERGE per field.
+ *
+ * @returns A list of TextEdits — empty when no patch field actually produces a
+ *          change (e.g. tags === [] for a relation that has no tags).
+ */
+export function relationPatchEdits(
+  rel: RelationAstNode,
+  fullText: string,
+  patch: UpdateRelationshipPatch,
+  options: RelationPatchOptions,
+): TextEdit[] {
   const indent = getNodeIndent(rel, fullText);
   const edits: TextEdit[] = [];
 
@@ -236,14 +266,16 @@ export function updateRelationshipEdit(
   }
 
   // Description and technology written after the title are what LikeC4
-  // reads (`parseBaseProps` overrides): a technology whenever written, a
-  // description when non-empty.  They are replaced there.  An empty
-  // description no longer overrides the body, so it goes into the body too.
-  if (patch.technology !== undefined && rel.technology !== undefined) {
+  // reads on a model relationship (`parseBaseProps` overrides): a
+  // technology whenever written, a description when non-empty.  They are
+  // replaced there.  An empty description no longer overrides the body, so
+  // it goes into the body too.
+  const rewriteInline = options.inlineStrings === 'rewrite';
+  if (rewriteInline && patch.technology !== undefined && rel.technology !== undefined) {
     edits.push(buildInlineStringEdit(rel, INLINE_TECHNOLOGY, patch.technology));
     patch = { ...patch, technology: undefined };
   }
-  if (patch.description !== undefined && rel.description) {
+  if (rewriteInline && patch.description !== undefined && rel.description) {
     edits.push(buildInlineStringEdit(rel, INLINE_DESCRIPTION, patch.description));
     if (patch.description !== '') patch = { ...patch, description: undefined };
   }
@@ -322,7 +354,8 @@ type FqnRefLike = Parameters<typeof resolveFqnRef>[0] & {
   $cstNode?: { offset: number; end: number };
 };
 
-interface RelationAstNode {
+/** A model or deployment relationship AST node, as the patch edits read it. */
+export interface RelationAstNode {
   $cstNode?: { offset: number; end: number; content?: unknown[] };
   source?: FqnRefLike;
   target?: FqnRefLike;
