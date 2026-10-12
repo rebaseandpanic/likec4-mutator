@@ -945,6 +945,40 @@ The effective values are LikeC4's (`DeploymentRelationshipInfo`):
 - A relationship whose source or target does not resolve (an unknown or ambiguous name), or resolves to a node or instance LikeC4 leaves out of its model, is not listed, as LikeC4 drops it. Deployment relationships cannot be extended.
 - `declared` holds the tags, links and metadata written in the relationship, `fromSpecification` the kind's declaration with its style.
 
+### Writing
+
+Deployment writes address nodes and instances by their deployment id, as the reads do. A rejected write throws an `InvalidWriteError` naming the option (see [Rejected writes](#rejected-writes)) and changes no file.
+
+#### Adding nodes
+
+`addDeploymentNode(parentId, opts)` adds a node under the node `parentId`, or a root node when `parentId` is `null`, and returns its id. It is written in the `name = kind` form: the title inline (an empty title is written as `''`), summary, description, technology, tags, links, style and metadata in the body — a node has no inline technology.
+
+```typescript
+mutator.addDeploymentNode('prod', {
+  name: 'vm3',
+  kind: 'vm',
+  title: 'VM 3',
+  technology: 'KVM',
+  tags: ['primary'],
+  style: { color: 'blue' },
+});
+// 'prod.vm3', written at the end of the body of `prod`:
+//   vm3 = vm 'VM 3' {
+//     #primary
+//     technology 'KVM'
+//     style {
+//       color blue
+//     }
+//   }
+
+mutator.addDeploymentNode(null, { name: 'stage', kind: 'environment', file: 'deployment.c4' }); // 'stage'
+```
+
+- **A child node** goes at the end of the body of its parent's declaration; a declaration without a body gets one. Children the parent has in `extend` blocks do not change this place. `file` is not accepted for a child node.
+- **A root node** goes into a `deployment` block. With `file` (one of the loaded files; no file is created): the first `deployment` block of that file, else a new block at the end of that file. Without `file`: the first `deployment` block of the first file in LikeC4's document order that has one; else a new block at the end of the first file (in that order) with a `model` block; else of the first file.
+- **Rejected**, with nothing changed: a `name` that is not one identifier or is reserved, or whose id is already used by a node or instance of a loaded file — children declared in `extend` blocks included (`name`); a `kind` no specification declares as a deployment node kind (`kind`); an undeclared tag (`tags[i]`); an invalid style value (`style.<field>`); a `parentId` that is not declared, is an instance or is declared more than once (`parent`, naming the declarations); `file` on a child node, or a `file` that is not loaded (`file`).
+- **References stay as they are.** A new node can change how LikeC4 links a reference that is already written: with `prod { inner { x } y }`, `prod.x` links to `prod.inner.x`, the only `x` below `prod`, until `prod.y.x` exists. The write is rejected on `name` when a reference that resolved before — a deployment relationship endpoint, an `instanceOf` target, an `extend` target, a deployment view rule or a reference of the logical model — would then resolve to another target or not at all.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.
@@ -982,6 +1016,7 @@ Writes LikeC4 would reject are refused the same way:
 | `updateElement`, `updateRelationship` | a tag of `tags` is not declared. |
 | `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
 | `addView` | an element view's `target` does not resolve to an element. |
+| `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 
 Endpoints are resolved the way LikeC4 links them from the place they are written — the first `model` block of the first file that has one: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
 

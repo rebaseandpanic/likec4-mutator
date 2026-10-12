@@ -59,7 +59,14 @@ import {
   type AddElementOpts,
   type UpdateElementPatch,
 } from './element-ops.js';
-import type { ElementStyle, RelationshipStyle } from './codegen.js';
+import { generateDeploymentNode, type ElementStyle, type RelationshipStyle } from './codegen.js';
+import {
+  chooseDeploymentPlacement,
+  declarationBodyInsertEdit,
+  deploymentInsertEdit,
+  parentNodeDeclaration,
+  type AddDeploymentNodeOpts,
+} from './deployment-ops.js';
 import {
   addRelationshipEdit,
   removeRelationshipEdit,
@@ -87,6 +94,7 @@ import {
 } from './write-checks.js';
 
 export type { AddElementOpts, UpdateElementPatch };
+export type { AddDeploymentNodeOpts };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
@@ -828,6 +836,87 @@ export class LikeC4Mutator {
   }
 
   // ---------------------------------------------------------------------------
+  // Deployment model writes
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Add a deployment node as a child of node `parentId`, or as a root node
+   * when `parentId` is null.  The node is written in the `name = kind` form,
+   * with the title inline and summary, description, technology, tags,
+   * links, style and metadata in its body.
+   *
+   * A child node is written at the end of the body of its parent's
+   * declaration (a body `{ ... }` is created when the declaration has none),
+   * also when the parent has children in `extend` blocks.  A root node is
+   * written into a `deployment` block chosen by `opts.file` and LikeC4's
+   * document order (see {@link chooseDeploymentPlacement}); a new block is
+   * created when there is none.
+   *
+   * The write is rejected, with no file changed, when:
+   *  - `name` is not one identifier or is reserved, or a node or instance of
+   *    any loaded file already has the new id (children declared in `extend`
+   *    blocks included) — field `name`;
+   *  - `kind` is not declared as a deployment node kind — `kind`;
+   *  - a tag is not declared, or a style value is invalid — `tags[i]`,
+   *    `style.<field>`;
+   *  - `parentId` is not declared, is an instance, or is declared more than
+   *    once — `parent`;
+   *  - `file` is given for a child node, or is not a loaded file — `file`;
+   *  - the new node would change what an existing reference links to (a
+   *    deployment relationship endpoint, a deployment view rule, ...) —
+   *    `name`.
+   *
+   * @param parentId - Deployment id of the parent node, or null for a root node
+   * @param opts     - Name, kind and properties of the new node
+   * @returns The id of the new node.
+   */
+  addDeploymentNode(parentId: string | null, opts: AddDeploymentNodeOpts): string {
+    checkElementName(opts.name);
+    checkKind(opts.kind, 'deploymentNode', this.workspace);
+    checkTags(opts.tags, this.workspace);
+    checkStyle(opts.style, 'element', this.workspace);
+    if (parentId !== null && opts.file !== undefined) {
+      throw new InvalidWriteError(
+        'file',
+        `a child node is written in the declaration of its parent '${parentId}'; file is accepted for a root node only`,
+      );
+    }
+    const parent = parentId === null ? undefined : parentNodeDeclaration(this.deployments, parentId);
+    const id = parentId === null ? opts.name : `${parentId}.${opts.name}`;
+    if (this.deployments.has(id)) {
+      // LikeC4 reports a duplicate for two nodes or instances of one id
+      // anywhere in the project.
+      throw new InvalidWriteError('name', `a node or instance '${id}' is already declared (in a loaded file)`);
+    }
+
+    const { file: _file, ...props } = opts;
+    const snippet = (indent: string): string => generateDeploymentNode({ indent, ...props });
+    let filename: string;
+    let edit: TextEdit;
+    if (parent) {
+      if (parent.file === undefined) throw new Error(`Internal error: declaration of '${parentId}' has no file name`);
+      filename = parent.file;
+      edit = declarationBodyInsertEdit(this.document(filename), parent.node, snippet);
+    } else {
+      const placement = chooseDeploymentPlacement(this.documents, opts.file);
+      filename = placement.file;
+      edit = deploymentInsertEdit(this.document(filename), placement, snippet);
+    }
+
+    const doc = this.document(filename);
+    const before = this.referenceSnapshot();
+    const snapshot = this.snapshot();
+    try {
+      this.applyEdit(filename, edit);
+      this.rejectChangedReferences(before, new Map([[filename, insertedRanges(doc.fullText, [edit])]]), id);
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+    return id;
+  }
+
+  // ---------------------------------------------------------------------------
   // Validation & serialization
   // ---------------------------------------------------------------------------
 
@@ -1122,10 +1211,10 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Throw when declaring element `fqn` changed what an existing reference
-   * links to: a reference that resolved before (`before`, taken before the
-   * declaration was written) now resolves to another target or not at all.
-   * A new name can do that by taking a unique descendant's name out of scope
+   * Throw when declaring element `fqn` (or deployment node `fqn`) changed
+   * what an existing reference links to: a reference that resolved before
+   * (`before`, taken before the declaration was written) now resolves to
+   * another target or not at all.  A new name can do that by taking a unique descendant's name out of scope
    * (`api` resolving to `app.api` becomes ambiguous once `other.api` exists)
    * or by shadowing it — in the logical model, in `instanceOf` targets, in
    * deployment relationship endpoints that step into an instance's element

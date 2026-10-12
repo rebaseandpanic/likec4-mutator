@@ -6,13 +6,45 @@
  * mutator applies them atomically.
  */
 import type { ParsedDocument } from '../parser/types.js';
+import type { DeploymentAstNode, DeploymentDeclaration, DeploymentIndex } from '../query/deployment-index.js';
 import { mergeOrder } from '../query/workspace-index.js';
 import type { TextEdit } from './text-edit.js';
 import { lineEndingOf, withLineEnding } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import { BodyInsertions } from './body-layout.js';
-import type { CstNodeLike } from './cst-helpers.js';
+import type { BodyOwnerNode, CstNodeLike } from './cst-helpers.js';
+import type { ElementStyle } from './codegen.js';
 import { checkFile, InvalidWriteError } from './write-checks.js';
+
+/** Options of `LikeC4Mutator.addDeploymentNode`. */
+export interface AddDeploymentNodeOpts {
+  /** Node name: one identifier; the node's id is the parent's id + `.` + name */
+  name: string;
+  /** Deployment node kind, declared by a specification (`deploymentNode vm`) */
+  kind: string;
+  /** Title, written inline after the kind (`''` is written as `''`) */
+  title?: string;
+  /** Summary, written in the body */
+  summary?: string;
+  /** Description, written in the body */
+  description?: string;
+  /** Technology, written in the body (a node has no inline technology) */
+  technology?: string;
+  /** Tags, declared by a specification; a leading `#` is optional */
+  tags?: string[];
+  /** Links, each a URL with an optional label */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata: key → value, or a list of values */
+  metadata?: Record<string, string | string[]>;
+  /** Style, as for an element */
+  style?: ElementStyle;
+  /**
+   * File of a root node (one of the loaded files; see
+   * {@link chooseDeploymentPlacement}).  Not accepted for a child node,
+   * which is written in its parent's declaration.
+   */
+  file?: string;
+}
 
 /** A `deployment { ... }` block of a document (`ModelDeployments`). */
 interface DeploymentBlockNode {
@@ -108,4 +140,60 @@ function placementIn(file: string, doc: ParsedDocument): DeploymentPlacement {
 function firstDeploymentBlock(doc: ParsedDocument): DeploymentBlockNode | undefined {
   const blocks = ((doc.ast as { deployments?: DeploymentBlockNode[] }).deployments ?? []);
   return blocks.find((block) => block.$cstNode !== undefined);
+}
+
+/**
+ * The declaration of the node a child is added to: `parentId` must be
+ * declared exactly once, and as a node.
+ *
+ * @throws {InvalidWriteError} on `field` when nothing is declared with the
+ *   id, when it is an instance, or when it is declared more than once
+ *   (naming the declarations)
+ */
+export function parentNodeDeclaration(
+  index: DeploymentIndex,
+  parentId: string,
+  field = 'parent',
+): DeploymentDeclaration {
+  const declarations = index.declarations(parentId);
+  const [declaration] = declarations;
+  if (!declaration) {
+    throw new InvalidWriteError(field, `${JSON.stringify(parentId)} is not the id of a deployment node of the loaded files`);
+  }
+  if (declarations.length > 1) {
+    const candidates = declarations.map((d) => `a ${d.type} in '${d.file ?? ''}'`).join(', ');
+    throw new InvalidWriteError(field, `'${parentId}' is declared ${declarations.length} times (${candidates}); it is ambiguous`);
+  }
+  if (declaration.type !== 'node') {
+    throw new InvalidWriteError(field, `'${parentId}' is an instance; only a deployment node holds nodes`);
+  }
+  return declaration;
+}
+
+/**
+ * The TextEdit that writes `snippet` at the end of the body of the
+ * declaration `owner` in `doc`, or — when the declaration has no body —
+ * gives it a body `{ ... }` holding the snippet.
+ *
+ * @param snippet - Produces the construct's text (one or more lines, without
+ *                  the final line break) for the given indentation
+ */
+export function declarationBodyInsertEdit(
+  doc: ParsedDocument,
+  owner: DeploymentAstNode,
+  snippet: (indent: string) => string,
+): TextEdit {
+  const { fullText } = doc;
+  const node = owner as BodyOwnerNode;
+  const indent = getNodeIndent(owner, fullText);
+  if (!node.body?.$cstNode) {
+    const cst = node.$cstNode;
+    if (!cst) throw new Error('internal: a deployment declaration without a position');
+    return { offset: cst.end, end: cst.end, newText: ` {\n${snippet(indent + '  ')}\n${indent}}` };
+  }
+  const inserts = BodyInsertions.forBody(node, fullText, indent);
+  inserts.append(snippet(inserts.innerIndent) + '\n');
+  const [edit] = inserts.apply([]);
+  if (!edit) throw new Error('internal: no edit for the body insertion');
+  return edit;
 }

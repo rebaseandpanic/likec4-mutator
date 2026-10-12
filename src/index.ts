@@ -35,6 +35,7 @@ export type {
 export { LikeC4Mutator } from './mutator/mutator.js';
 export { InvalidWriteError } from './mutator/write-checks.js';
 export type {
+  AddDeploymentNodeOpts,
   AddElementOpts,
   AddViewOpts,
   RemoveElementResult,
