@@ -8,7 +8,7 @@
  */
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
-import { DeploymentIndex } from '../query/deployment-index.js';
+import { DeploymentIndex, type DeploymentExtendRef, type DeploymentRelationRef } from '../query/deployment-index.js';
 import {
   DeploymentQuery,
   type DeploymentElementSource,
@@ -65,6 +65,7 @@ import {
 } from './element-ops.js';
 import {
   generateDeployedInstance,
+  generateDeploymentExtend,
   generateDeploymentNode,
   generateDeploymentRelationship,
   type ElementStyle,
@@ -80,14 +81,19 @@ import {
   isInSubtree,
   isNestedInSubtree,
   endpointText,
+  extendBlocksIn,
+  idsDeclaredIn,
   nodeDeclaration,
   placementContainer,
   relationEndpointInSubtree,
   selectDeploymentRelationship,
+  selectExtendBlock,
   viewReferencesIntoSubtree,
+  type AddDeploymentExtendOpts,
   type AddDeploymentInstanceOpts,
   type AddDeploymentNodeOpts,
   type AddDeploymentRelationshipOpts,
+  type DeploymentExtendSelector,
   type DeploymentRelationshipSelector,
   type UpdateDeploymentInstancePatch,
   type UpdateDeploymentRelationshipPatch,
@@ -126,6 +132,7 @@ export type { AddElementOpts, UpdateElementPatch };
 export type { AddDeploymentNodeOpts, UpdateDeploymentNodePatch };
 export type { AddDeploymentInstanceOpts, UpdateDeploymentInstancePatch };
 export type { AddDeploymentRelationshipOpts, DeploymentRelationshipSelector, UpdateDeploymentRelationshipPatch };
+export type { AddDeploymentExtendOpts, DeploymentExtendSelector };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
@@ -212,6 +219,14 @@ export interface RemoveDeploymentNodeResult {
  * {@link RemoveDeploymentNodeResult}.
  */
 export type RemoveDeploymentInstanceResult = RemoveDeploymentNodeResult;
+
+/**
+ * Result of {@link LikeC4Mutator.removeDeploymentExtend}: the deployment
+ * relationships removed with the block — those declared in it and those
+ * whose endpoint was declared in it — listed as for
+ * {@link RemoveDeploymentNodeResult}.
+ */
+export type RemoveDeploymentExtendResult = RemoveDeploymentNodeResult;
 
 /**
  * Result of {@link LikeC4Mutator.removeDeploymentRelationship}: the one
@@ -1483,6 +1498,109 @@ export class LikeC4Mutator {
     return { removedRelationships: [{ source, target, ...(title !== undefined && { title }) }] };
   }
 
+  /**
+   * Add an `extend <node>` block for deployment node `nodeId` in
+   * `opts.file`, contributing tags, links and metadata to the node: the
+   * block is appended to the file's first `deployment` block, or to a new
+   * one at the end of the file.  The target is written as the node's id
+   * (`extend prod.eu`), which LikeC4 resolves as a strict path.  Only tags,
+   * links and metadata are written — the grammar allows no strings or style
+   * in an `extend` body.  The node's reads then include the contribution,
+   * with the block in `extendedBy`.
+   *
+   * The write is rejected, with no file changed, when:
+   *  - `nodeId` is not a reference, is not declared, is declared more than
+   *    once, or is an instance (LikeC4: "ExtendDeployment allows only
+   *    DeploymentNode") — `node`;
+   *  - a tag is not declared, metadata cannot be written — `tags[i]`,
+   *    `metadata.<key>`;
+   *  - there is no tag, link or metadata key to contribute — `tags`;
+   *  - `file` is missing or not a loaded file — `file`.
+   *
+   * @param nodeId - Deployment id of the node
+   * @param opts   - File and contributions of the block
+   */
+  addDeploymentExtend(nodeId: string, opts: AddDeploymentExtendOpts): void {
+    checkReferenceForm(nodeId, 'node');
+    checkTags(opts.tags, this.workspace);
+    checkMetadata(opts.metadata);
+    if (!(opts.tags?.length || opts.links?.length || Object.keys(opts.metadata ?? {}).length)) {
+      throw new InvalidWriteError(
+        'tags',
+        `an extend block of '${nodeId}' needs at least one tag, link or metadata key to contribute`,
+      );
+    }
+    if (opts.file === undefined) {
+      throw new InvalidWriteError('file', 'the file of the extend block is required (one of the loaded files)');
+    }
+    const declarations = this.deployments.declarations(nodeId);
+    if (declarations.length === 1 && declarations[0]!.type === 'instance') {
+      throw new InvalidWriteError(
+        'node',
+        `'${nodeId}' is an instance; LikeC4 extends deployment nodes only (ExtendDeployment allows only DeploymentNode)`,
+      );
+    }
+    nodeDeclaration(this.deployments, nodeId, 'node');
+    const placement = chooseDeploymentPlacement(this.documents, opts.file);
+    const snippet = (indent: string): string =>
+      generateDeploymentExtend({ indent, node: nodeId, tags: opts.tags, links: opts.links, metadata: opts.metadata });
+    this.applyEdit(placement.file, deploymentInsertEdit(this.document(placement.file), placement, snippet));
+  }
+
+  /**
+   * Remove the `extend <node>` block `selector` selects: by the node id
+   * written after `extend` and the file, plus the 1-based `occurrence` in
+   * source order when the file holds several blocks of the node.  What is
+   * declared in the block goes with it, as for {@link removeDeploymentNode}:
+   *  - the nodes and instances declared in it, with their subtrees and every
+   *    `extend <node>` block of those subtrees in any file;
+   *  - the relationships declared in it, and every deployment relationship
+   *    anywhere whose source or target resolves into what is declared in it.
+   *
+   * The removal is rejected, with no file changed, while a rule of a
+   * deployment view refers to something declared in the block (the view is
+   * not edited), and when the removal would change what a surviving
+   * reference links to.  The operation is atomic.
+   *
+   * @param selector - Node, file and optional occurrence of the block
+   * @returns The deployment relationships that were removed.
+   * @throws {InvalidWriteError} on `node` when it is not a reference or the
+   *   file has no block of it, when a deployment view refers into the block
+   *   or a surviving reference would link to another target; on `file` when
+   *   the file is not loaded; on `occurrence` when it is missing for several
+   *   blocks (naming them), out of range or not a positive whole number
+   */
+  removeDeploymentExtend(selector: DeploymentExtendSelector): RemoveDeploymentExtendResult {
+    const { block, occurrence } = selectExtendBlock(this.deployments, this.documents.keys(), selector);
+    const { node, file } = selector;
+    const current = (): DeploymentExtendRef => {
+      const found = extendBlocksIn(this.deployments, node, file)[occurrence - 1];
+      if (!found) throw new Error(`Internal error: the 'extend ${node}' block is gone before its removal`);
+      return found;
+    };
+    const roots = idsDeclaredIn(this.deployments, block);
+    return this.removeDeploymentPart({
+      roots,
+      extendBlocks: true,
+      construct: block.node,
+      // Declared in the block, or in an extend block of what is declared in
+      // it (removed too).
+      inside: (relation) => {
+        const extend = current().node;
+        return (
+          relation.frames.some((frame) => frame.type === 'extend' && frame.node === extend) ||
+          roots.some((root) => isNestedInSubtree(relation.frames, root))
+        );
+      },
+      locate: current,
+      field: 'node',
+      subject: `extend ${node}`,
+      viewMessage: (references) =>
+        `the 'extend ${node}' block in '${file}' cannot be removed while deployment views refer to what is declared ` +
+        `in it: ${references.join(', ')}`,
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Validation & serialization
   // ---------------------------------------------------------------------------
@@ -1879,29 +1997,74 @@ export class LikeC4Mutator {
     declaration: { node: object },
     options: { extendBlocks: boolean; scope: string },
   ): RemoveDeploymentNodeResult {
-    const resolver = new DeploymentResolver(this.deployments, this.workspace);
-    const viewReferences = viewReferencesIntoSubtree(this.deployments, resolver, id);
-    if (viewReferences.length > 0) {
-      throw new InvalidWriteError(
-        'id',
-        `'${id}' cannot be removed while deployment views refer to ${options.scope}: ${viewReferences.join(', ')}`,
-      );
-    }
+    return this.removeDeploymentPart({
+      roots: [id],
+      extendBlocks: options.extendBlocks,
+      construct: declaration.node,
+      inside: (relation) => isNestedInSubtree(relation.frames, id),
+      locate: () => {
+        const [current] = this.deployments.declarations(id);
+        if (!current) throw new Error(`Internal error: the declaration of '${id}' is gone before its removal`);
+        return current;
+      },
+      field: 'id',
+      subject: id,
+      viewMessage: (references) =>
+        `'${id}' cannot be removed while deployment views refer to ${options.scope}: ${references.join(', ')}`,
+    });
+  }
 
-    // What disappears: the declaration, the extend blocks of the subtree (of
-    // a node) and the relationships outside them with an endpoint in the
-    // subtree (the relationships declared inside go along with their
-    // container).
-    const removed = new Set<object>([declaration.node]);
-    if (options.extendBlocks) {
+  /**
+   * Remove one deployment construct — a declaration or an `extend <node>`
+   * block — with what is declared in it, together with:
+   *  - the deployment relationships outside it whose endpoint resolves into
+   *    the subtree of one of `part.roots` (the ids declared in it);
+   *  - with `part.extendBlocks`, the `extend <node>` blocks that target such
+   *    a subtree.
+   *
+   * Rejected on `part.field` while a deployment view refers into one of
+   * those subtrees, and when the removal would change what a surviving
+   * reference links to.  Atomic.
+   *
+   * @param part.construct - The construct's AST node in the current index
+   * @param part.inside    - True for a relationship that goes with the construct
+   *                         (declared in it), evaluated against the current index
+   * @param part.locate    - The construct in the current index (it is removed last,
+   *                         after the other removals reparsed its file)
+   * @param part.subject   - What is removed, for the message of a re-targeted reference
+   */
+  private removeDeploymentPart(part: {
+    roots: readonly string[];
+    extendBlocks: boolean;
+    construct: object;
+    inside: (relation: DeploymentRelationRef) => boolean;
+    locate: () => { file?: string; node: object };
+    field: string;
+    subject: string;
+    viewMessage: (references: string[]) => string;
+  }): RemoveDeploymentNodeResult {
+    const { roots } = part;
+    const resolver = new DeploymentResolver(this.deployments, this.workspace);
+    const viewReferences = roots.flatMap((root) => viewReferencesIntoSubtree(this.deployments, resolver, root));
+    if (viewReferences.length > 0) throw new InvalidWriteError(part.field, part.viewMessage(viewReferences));
+
+    const targetsSubtree = (target: string): boolean => roots.some((root) => isInSubtree(target, root));
+    const cascades = (relation: DeploymentRelationRef, current: DeploymentResolver): boolean =>
+      !part.inside(relation) && roots.some((root) => relationEndpointInSubtree(current, relation, root));
+
+    // What disappears: the construct, the extend blocks of the subtrees and
+    // the relationships outside them with an endpoint in a subtree (the
+    // relationships declared inside go along with their container).
+    const removed = new Set<object>([part.construct]);
+    if (part.extendBlocks) {
       for (const extend of this.deployments.allExtendBlocks()) {
-        if (isInSubtree(extend.target, id)) removed.add(extend.node);
+        if (targetsSubtree(extend.target)) removed.add(extend.node);
       }
     }
     const removedRelations = new Set<string>();
     for (const relation of this.deployments.relations()) {
-      const nested = isNestedInSubtree(relation.frames, id);
-      const cascaded = !nested && relationEndpointInSubtree(resolver, relation, id);
+      const nested = part.inside(relation);
+      const cascaded = cascades(relation, resolver);
       if (cascaded) removed.add(relation.node);
       const cst = (relation.node as { $cstNode?: { offset: number } }).$cstNode;
       if ((nested || cascaded) && cst) removedRelations.add(`${relation.file ?? ''}:${cst.offset}`);
@@ -1914,24 +2077,21 @@ export class LikeC4Mutator {
     const snapshot = this.snapshot();
     try {
       // One construct at a time (each removal reparses its file): the
-      // relationships outside the subtree, the extend blocks, the declaration.
+      // relationships outside the construct, the extend blocks, the construct.
       for (;;) {
-        const next = this.deployments.relations().find((relation) =>
-          !isNestedInSubtree(relation.frames, id) &&
-          relationEndpointInSubtree(new DeploymentResolver(this.deployments, this.workspace), relation, id),
-        );
+        const current = new DeploymentResolver(this.deployments, this.workspace);
+        const next = this.deployments.relations().find((relation) => cascades(relation, current));
         if (!next) break;
         this.removeDeploymentConstruct(next.file, next.node);
       }
-      while (options.extendBlocks) {
-        const next = this.deployments.allExtendBlocks().find((extend) => isInSubtree(extend.target, id));
+      while (part.extendBlocks) {
+        const next = this.deployments.allExtendBlocks().find((extend) => targetsSubtree(extend.target));
         if (!next) break;
         this.removeDeploymentConstruct(next.file, next.node);
       }
-      const [current] = this.deployments.declarations(id);
-      if (!current) throw new Error(`Internal error: the declaration of '${id}' is gone before its removal`);
-      this.removeDeploymentConstruct(current.file, current.node);
-      this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing' });
+      const construct = part.locate();
+      this.removeDeploymentConstruct(construct.file, construct.node);
+      this.rejectChangedReferences(before, new Map(), part.subject, { field: part.field, action: 'removing' });
     } catch (err) {
       this.restore(snapshot);
       throw err;

@@ -1157,6 +1157,35 @@ mutator.removeDeploymentRelationship({ source: { id: 'prod.eu.vm1.api' }, target
 
 Rejected, with nothing changed: no relationship matches, or several do — `source`, naming the candidates; a malformed endpoint — `source.id`, `source.element`, `target.id`, `target.element`.
 
+#### Extend blocks of nodes
+
+`addDeploymentExtend(nodeId, { file, tags?, links?, metadata? })` adds an `extend <node>` block that contributes tags, links and metadata to a deployment node. `file` is required and must be loaded: the block goes into its first `deployment` block, or a new block at its end. The target is written as the node's id, which LikeC4 resolves as a strict path; strings and style are never written (the grammar allows none in an `extend` body). The node's reads then include the contribution and list the block in `extendedBy`.
+
+```typescript
+mutator.addDeploymentExtend('prod.eu', { file: 'ops.c4', tags: ['public'], metadata: { region: 'west' } });
+// in ops.c4:
+//   deployment {
+//     extend prod.eu {
+//       #public
+//       metadata {
+//         region 'west'
+//       }
+//     }
+//   }
+```
+
+Rejected, with nothing changed: a node that is not declared, is declared more than once or is an instance (LikeC4: `ExtendDeployment allows only DeploymentNode`) — `node`; nothing to contribute (no tag, link or metadata key) — `tags`; an undeclared tag or metadata LikeC4 cannot hold — `tags[i]`, `metadata.<key>`; a missing or unloaded `file` — `file`.
+
+`removeDeploymentExtend({ node, file, occurrence? })` removes one block, selected by the node id written after `extend` and its file; when the file holds several blocks of the node, `occurrence` picks one, counted from 1 in source order. What is declared in the block goes with it, following the rules of [removing nodes](#removing-nodes): the nodes and instances declared there with their subtrees and the `extend` blocks of those subtrees, the relationships declared there, and every relationship whose endpoint resolves into what was declared there. It returns `{ removedRelationships }`.
+
+```typescript
+mutator.removeDeploymentExtend({ node: 'prod.eu', file: 'ext/eu.c4' });
+// removes `extend prod.eu { ... host vm3 { ... } vm3.web -> vm1.api 'proxies' }`
+// { removedRelationships: [{ source: { id: 'prod.eu.vm3.web' }, target: { id: 'prod.eu.vm1.api' }, title: 'proxies' }] }
+```
+
+Rejected, with nothing changed: a malformed node or a file without such a block — `node`; an unloaded file — `file`; several blocks without `occurrence`, or an `occurrence` that is not a whole number from 1 or exceeds the blocks — `occurrence` (the error lists the blocks); a deployment view rule that refers to something declared in the block, or a removal that would change what a surviving reference links to — `node`.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

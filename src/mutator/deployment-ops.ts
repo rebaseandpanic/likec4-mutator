@@ -9,6 +9,7 @@ import type { ParsedDocument } from '../parser/types.js';
 import type {
   DeploymentAstNode,
   DeploymentDeclaration,
+  DeploymentExtendRef,
   DeploymentFrame,
   DeploymentIndex,
   DeploymentRelationRef,
@@ -157,6 +158,35 @@ export interface UpdateDeploymentRelationshipPatch {
   metadata?: MetadataPatch;
   /** Style fields to set */
   style?: RelationshipStyle;
+}
+
+/** Options of `LikeC4Mutator.addDeploymentExtend`. */
+export interface AddDeploymentExtendOpts {
+  /**
+   * File the block is written to: one of the loaded files.  The block goes
+   * into the file's first `deployment` block, or a new one at its end.
+   */
+  file: string;
+  /** Tags contributed to the node, declared by a specification */
+  tags?: string[];
+  /** Links contributed to the node */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata contributed to the node: key → value, or a list of values */
+  metadata?: Record<string, string | string[]>;
+}
+
+/**
+ * Selects one `extend <node>` block: by the node id written after `extend`
+ * and the file, plus the 1-based position among that node's blocks in the
+ * file when the file has several.
+ */
+export interface DeploymentExtendSelector {
+  /** Deployment id of the extended node, as written after `extend` */
+  node: string;
+  /** File of the block */
+  file: string;
+  /** 1-based position among the blocks of `node` in `file`, in source order */
+  occurrence?: number;
 }
 
 /** A `deployment { ... }` block of a document (`ModelDeployments`). */
@@ -451,6 +481,67 @@ function describeRelationship(info: DeploymentRelationshipInfo): string {
     (info.title !== undefined ? ` title '${info.title}'` : '') +
     ` in '${info.file ?? ''}' at line ${info.sourceRange.line + 1}`
   );
+}
+
+/** The `extend <node>` blocks of `node` written in `file`, in source order. */
+export function extendBlocksIn(index: DeploymentIndex, node: string, file: string): DeploymentExtendRef[] {
+  const offset = (block: DeploymentExtendRef): number => (block.node.$cstNode as { offset?: number } | undefined)?.offset ?? 0;
+  return index
+    .extendBlocks(node)
+    .filter((block) => block.file === file)
+    .sort((a, b) => offset(a) - offset(b));
+}
+
+/**
+ * The one `extend <node>` block `selector` selects, with its 1-based
+ * occurrence.
+ *
+ * @throws {InvalidWriteError} on `node` when it is not a reference or the
+ *   file has no block of it; on `file` when the file is not loaded; on
+ *   `occurrence` when it is not a positive whole number or exceeds the
+ *   blocks, or when the file has several blocks of the node and no
+ *   occurrence is given (naming them)
+ */
+export function selectExtendBlock(
+  index: DeploymentIndex,
+  loadedFiles: Iterable<string>,
+  selector: DeploymentExtendSelector,
+): { block: DeploymentExtendRef; occurrence: number } {
+  const { node, file, occurrence } = selector;
+  checkReferenceForm(node, 'node');
+  checkFile(file, loadedFiles);
+  if (occurrence !== undefined && (!Number.isInteger(occurrence) || occurrence < 1)) {
+    throw new InvalidWriteError('occurrence', `expected a whole number from 1, got ${JSON.stringify(occurrence)}`);
+  }
+  const blocks = extendBlocksIn(index, node, file);
+  if (blocks.length === 0) throw new InvalidWriteError('node', `'${file}' has no 'extend ${node}' block`);
+  const line = (block: DeploymentExtendRef): number =>
+    ((block.node.$cstNode as { range?: { start: { line: number } } } | undefined)?.range?.start.line ?? 0) + 1;
+  if (occurrence === undefined && blocks.length > 1) {
+    throw new InvalidWriteError(
+      'occurrence',
+      `'${file}' has ${blocks.length} 'extend ${node}' blocks (at lines ${blocks.map(line).join(', ')}); ` +
+        `give the occurrence, 1 to ${blocks.length}`,
+    );
+  }
+  const chosen = occurrence ?? 1;
+  const block = blocks[chosen - 1];
+  if (!block) {
+    throw new InvalidWriteError(
+      'occurrence',
+      `'${file}' has ${blocks.length} 'extend ${node}' block${blocks.length === 1 ? '' : 's'}; there is no occurrence ${chosen}`,
+    );
+  }
+  return { block, occurrence: chosen };
+}
+
+/** Ids of the nodes and instances declared directly in the body of the `extend` block `block`. */
+export function idsDeclaredIn(index: DeploymentIndex, block: DeploymentExtendRef): string[] {
+  const ids: string[] = [];
+  for (const id of index.ids()) {
+    if (index.declarations(id).some((declaration) => declaration.frames.at(-1)?.node === block.node)) ids.push(id);
+  }
+  return ids;
 }
 
 /** The placement in `file`: its first `deployment` block, else a new block. */

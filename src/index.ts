@@ -35,12 +35,15 @@ export type {
 export { LikeC4Mutator } from './mutator/mutator.js';
 export { InvalidWriteError } from './mutator/write-checks.js';
 export type {
+  AddDeploymentExtendOpts,
   AddDeploymentInstanceOpts,
   AddDeploymentNodeOpts,
   AddDeploymentRelationshipOpts,
   AddElementOpts,
   AddViewOpts,
+  DeploymentExtendSelector,
   DeploymentRelationshipSelector,
+  RemoveDeploymentExtendResult,
   RemoveDeploymentInstanceResult,
   RemoveDeploymentNodeResult,
   RemoveDeploymentRelationshipResult,
