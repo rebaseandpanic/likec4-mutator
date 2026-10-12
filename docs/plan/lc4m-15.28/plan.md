@@ -519,6 +519,7 @@ No new dependency.
 | D12 | T003, T012, T035, T036 |
 | D13 | T002, T007, T008, T017, T019, T028, T033 |
 | D14 | T031, T033 |
+| D18 | T005, T010, T011, T012, T014, T015, T016, T043 |
 | FOR-PLAN 1 (generalized inline anchor) | T021 |
 | FOR-PLAN 2 (`StrictFqnRef.value` reader) | T004 |
 | FOR-PLAN 3 (`checkKind` deploymentNode, `checkStyle` reuse) | T023 |

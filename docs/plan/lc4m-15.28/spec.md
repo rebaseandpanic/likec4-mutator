@@ -113,6 +113,7 @@ Goal: read the whole deployment model with the values LikeC4 1.59.4 computes, an
 | D12 | Relationship selector carries the full endpoint (deployment id + element part) | nested endpoints are otherwise unaddressable | ids only |
 | D13 | Deployment-view references protected against every write of this feature (logical `removeElement` vs view references stays as today, lc4m-15.30) | views break silently on additions too | protect only on removal |
 | D14 | Instance metadata patch accepted only when every patched key reads as requested afterwards; else rejected | LikeC4 cannot express an empty override; no silently ignored deletion | let inheritance return silently; reject every patch emptying the own map |
+| D18 | Style values are reported in the form the library writes: `opacity` as written (`'40%'`, not LikeC4's clamped number 40), `icon` as written (relative paths and image aliases are not resolved to URLs); every other style field equals LikeC4's computed value (size aliases normalized, a hex color inside `style {}` ignored) | a read value can be written back unchanged; resolving icon paths needs the project root and image-alias settings, which the library does not read (same rule as D10) | report LikeC4's numeric opacity and resolved icon URLs |
 
 ### Component boundaries
 - **Deployment index** (new, read side): per workspace, built from all documents' `deployment` blocks in LikeC4 document order: nodes, instances, relationships, `extend <node>` blocks, by id; separate from the logical-model index, linked to it for `instanceOf` targets and for endpoints that step into elements.
@@ -130,7 +131,7 @@ Read: documents → deployment index (with logical index for `instanceOf`) → i
 - **INV-1** An accepted write of this feature, and an accepted `addElement` / `removeElement` with respect to deployment references (US-12), introduces no LikeC4 error (introduced-only rule, as for existing writes): a file set that passed `likec4 validate` before passes after (checked in tests by `expectValidLikeC4`); errors already present before the write may remain.
 - **INV-2** A rejected write changes no file and no in-memory state; the error names the offending field (`InvalidWriteError`), `apply` reports `mutations[i].<field>`.
 - **INV-3** Every write addressing a node, instance, relationship or extend block resolves to exactly one target; zero or several → explicit error naming the selector (and candidates when several).
-- **INV-4** Read values equal LikeC4 1.59.4's computed deployment model for every field listed in US-1…US-4, except the two documented exceptions: per-field summary / description (D2) and no icon-derived technology (D10).
+- **INV-4** Read values equal LikeC4 1.59.4's computed deployment model for every field listed in US-1…US-4, except the documented exceptions: per-field summary / description (D2), no icon-derived technology (D10), and style `opacity` / `icon` in written form (D18).
 - **INV-5** Writes produce only text LikeC4 reads: no inline description / technology on deployment relationships, no inline technology on nodes / instances, no string or style properties and no source-less relationships in `extend` bodies.
 - **INV-6** Generic: no node kinds, tags, metadata keys or nesting depth are assumed; kinds and tags come from the loaded specification.
 - **INV-7** Existing logical-model reads (`getElement`, `listElements`, `getRelationships`, `getSpecification` existing fields) return exactly what they return today.
@@ -185,7 +186,7 @@ No persistent data; `.c4` text only. No migration. Reads gain new info types for
 
 ## Success criteria
 - **SC-001** Every deployment-related row named in lc4m-15.28 "Coverage rows to update" has a non-`no` status in docs/likec4-coverage.md, or `n/a` with the grammar reason (extend of deployment relationships), and the coverage check passes.
-- **SC-002** For each read scenario (US-1…US-4), and after each deployment write (US-5…US-11, including the surviving entities after a removal), the library's values equal LikeC4's computed model field by field, with the D2 / D10 exceptions accounted for (including an inherited icon-only technology example), in at least two unrelated fixtures (different kinds and metadata keys).
+- **SC-002** For each read scenario (US-1…US-4), and after each deployment write (US-5…US-11, including the surviving entities after a removal), the library's values equal LikeC4's computed model field by field, with the D2 / D10 / D18 exceptions accounted for (including an inherited icon-only technology example), in at least two unrelated fixtures (different kinds and metadata keys).
 - **SC-003** Every successful deployment write in the test suite (and every successful `addElement` / `removeElement` touching deployment references) on a valid input produces files that pass `expectValidLikeC4`; a successful write on an input that already has LikeC4 errors introduces no new error (INV-1).
 - **SC-004** Each rejection class of US-6…US-12 has a test showing rejection with the field named and sources byte-identical; the `apply` path exits 1 and writes nothing.
 - **SC-005** All pre-existing tests pass unchanged except tests that pinned the US-12 defects (rewritten to assert rejection).
@@ -221,6 +222,7 @@ None.
 7. Reference stability (US-12) and `apply` ops (US-13); docs, coverage, release.
 
 ## Changelog
+- 2026-10-12 · D18 added and INV-4 / SC-002 extended: style `opacity` and `icon` are reported as written, not as LikeC4's computed number / resolved URL · found by the code review of wave lc4m-15.28/likec4-mutator/2 (the plan already said "opacity as written", the spec did not list the exception) · redo: tests.md oracle convention unchanged (it already maps opacity N ↔ 'N%'), task bodies quoting INV-4 / SC-002 updated, README of T043 documents it.
 - 2026-10-12 · SC-003 aligned with INV-1 (introduced-only): on inputs that already have LikeC4 errors an accepted write must introduce no new error instead of producing a clean validation · found by the test-plan critique (round 2) · redo: test plan (convention Wi), plan T029 / T033 / T037 and delivery step 4 — done in the same change.
 
 ## Known residuals
