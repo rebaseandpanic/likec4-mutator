@@ -693,6 +693,46 @@ model {
 - A `label` that changes the identity is rejected, before anything changes, when the relationship's blocks would then also apply to another relationship that already has the new identity, or when blocks of the new identity with tags, links or metadata exist (even if no relationship has it yet): they would start applying to the renamed relationship.
 - `removeRelationship` also removes the blocks that applied to the removed relationship and apply to no remaining one (they would match nothing). `removeElement` removes, besides those of the relationships it removes, every block whose source or target is in the removed subtree. Blocks that matched nothing before are left alone.
 
+## Deployment model
+
+The `deployment { ... }` part of the model is read through workspace-level methods: ids span files, so they are not per-file reads.
+
+### Reading
+
+#### Deployment node kinds
+
+`getSpecification()` lists the deployment node kinds (`deploymentNode <kind>`) in `deploymentNodeKinds`, in order of first declaration. The field is present only when at least one is declared, so the result of a specification without deployment node kinds is unchanged; a specification that declares only deployment node kinds no longer reads as `null`. `getDeploymentNodeKind(kind)` returns the declaration and its defaults (`DeploymentNodeKindDefaults`), or `null` for an undeclared kind:
+
+```
+specification {
+  element service
+  deploymentNode environment
+  deploymentNode vm {
+    #infra
+    title 'Virtual machine'
+    technology 'Linux'
+    style {
+      shape rectangle
+      color secondary
+      opacity 40%
+    }
+  }
+  tag infra
+}
+```
+
+```typescript
+mutator.getSpecification();
+// { elementKinds: ['service'], tags: ['infra'], relationshipKinds: [], deploymentNodeKinds: ['environment', 'vm'] }
+
+mutator.getDeploymentNodeKind('vm');
+// { kind: 'vm', file: 'spec.c4', sourceRange: {...}, title: 'Virtual machine', technology: 'Linux',
+//   tags: ['infra'], style: { shape: 'rectangle', color: 'secondary', opacity: '40%' } }
+```
+
+- The defaults are read as for an element kind (title, summary, description, technology, tags and links as written), plus `style`: the kind's first `style { ... }` block, the last value of a repeated field, no theme defaults.
+- A kind declared more than once is taken as for an element kind: the last declaration of the last file in LikeC4 document order.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

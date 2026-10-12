@@ -23,7 +23,13 @@ import { buildRemovalEdit } from './cst-helpers.js';
 import { relationFingerprint, relationIdentity, type RelationIdentity } from '../query/relation-extends.js';
 import { removeIndent } from '../query/likec4-text.js';
 import { readContribution, type Decorations } from '../query/extend-merge.js';
-import type { ElementInfo, RelationshipInfo, SpecificationInfo } from '../query/types.js';
+import { specificationKinds } from '../query/kind-specs.js';
+import type {
+  DeploymentNodeKindDefaults,
+  ElementInfo,
+  RelationshipInfo,
+  SpecificationInfo,
+} from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, lineEndingOf, withLineEnding, type TextEdit } from './text-edit.js';
 import {
@@ -202,27 +208,47 @@ export class LikeC4Mutator {
    * declaration (file order, then source order); a name declared more than
    * once — a duplicate LikeC4 reports — is listed once.
    *
-   * Returns null when no file declares any element kind, tag or relationship
-   * kind.
+   * `deploymentNodeKinds` is present only when at least one deployment node
+   * kind is declared.  Returns null when no file declares any element kind,
+   * tag, relationship kind or deployment node kind.
    */
   getSpecification(): SpecificationInfo | null {
     const elementKinds = new Set<string>();
     const tags = new Set<string>();
     const relationshipKinds = new Set<string>();
-    for (const query of this.queries.values()) {
+    const deploymentNodeKinds = new Set<string>();
+    for (const [file, query] of this.queries) {
       const spec = query.getSpecification();
       for (const kind of spec.elementKinds) elementKinds.add(kind);
       for (const tag of spec.tags) tags.add(tag);
       for (const kind of spec.relationshipKinds) relationshipKinds.add(kind);
+      for (const node of specificationKinds(this.documents.get(file)!.ast).deploymentNodes) {
+        deploymentNodeKinds.add(node.kind!.name!);
+      }
     }
-    if (elementKinds.size === 0 && tags.size === 0 && relationshipKinds.size === 0) {
+    if (elementKinds.size === 0 && tags.size === 0 && relationshipKinds.size === 0 && deploymentNodeKinds.size === 0) {
       return null;
     }
     return {
       elementKinds: [...elementKinds],
       tags: [...tags],
       relationshipKinds: [...relationshipKinds],
+      ...(deploymentNodeKinds.size > 0 && { deploymentNodeKinds: [...deploymentNodeKinds] }),
     };
+  }
+
+  /**
+   * Return the declaration of a deployment node kind (`deploymentNode <kind>`
+   * in a `specification` block) and the defaults it writes, style included.
+   * A kind declared more than once is taken as for an element kind: the
+   * last declaration of the last file in LikeC4 document order.
+   *
+   * Returns null when no specification declares the kind.
+   */
+  getDeploymentNodeKind(kind: string): DeploymentNodeKindDefaults | null {
+    const spec = this.workspace.deploymentNodeKind(kind);
+    if (!spec) return null;
+    return { ...spec.defaults, ...(spec.style && { style: spec.style as ElementStyle }) };
   }
 
   // ---------------------------------------------------------------------------
