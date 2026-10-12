@@ -19,7 +19,10 @@ export interface KindSpec {
   contribution: Decorations;
 }
 
-/** Structural view of a `SpecificationElementKind` / `SpecificationRelationshipKind` node. */
+/**
+ * Structural view of a `SpecificationElementKind`,
+ * `SpecificationRelationshipKind` or `SpecificationDeploymentNodeKind` node.
+ */
 interface KindNode {
   kind?: { name?: string };
   tags?: unknown;
@@ -27,19 +30,22 @@ interface KindNode {
   $cstNode?: { offset: number; end: number; range?: { start?: { line?: number; character?: number } } };
 }
 
-/** Element and relationship kind declarations of one document, in source order. */
+/** Element, relationship and deployment node kind declarations of one document, in source order. */
 export function specificationKinds(ast: { specifications?: unknown[] }): {
   elements: KindNode[];
   relationships: KindNode[];
+  deploymentNodes: KindNode[];
 } {
   const elements: KindNode[] = [];
   const relationships: KindNode[] = [];
+  const deploymentNodes: KindNode[] = [];
   for (const raw of ast.specifications ?? []) {
-    const spec = raw as { elements?: KindNode[]; relationships?: KindNode[] };
+    const spec = raw as { elements?: KindNode[]; relationships?: KindNode[]; deploymentNodes?: KindNode[] };
     elements.push(...(spec.elements ?? []).filter((k) => k.kind?.name));
     relationships.push(...(spec.relationships ?? []).filter((k) => k.kind?.name));
+    deploymentNodes.push(...(spec.deploymentNodes ?? []).filter((k) => k.kind?.name));
   }
-  return { elements, relationships };
+  return { elements, relationships, deploymentNodes };
 }
 
 /**
@@ -47,7 +53,9 @@ export function specificationKinds(ast: { specifications?: unknown[] }): {
  *
  * @param node         - The kind node
  * @param file         - File of its document, when named
- * @param relationship - True for a relationship kind (no summary)
+ * @param relationship - True for a relationship kind (no summary); false
+ *                       for an element or deployment node kind, which LikeC4
+ *                       reads alike (`parseElementSpecificationNode`)
  */
 export function readKindSpec(node: KindNode, file: string | undefined, relationship: boolean): KindSpec {
   const stringType = relationship ? 'SpecificationRelationshipStringProperty' : 'SpecificationElementStringProperty';

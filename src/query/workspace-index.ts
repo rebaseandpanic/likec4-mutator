@@ -63,6 +63,8 @@ export interface WorkspaceDocumentAst {
   models?: Array<{ elements?: unknown[] }>;
   specifications?: unknown[];
   views?: unknown[];
+  /** `deployment { ... }` blocks */
+  deployments?: Array<{ elements?: unknown[] }>;
 }
 
 /** A document of the workspace together with the name of its file. */
@@ -183,6 +185,8 @@ export class WorkspaceIndex {
   private readonly elementKinds = new Map<string, KindSpec>();
   /** relationship kind → the declaration LikeC4 uses */
   private readonly relationshipKinds = new Map<string, KindSpec>();
+  /** deployment node kind → the declaration LikeC4 uses */
+  private readonly deploymentNodeKinds = new Map<string, KindSpec>();
   /** Tags declared by a specification (`tag x`) */
   private readonly declaredTags = new Set<string>();
   /** Custom colors declared by a specification (`color x #hex`) */
@@ -213,11 +217,15 @@ export class WorkspaceIndex {
     for (const { file, ast } of this.ordered) {
       // LikeC4 merges the specifications of all documents with
       // `Object.assign` (a later document wins); within a document the last
-      // declaration of an element kind wins (`Object.assign`) and the first
-      // one of a relationship kind (later ones are skipped).
+      // declaration of an element or deployment node kind wins
+      // (`Object.assign`) and the first one of a relationship kind (later
+      // ones are skipped).
       const kinds = specificationKinds(ast);
       const elementKinds = new Map<string, KindSpec>();
       for (const node of kinds.elements) elementKinds.set(node.kind!.name!, readKindSpec(node, file, false));
+      for (const node of kinds.deploymentNodes) {
+        this.deploymentNodeKinds.set(node.kind!.name!, readKindSpec(node, file, false));
+      }
       const relationshipKinds = new Map<string, KindSpec>();
       for (const node of kinds.relationships) {
         const name = node.kind!.name!;
@@ -285,6 +293,16 @@ export class WorkspaceIndex {
    */
   relationshipKind(kind: string): KindSpec | undefined {
     return this.relationshipKinds.get(kind);
+  }
+
+  /**
+   * The specification declaration LikeC4 uses for a deployment node kind
+   * (`deploymentNode <kind>`): the last one of the last document in merge
+   * order, as for an element kind; undefined when no specification
+   * declares it.
+   */
+  deploymentNodeKind(kind: string): KindSpec | undefined {
+    return this.deploymentNodeKinds.get(kind);
   }
 
   /**

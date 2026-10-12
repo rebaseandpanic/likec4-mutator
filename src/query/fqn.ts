@@ -74,14 +74,16 @@ export function buildFqnIndex(ast: any): Map<string, FqnEntry> {
 }
 
 /**
- * Read the FQN written in a `StrictFqnElementRef` (the target of
- * `extend a.b.c`).  Returns undefined when any segment is missing.
+ * Read the path written in a strict reference: a `StrictFqnElementRef` (the
+ * target of `extend a.b.c` in a model, segments in `el`) or a `StrictFqnRef`
+ * (the target of `extend a.b.c` in a deployment, segments in `value`).
+ * Returns undefined when any segment is missing.
  */
 export function readStrictFqnRef(ref: any): string | undefined {
   const parts: string[] = [];
   let current = ref;
   while (current) {
-    const text = current.el?.$refText;
+    const text = current.el?.$refText ?? current.value?.$refText;
     if (!text) return undefined;
     parts.unshift(text);
     current = current.parent;
