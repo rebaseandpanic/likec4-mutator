@@ -53,6 +53,7 @@ import {
   addElementEdit,
   updateElementEdit,
   updateDeclarationEdits,
+  deployedInstanceInlineAnchor,
   deploymentNodeInlineAnchor,
   removeElementEdit,
   findExtendBlocks,
@@ -67,6 +68,7 @@ import {
   chooseDeploymentPlacement,
   declarationBodyInsertEdit,
   deploymentInsertEdit,
+  instanceDeclaration,
   isInSubtree,
   isNestedInSubtree,
   nodeDeclaration,
@@ -74,6 +76,7 @@ import {
   viewReferencesIntoSubtree,
   type AddDeploymentInstanceOpts,
   type AddDeploymentNodeOpts,
+  type UpdateDeploymentInstancePatch,
   type UpdateDeploymentNodePatch,
 } from './deployment-ops.js';
 import {
@@ -90,6 +93,7 @@ import {
 } from './relationship-ops.js';
 import { addViewEdit, type GenerateViewOpts } from './view-ops.js';
 import { checkBraceBalance } from './brace-balance.js';
+import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
 import {
   InvalidWriteError,
   checkAutoLayout,
@@ -104,7 +108,7 @@ import {
 
 export type { AddElementOpts, UpdateElementPatch };
 export type { AddDeploymentNodeOpts, UpdateDeploymentNodePatch };
-export type { AddDeploymentInstanceOpts };
+export type { AddDeploymentInstanceOpts, UpdateDeploymentInstancePatch };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
@@ -146,6 +150,18 @@ export interface UpdateDeploymentNodeResult {
    * `extend <node>` blocks lost tags, links or metadata keys.  Empty when the
    * update changed nothing.  Describes the in-memory state: nothing is
    * written to disk.
+   */
+  changedFiles: string[];
+}
+
+/**
+ * Result of {@link LikeC4Mutator.updateDeploymentInstance}.
+ */
+export interface UpdateDeploymentInstanceResult {
+  /**
+   * Files whose text changed: the file of the instance's declaration, or
+   * none when the update changed nothing.  Describes the in-memory state:
+   * nothing is written to disk.
    */
   changedFiles: string[];
 }
@@ -1190,6 +1206,93 @@ export class LikeC4Mutator {
     return id;
   }
 
+  /**
+   * Update the properties of deployed instance `id` (see
+   * {@link getDeploymentInstance}).  The instance must be declared exactly
+   * once; an instance declared in an `extend` block is addressed by its id
+   * like any other.  Only the instance's declaration is edited: the element
+   * it deploys is never changed, and neither is its `instanceOf` target.
+   *
+   *  - `title`, `summary`, `description`, `technology`: REPLACE the
+   *    instance's own values, inline and in the body.  A new title is written
+   *    inline; summary, description and technology go into the body (an
+   *    instance has no inline technology).
+   *  - `tags`: REPLACE the instance's own tags.  LikeC4 always appends the
+   *    element's tags, so they stay in the read value.
+   *  - `links`: REPLACE the instance's own links.  `[]` removes them, and the
+   *    element's links apply again.
+   *  - `style`: MERGE per field into the instance's own style.  `style.icon`
+   *    is written into the body-level `icon` when the instance has one.
+   *  - `metadata`: patched on the effective map.  LikeC4 reads the
+   *    instance's own map when it has one and the element's whole map
+   *    otherwise; so when the instance has no own map, the element's keys
+   *    are first copied into the instance, then the patch is applied —
+   *    a string or list upserts a key, `null` removes it.  An own
+   *    `metadata { ... }` block left without attributes is removed.
+   *
+   * LikeC4 cannot express an empty own map: an empty block, or values that
+   * normalize to nothing, count as absent and the element's map applies
+   * again.  The metadata patch is therefore accepted only when, after the
+   * write, every patched key reads as requested — an upserted key with its
+   * value, a `null` key absent; otherwise the call is rejected on
+   * `metadata.<key>` and nothing changes.  Unpatched keys of the element can
+   * come back: with own `{ tier }` and element `{ region }`, `{ tier: null }`
+   * leaves the effective map `{ region }`.
+   *
+   * A `tags`, `links` or `metadata` update is rejected while any loaded file
+   * has syntax errors ({@link validate}): the element's values that the
+   * instance inherits could hide in such a file.  The operation is atomic in
+   * memory.
+   *
+   * @param id    - Deployment id of the instance
+   * @param patch - Properties to change (undefined = keep existing)
+   * @returns The files that changed.
+   * @throws {InvalidWriteError} on `id` when no instance has the id, it is a
+   *   node or it is declared more than once (naming the declarations); on
+   *   `tags[i]` / `style.<field>` for an invalid value; on `tags`, `links` or
+   *   `metadata` while a file has syntax errors; on `metadata.<key>` when a
+   *   patched key would not read as requested
+   */
+  updateDeploymentInstance(id: string, patch: UpdateDeploymentInstancePatch): UpdateDeploymentInstanceResult {
+    checkTags(patch.tags, this.workspace);
+    checkStyle(patch.style, 'element', this.workspace);
+    const declaration = instanceDeclaration(this.deployments, id, 'id');
+    if (declaration.file === undefined) throw new Error(`Internal error: declaration of '${id}' has no file name`);
+    const metadataKeys = patch.metadata ? Object.keys(patch.metadata) : [];
+    const crossField =
+      patch.tags !== undefined ? 'tags' : patch.links !== undefined ? 'links' : metadataKeys.length > 0 ? 'metadata' : undefined;
+    if (crossField !== undefined) {
+      this.rejectFieldWhileSyntaxErrors(
+        crossField,
+        `'${id}'`,
+        'the values the instance inherits from its element cannot be read reliably',
+      );
+    }
+
+    const node = declaration.node as Parameters<typeof deployedInstanceInlineAnchor>[0];
+    const effectivePatch = { ...patch };
+    if (patch.metadata && metadataKeys.length > 0 && readContribution(declaration.node.body).metadata === undefined) {
+      // No own map: LikeC4 reads the element's.  Copy it first, so that the
+      // patch acts on the map the caller sees.
+      const inherited = this.getDeploymentInstance(id)?.metadata ?? {};
+      const changesEffective = metadataKeys.some((key) => patch.metadata![key] !== null || Object.hasOwn(inherited, key));
+      effectivePatch.metadata = changesEffective ? { ...inherited, ...patch.metadata } : {};
+    }
+    const edits = updateDeclarationEdits(node, this.document(declaration.file), effectivePatch, deployedInstanceInlineAnchor(node), {
+      styleIconInBodyIcon: true,
+    });
+
+    const snapshot = this.snapshot();
+    const changedFiles = this.applyEditGroups(new Map(edits.length > 0 ? [[declaration.file, edits]] : []));
+    try {
+      if (patch.metadata) this.rejectUnreadMetadata(id, patch.metadata);
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+    return { changedFiles };
+  }
+
   // ---------------------------------------------------------------------------
   // Validation & serialization
   // ---------------------------------------------------------------------------
@@ -1317,15 +1420,47 @@ export class LikeC4Mutator {
    * replaced.
    *
    * @param target - The construct being updated, for the message
+   * @param reason - Why the value depends on every file, for the message
    */
-  private rejectFieldWhileSyntaxErrors(field: string, target: string): void {
+  private rejectFieldWhileSyntaxErrors(
+    field: string,
+    target: string,
+    reason = 'extend blocks of loaded files cannot be located reliably',
+  ): void {
     const errors = this.validate();
     if (errors.length === 0) return;
     throw new InvalidWriteError(
       field,
-      `cannot be updated on ${target} while files have syntax errors: extend blocks of loaded files ` +
-        `cannot be located reliably (${errors.join('; ')})`,
+      `cannot be updated on ${target} while files have syntax errors: ${reason} (${errors.join('; ')})`,
     );
+  }
+
+  /**
+   * Throw when a metadata key patched on instance `id` does not read as
+   * requested after the write (D14): an upserted key must read with its
+   * value as LikeC4 normalizes it, a `null` key must be absent.  LikeC4
+   * cannot express an empty own map — the element's map applies again — so
+   * such a patch cannot be honoured.
+   *
+   * @throws {InvalidWriteError} on `metadata.<key>` for the first such key
+   */
+  private rejectUnreadMetadata(id: string, patch: MetadataPatch): void {
+    const metadata = this.getDeploymentInstance(id)?.metadata ?? {};
+    for (const [key, value] of Object.entries(patch)) {
+      const read = Object.hasOwn(metadata, key) ? metadata[key] : undefined;
+      const expected = value === null ? undefined : normalizedMetadataValue(value);
+      // An upsert must read as a value: one that normalizes to nothing never does.
+      const honoured = value === null ? read === undefined : expected !== undefined && JSON.stringify(read) === JSON.stringify(expected);
+      if (honoured) continue;
+      throw new InvalidWriteError(
+        `metadata.${key}`,
+        value === null
+          ? `removing '${key}' would leave '${id}' without its own metadata, and LikeC4 then reads the element's ` +
+              `map, where '${key}' is ${JSON.stringify(read)}: an instance's metadata override cannot be empty`
+          : `${JSON.stringify(value)} would ${read === undefined ? 'not be read' : `read as ${JSON.stringify(read)}`} on '${id}': LikeC4 drops values that ` +
+              `are empty after trimming, and an instance's metadata override cannot be empty`,
+      );
+    }
   }
 
   /**

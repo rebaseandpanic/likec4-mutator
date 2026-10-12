@@ -41,6 +41,8 @@ export type {
   AddViewOpts,
   RemoveDeploymentNodeResult,
   RemoveElementResult,
+  UpdateDeploymentInstancePatch,
+  UpdateDeploymentInstanceResult,
   UpdateDeploymentNodePatch,
   UpdateDeploymentNodeResult,
   UpdateElementResult,

@@ -1037,6 +1037,37 @@ mutator.addDeploymentInstance('prod.eu.vm1', { element: 'shop.api', name: 'api3'
 - **Rejected**, with nothing changed: a `name` that is not one identifier or is reserved, or an id — given or implicit — already used by a node or instance of a loaded file, children declared in `extend` blocks included (`name`); an `element` that is not identifiers joined by `.`, or does not resolve to exactly one element (`element`); an undeclared tag (`tags[i]`); an invalid style value (`style.<field>`); a `nodeId` that is not declared, is an instance or is declared more than once (`node`, naming the declarations); any `file` (`file`).
 - **References stay as they are**, as for [nodes](#adding-nodes): the write is rejected on `name` when a reference that resolved before would then resolve to another target or not at all. With `n1 { instanceOf app.db }` and a top-level `n2.web -> db`, `db` links to the only instance named `db`; an unnamed `instanceOf app.db` in another node would make it ambiguous, while `db2 = instanceOf app.db` is accepted. A rule of a deployment view that names an instance by its name alone is protected the same way.
 
+#### Updating instances
+
+`updateDeploymentInstance(id, patch)` patches an instance and returns `{ changedFiles }`. Only the instance's declaration is edited: the element it deploys and its `instanceOf` target are never changed, and instances have no `extend` blocks.
+
+- `title`, `summary`, `description`, `technology` replace the instance's own values, inline (after the element in `instanceOf shop.web 'Title' 'Summary'`) and in the body. A new title is written inline; summary, description and technology go into the body.
+- `tags` replace the instance's own tags. LikeC4 always appends the element's tags, so they stay in the read value: an element tagged `#public` reads `['replica', 'public']` after `tags: ['replica']`, and `['public']` after `tags: []`.
+- `links` replace the instance's own links; `links: []` removes them, and the element's links apply again.
+- `style` merges per field into the instance's own style; `style.icon` is written into the body-level `icon` when the instance has one.
+- `metadata` is patched on the effective map — the one the read reports. LikeC4 reads the instance's own map when it has one and the element's whole map otherwise, so when the instance has no own map the element's keys are first copied into it, then the patch is applied: a string or list upserts a key, `null` removes it. An own `metadata { ... }` block left without attributes is removed.
+
+```typescript
+// element shop.api: metadata { owner 'team-a'  tier 'gold' }; instance prod.eu.vm1.api has no own metadata
+mutator.updateDeploymentInstance('prod.eu.vm1.api', { metadata: { tier: 'platinum' } });
+// written into the instance: metadata { owner 'team-a'  tier 'platinum' }
+// effective: { owner: 'team-a', tier: 'platinum' }
+```
+
+LikeC4 cannot express an empty own map: an empty `metadata { }`, or values that are empty after trimming, count as absent and the element's map applies again. So a metadata patch is accepted only when every patched key reads as requested afterwards — an upserted key with its value, a `null` key absent — and is otherwise rejected on `metadata.<key>`. Keys of the element the patch does not name can come back:
+
+```typescript
+// element app.db: metadata { region 'eu' }; instance prod.db: metadata { tier 'gold' }
+mutator.updateDeploymentInstance('prod.db', { metadata: { tier: null } });
+// accepted: the own block is removed, effective { region: 'eu' }
+
+// element app.db: metadata { region 'eu' }; instance prod.other has no own metadata
+mutator.updateDeploymentInstance('prod.other', { metadata: { region: null } });
+// rejected on metadata.region: without an own map LikeC4 reads the element's, where region is 'eu'
+```
+
+Rejected, with nothing changed: an `id` no instance has, that is a node or that is declared more than once (`id`, naming the declarations); an undeclared tag or an invalid style value; a metadata key that would not read as requested (`metadata.<key>`); a `tags`, `links` or `metadata` update while any loaded file has syntax errors (field `tags`, `links` or `metadata`: the element values the instance inherits could hide in that file); the other fields can still be updated then.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

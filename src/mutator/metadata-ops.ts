@@ -131,9 +131,7 @@ export function readMetadataGrouped(metaBody: MetadataBodyShape): MetadataMap {
     const value = readMetadataValue(attr);
     if (value === undefined) continue;
     // Booleans read as 'true' / 'false', which LikeC4 does not normalize.
-    const normalized = attr.value
-      ? (Array.isArray(value) ? value : [value]).map(removeIndent).filter((v) => v !== '')
-      : [value as string];
+    const normalized = attr.value ? normalizedValues(value) : [value as string];
     if (normalized.length === 0) continue;
     const values = grouped.get(attr.key) ?? [];
     values.push(...normalized);
@@ -144,6 +142,21 @@ export function readMetadataGrouped(metaBody: MetadataBodyShape): MetadataMap {
     out[key] = values.length === 1 ? values[0]! : values;
   }
   return out;
+}
+
+/**
+ * How LikeC4 reads a written metadata value (see {@link readMetadataGrouped}):
+ * each string dedented and trimmed, empty strings dropped; one value left
+ * reads as a string, several as an array, none as absent (undefined).
+ */
+export function normalizedMetadataValue(value: string | string[]): string | string[] | undefined {
+  const values = normalizedValues(value);
+  return values.length === 0 ? undefined : values.length === 1 ? values[0] : values;
+}
+
+/** The values of a written metadata value, dedented and trimmed, empty ones dropped. */
+function normalizedValues(value: string | string[]): string[] {
+  return (Array.isArray(value) ? value : [value]).map(removeIndent).filter((v) => v !== '');
 }
 
 /**

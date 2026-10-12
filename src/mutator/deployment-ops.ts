@@ -118,6 +118,14 @@ export interface DeploymentPlacement {
 export type UpdateDeploymentNodePatch = UpdateElementPatch;
 
 /**
+ * Patch of `LikeC4Mutator.updateDeploymentInstance`: the fields of an
+ * element patch.  Strings, tags and links replace the instance's own values,
+ * style merges per field into its own style, and metadata is patched on the
+ * instance's effective map (see the method).
+ */
+export type UpdateDeploymentInstancePatch = UpdateElementPatch;
+
+/**
  * Choose where a root deployment construct is written (D4, D11).  The
  * choice branches on `file` first:
  *
@@ -205,19 +213,49 @@ function firstDeploymentBlock(doc: ParsedDocument): DeploymentBlockNode | undefi
  *   (naming the declarations)
  */
 export function nodeDeclaration(index: DeploymentIndex, id: string, field: string): DeploymentDeclaration {
-  const declarations = index.declarations(id);
-  const [declaration] = declarations;
-  if (!declaration) {
-    throw new InvalidWriteError(field, `${JSON.stringify(id)} is not the id of a deployment node of the loaded files`);
-  }
-  if (declarations.length > 1) {
-    const candidates = declarations.map((d) => `a ${d.type} in '${d.file ?? ''}'`).join(', ');
-    throw new InvalidWriteError(field, `'${id}' is declared ${declarations.length} times (${candidates}); it is ambiguous`);
-  }
+  const declaration = singleDeclaration(index, id, field, 'deployment node');
   if (declaration.type !== 'node') {
     throw new InvalidWriteError(field, `'${id}' is an instance, not a deployment node`);
   }
   return declaration;
+}
+
+/**
+ * The one declaration of deployed instance `id`: the id must be declared
+ * exactly once, and as an instance.
+ *
+ * @param field - The option that holds `id`
+ * @throws {InvalidWriteError} on `field` when nothing is declared with the
+ *   id, when it is a node, or when it is declared more than once (naming the
+ *   declarations)
+ */
+export function instanceDeclaration(index: DeploymentIndex, id: string, field: string): DeploymentDeclaration {
+  const declaration = singleDeclaration(index, id, field, 'deployed instance');
+  if (declaration.type !== 'instance') {
+    throw new InvalidWriteError(field, `'${id}' is a deployment node, not an instance`);
+  }
+  return declaration;
+}
+
+/** The only declaration of `id`, of any type (see {@link nodeDeclaration}). */
+function singleDeclaration(index: DeploymentIndex, id: string, field: string, what: string): DeploymentDeclaration {
+  const declarations = index.declarations(id);
+  const [declaration] = declarations;
+  if (!declaration) {
+    throw new InvalidWriteError(field, `${JSON.stringify(id)} is not the id of a ${what} of the loaded files`);
+  }
+  if (declarations.length > 1) {
+    const candidates = declarations.map(describeDeclaration).join(', ');
+    throw new InvalidWriteError(field, `'${id}' is declared ${declarations.length} times (${candidates}); it is ambiguous`);
+  }
+  return declaration;
+}
+
+/** `a <type> in '<file>' at line <n>`, for the candidates of an ambiguous id. */
+function describeDeclaration(declaration: DeploymentDeclaration): string {
+  const line = (declaration.node.$cstNode as { range?: { start: { line: number } } } | undefined)?.range?.start.line;
+  const what = declaration.type === 'node' ? 'a node' : 'an instance';
+  return `${what} in '${declaration.file ?? ''}'${line === undefined ? '' : ` at line ${line + 1}`}`;
 }
 
 /**
