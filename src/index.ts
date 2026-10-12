@@ -12,6 +12,11 @@ export type {
 } from './query/workspace-index.js';
 export type { ExtendRelationNode, RelationIdentity } from './query/relation-extends.js';
 export type {
+  DeploymentEndpoint,
+  DeploymentInstanceInfo,
+  DeploymentNodeInfo,
+  DeploymentNodeKindDefaults,
+  DeploymentRelationshipInfo,
   ElementDecorations,
   ElementInfo,
   ExtendContribution,

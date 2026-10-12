@@ -1,3 +1,5 @@
+import type { ElementStyle, RelationshipStyle } from '../mutator/codegen.js';
+
 /** Position of a construct in the source text of its file. */
 export interface SourceRange {
   /** Offset of the first character (0-based) */
@@ -282,4 +284,245 @@ export interface SpecificationInfo {
   tags: string[];
   /** Declared relationship kinds, e.g. ['uses', 'requests'] */
   relationshipKinds: string[];
+  /**
+   * Declared deployment node kinds (`deploymentNode <kind>`), e.g.
+   * ['environment', 'zone'].  Present only when at least one is declared;
+   * their defaults are read with `LikeC4Mutator.getDeploymentNodeKind`.
+   */
+  deploymentNodeKinds?: string[];
+}
+
+/**
+ * The declaration of a deployment node kind in a `specification` block
+ * (`deploymentNode <kind> { ... }`) and the defaults it writes, chosen as for
+ * an element kind when the kind is declared more than once (see
+ * {@link KindDefaults}).
+ */
+export interface DeploymentNodeKindDefaults extends KindDefaults {
+  /**
+   * Default style as written in the kind's `style { ... }` block: the first
+   * block, the last value of a repeated field, values as written (opacity
+   * as `'40%'`), no theme defaults
+   */
+  style?: ElementStyle;
+}
+
+/**
+ * One end of a deployment relationship.  `id` is a deployment id — of a node
+ * or of an instance; when the endpoint steps into the element of an instance
+ * (`prod.db.replLog`), `id` is the instance and `element` is the FQN of the
+ * element inside the instance's element (`app.db.replLog`).
+ */
+export interface DeploymentEndpoint {
+  /** Deployment id of the node or instance, e.g. 'prod.eu.vm1' */
+  id: string;
+  /** FQN of the nested element when the endpoint steps into the instance's element */
+  element?: string;
+}
+
+/**
+ * Information about a deployment node, addressed by its LikeC4 deployment id.
+ *
+ * `title`, `summary`, `description`, `technology`, `tags`, `links`,
+ * `metadata` and `style` are the node's effective values, the way LikeC4
+ * builds its model: the defaults of the node's kind (see
+ * {@link DeploymentNodeInfo.fromSpecification}), overridden or extended by
+ * the declaration, then merged with every `extend <node>` block of the node.
+ * `fromSpecification`, `declared` and `extendedBy` tell where they come from.
+ * Strings are normalized as for {@link ElementInfo.technology}.
+ */
+export interface DeploymentNodeInfo {
+  /** Deployment id: the parent's id + `.` + name, e.g. 'prod.eu.vm1' */
+  id: string;
+  /** Local name, e.g. 'vm1' */
+  name: string;
+  /** Deployment node kind as written, e.g. 'host' */
+  kind: string;
+  /** Deployment id of the parent node, undefined for root nodes */
+  parentId?: string;
+  /**
+   * Title as LikeC4 computes it: the node's own when it has one (an empty
+   * one stays `''`), otherwise the title of its kind, otherwise the node
+   * name; an own title equal to the node name is replaced by the kind title
+   * when the kind has one.  Always defined.
+   */
+  title: string;
+  /** Summary: the node's own, otherwise the summary of its kind */
+  summary?: string;
+  /** Description: the node's own, otherwise the description of its kind */
+  description?: string;
+  /** Technology: the node's own (body property), otherwise the technology of its kind */
+  technology?: string;
+  /**
+   * Effective tags: the node's own — or, when it has none, those of its kind
+   * — then those of each `extend` block in merge order (see
+   * {@link DeploymentNodeInfo.extendedBy}), then the tags of its kind
+   * appended, without duplicates.
+   */
+  tags?: string[];
+  /**
+   * Effective links: the node's own — or, when it has none, those of its
+   * kind — then those of each `extend` block in merge order, merged as for
+   * {@link ElementInfo.links}.
+   */
+  links?: Array<{ url: string; label?: string }>;
+  /**
+   * Effective metadata: the node's own, then each `extend` block in merge
+   * order, normalized and merged as for {@link ElementInfo.metadata}.
+   */
+  metadata?: Record<string, string | string[]>;
+  /**
+   * Effective style: the style of its kind overridden field by field by the
+   * node's own `style { ... }` block, read as for
+   * {@link DeploymentNodeKindDefaults.style}.
+   */
+  style?: ElementStyle;
+  /**
+   * The specification declaration of the node's kind and the defaults it
+   * writes; absent when no specification declares the kind.
+   */
+  fromSpecification?: DeploymentNodeKindDefaults;
+  /** Tags, links and metadata written in the node's own declaration body */
+  declared: ElementDecorations;
+  /**
+   * Every `extend <node> { ... }` block whose target is exactly this node,
+   * in the order LikeC4 merges them (files sorted as for
+   * {@link ElementInfo.extendedBy}, then source order within a file).
+   */
+  extendedBy: ExtendContribution[];
+  /** Deployment ids of the direct child nodes, including those declared in `extend` blocks */
+  children: string[];
+  /** Deployment ids of the instances directly in this node, including those declared in `extend` blocks */
+  instances: string[];
+  /**
+   * File of the declaration — the key passed to `LikeC4Mutator.fromFiles`,
+   * or the `file` given to `WorkspaceIndex`.  Absent when the document was
+   * indexed without a name.
+   */
+  file?: string;
+  /** Position of the declaration in its file */
+  sourceRange: SourceRange;
+}
+
+/**
+ * Information about an instance of a logical element in a deployment node
+ * (`instanceOf <element>`), addressed by its LikeC4 deployment id.
+ *
+ * The effective values follow LikeC4's computed model: the instance's own
+ * value when it has one, otherwise the effective value of its element (see
+ * {@link ElementInfo}), with two documented exceptions: `summary` and
+ * `description` are inherited field by field, without LikeC4's display
+ * fallback from one to the other, and no technology is derived from an
+ * icon (the library reads no project settings).  Strings are normalized as
+ * for {@link ElementInfo.technology}.  Instances cannot be extended.
+ */
+export interface DeploymentInstanceInfo {
+  /** Deployment id: the parent node's id + `.` + name, e.g. 'prod.eu.vm1.api' */
+  id: string;
+  /**
+   * Local name: the explicit one (`name = instanceOf ...`), otherwise the
+   * last segment of the `instanceOf` reference as written
+   */
+  name: string;
+  /** Deployment id of the node that holds the instance */
+  parentId: string;
+  /** FQN of the element the instance deploys, e.g. 'shop.api' */
+  element: string;
+  /** Title: the instance's own (an empty one stays `''`), otherwise the element's title.  Always defined. */
+  title: string;
+  /** Summary: the instance's own, otherwise the element's summary */
+  summary?: string;
+  /** Description: the instance's own, otherwise the element's description */
+  description?: string;
+  /** Technology: the instance's own, otherwise the element's technology */
+  technology?: string;
+  /** Effective tags: the instance's own, then the element's tags, without duplicates */
+  tags?: string[];
+  /** Links: the instance's own, otherwise the element's links */
+  links?: Array<{ url: string; label?: string }>;
+  /**
+   * Metadata: the instance's own map, otherwise the element's map — an own
+   * map replaces the element's whole map, keys are not merged
+   */
+  metadata?: Record<string, string | string[]>;
+  /**
+   * Effective style: the element's style (its kind's style overridden by its
+   * own) overridden field by field by the instance's own `style { ... }`
+   * block, read as for {@link DeploymentNodeKindDefaults.style}
+   */
+  style?: ElementStyle;
+  /** Tags, links and metadata written in the instance's own body */
+  declared: ElementDecorations;
+  /**
+   * File of the declaration — the key passed to `LikeC4Mutator.fromFiles`,
+   * or the `file` given to `WorkspaceIndex`.  Absent when the document was
+   * indexed without a name.
+   */
+  file?: string;
+  /** Position of the declaration in its file */
+  sourceRange: SourceRange;
+}
+
+/**
+ * Information about a relationship of the deployment model.
+ *
+ * The effective values follow LikeC4's computed model: the relationship's
+ * own values, with the defaults of its kind (see
+ * {@link DeploymentRelationshipInfo.fromSpecification}) where it has none.
+ * A description or technology written on the relation line is ignored, as
+ * LikeC4 ignores it; only body properties count.  Deployment relationships
+ * cannot be extended.  Strings are normalized as for
+ * {@link ElementInfo.technology}.
+ */
+export interface DeploymentRelationshipInfo {
+  /** Source endpoint; for a relationship written without a source, the enclosing node or instance */
+  source: DeploymentEndpoint;
+  /** Target endpoint */
+  target: DeploymentEndpoint;
+  /** Relationship kind as written: `a -[calls]-> b` or `a .calls b` */
+  kind?: string;
+  /** Whether the relationship is bidirectional (`<->`, `-[k]<->`) */
+  bidirectional: boolean;
+  /**
+   * Title: its own when non-empty, otherwise the title of its kind when that
+   * declares one, as LikeC4 computes it
+   */
+  title?: string;
+  /** Description: the body `description` property, otherwise the description of its kind */
+  description?: string;
+  /**
+   * Technology: the body `technology` property when non-empty, otherwise the
+   * technology of its kind
+   */
+  technology?: string;
+  /**
+   * Effective tags: those of its kind, then its own — those written on the
+   * relation line, or else those of its body — without duplicates
+   */
+  tags?: string[];
+  /** Links: its own, otherwise those of its kind */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata: its first `metadata { ... }` block, normalized as for {@link ElementInfo.metadata} */
+  metadata?: Record<string, string | string[]>;
+  /**
+   * Effective style: the style of its kind overridden field by field by its
+   * own `style { ... }` block, values as written
+   */
+  style?: RelationshipStyle;
+  /**
+   * The specification declaration of the relationship's kind, the defaults
+   * it writes and its style; absent when the relationship has no kind or no
+   * specification declares it.
+   */
+  fromSpecification?: KindDefaults & { style?: RelationshipStyle };
+  /** Tags, links and metadata written in the relationship itself */
+  declared: ElementDecorations;
+  /**
+   * File of the relationship — the key passed to `LikeC4Mutator.fromFiles`,
+   * or the `file` given to `WorkspaceIndex`.  Absent when the document was
+   * indexed without a name.
+   */
+  file?: string;
+  /** Position of the relationship in its file */
+  sourceRange: SourceRange;
 }
