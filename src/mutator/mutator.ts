@@ -63,19 +63,29 @@ import {
   type AddElementOpts,
   type UpdateElementPatch,
 } from './element-ops.js';
-import { generateDeployedInstance, generateDeploymentNode, type ElementStyle, type RelationshipStyle } from './codegen.js';
 import {
+  generateDeployedInstance,
+  generateDeploymentNode,
+  generateDeploymentRelationship,
+  type ElementStyle,
+  type RelationshipStyle,
+} from './codegen.js';
+import {
+  checkEndpointForm,
   chooseDeploymentPlacement,
   declarationBodyInsertEdit,
   deploymentInsertEdit,
   instanceDeclaration,
   isInSubtree,
   isNestedInSubtree,
+  endpointText,
   nodeDeclaration,
+  placementContainer,
   relationEndpointInSubtree,
   viewReferencesIntoSubtree,
   type AddDeploymentInstanceOpts,
   type AddDeploymentNodeOpts,
+  type AddDeploymentRelationshipOpts,
   type UpdateDeploymentInstancePatch,
   type UpdateDeploymentNodePatch,
 } from './deployment-ops.js';
@@ -110,6 +120,7 @@ import {
 export type { AddElementOpts, UpdateElementPatch };
 export type { AddDeploymentNodeOpts, UpdateDeploymentNodePatch };
 export type { AddDeploymentInstanceOpts, UpdateDeploymentInstancePatch };
+export type { AddDeploymentRelationshipOpts };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
@@ -1275,6 +1286,82 @@ export class LikeC4Mutator {
       throw err;
     }
     return { changedFiles };
+  }
+
+  /**
+   * Add a deployment relationship `source -> target` at the top level of a
+   * `deployment` block chosen by `opts.file` and LikeC4's document order
+   * (see {@link chooseDeploymentPlacement}); a new block is created when
+   * there is none.  The connector is `->`, `<->` (`bidirectional`),
+   * `-[kind]->` or `-[kind]<->`; the title is written inline (an empty title
+   * as `''`), and description, technology, tags, links, metadata and style
+   * in the body — LikeC4 ignores a description or technology written on the
+   * relationship line.
+   *
+   * Each endpoint is `{ id, element? }`, as
+   * {@link listDeploymentRelationships} reports endpoints:
+   *  - `id` is written as given and must resolve, from the insertion point
+   *    and by LikeC4's deployment scoping, to a node or an instance: a
+   *    full id (`prod.eu.vm1`) or a shorter reference LikeC4 links there;
+   *  - `element` steps into the element the instance deploys: the FQN of an
+   *    element below it, written as the path from the instance's element
+   *    (`{ id: 'prod.vm1.db', element: 'app.db.replLog' }`, with `db` an
+   *    instance of `app.db`, is written `prod.vm1.db.replLog`).
+   *
+   * The write is rejected, with no file changed, when:
+   *  - an `id` is not a reference, does not resolve to one node or instance
+   *    (an unknown or ambiguous name, or a logical element), or itself steps
+   *    into an element — `source.id` / `target.id`;
+   *  - an `element` is not an FQN, is given on a node, is not an element
+   *    below the instance's element, or the written path does not link to
+   *    it — `source.element` / `target.element`;
+   *  - `kind` is not a declared relationship kind, a tag is not declared,
+   *    or a style value is invalid — `kind`, `tags[i]`, `style.<field>`;
+   *  - a metadata key or value cannot be written — `metadata.<key>`;
+   *  - `file` is not a loaded file — `file`;
+   *  - the endpoints are the same node or instance, or one lies below the
+   *    other (LikeC4: "Invalid parent-child relationship"; element parts do
+   *    not count) — `target`.
+   *
+   * @param source - Source endpoint
+   * @param target - Target endpoint
+   * @param opts   - Kind, direction and properties of the relationship
+   */
+  addDeploymentRelationship(
+    source: DeploymentEndpoint,
+    target: DeploymentEndpoint,
+    opts: AddDeploymentRelationshipOpts = {},
+  ): void {
+    checkEndpointForm(source, 'source');
+    checkEndpointForm(target, 'target');
+    if (opts.kind !== undefined) checkKind(opts.kind, 'relationship', this.workspace);
+    checkTags(opts.tags, this.workspace);
+    checkStyle(opts.style, 'relationship', this.workspace);
+    checkMetadata(opts.metadata);
+    const placement = chooseDeploymentPlacement(this.documents, opts.file);
+    const doc = this.document(placement.file);
+    const container = placementContainer(doc, placement);
+    const where = `the deployment block in '${placement.file}'`;
+    const resolver = new DeploymentResolver(this.deployments, this.workspace);
+    const from = endpointText(this.deployments, resolver, source, container, 'source', where);
+    const to = endpointText(this.deployments, resolver, target, container, 'target', where);
+    // LikeC4 checks the deployment parts only (language-server
+    // `deploymentRelationChecks`: `isSameHierarchy` of the deployment ids).
+    if (isSameHierarchy(from.target.deployment, to.target.deployment)) {
+      throw new InvalidWriteError(
+        'target',
+        from.target.deployment === to.target.deployment
+          ? `'${to.text}' is in '${to.target.deployment}', the source's own node or instance: ` +
+              `LikeC4 rejects such a relationship (Invalid parent-child relationship)`
+          : `'${from.target.deployment}' and '${to.target.deployment}' are parent and child: ` +
+              `LikeC4 rejects such a relationship (Invalid parent-child relationship)`,
+      );
+    }
+
+    const { file: _file, ...props } = opts;
+    const snippet = (indent: string): string =>
+      generateDeploymentRelationship({ indent, ...props, source: from.text, target: to.text });
+    this.applyEdit(placement.file, deploymentInsertEdit(doc, placement, snippet));
   }
 
   // ---------------------------------------------------------------------------

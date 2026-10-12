@@ -37,6 +37,7 @@ export { InvalidWriteError } from './mutator/write-checks.js';
 export type {
   AddDeploymentInstanceOpts,
   AddDeploymentNodeOpts,
+  AddDeploymentRelationshipOpts,
   AddElementOpts,
   AddViewOpts,
   RemoveDeploymentInstanceResult,

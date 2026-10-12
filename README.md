@@ -1086,6 +1086,39 @@ Rejected, with nothing changed (field `id`):
 - a rule of a deployment view refers to the instance or to an element through it (`style prod.eu.vm1.api.handler`) — the error lists the references; views are never edited;
 - the removal would change what a surviving reference links to. With `outer { n = instanceOf app.db  prod { a { n = ... }  b { n = ... }  c { -> n } } }`, `-> n` links to `outer.n` while `n` is ambiguous below `prod`; removing `outer.prod.b.n` would make it link to `outer.prod.a.n`. A removal that only makes an ambiguous reference resolve — one that did not resolve before — is accepted.
 
+#### Adding deployment relationships
+
+`addDeploymentRelationship(source, target, opts?)` writes a relationship at the top level of a `deployment` block, chosen like the block of a root node (see [Adding nodes](#adding-nodes)): `opts.file` when given (one of the loaded files, a block is created at its end when it has none), otherwise the first `deployment` block in LikeC4's document order. The connector is `->`, `<->` (`bidirectional: true`), `-[kind]->` or `-[kind]<->`; the title is written inline (an empty title as `''`), and description, technology, tags, links, metadata and style go into the body — LikeC4 ignores a description or technology written on the relationship line.
+
+Each endpoint is `{ id, element? }`, the form `listDeploymentRelationships` reports:
+
+- **`id`** is written as given and must resolve, from the place it is written and the way LikeC4 links deployment references, to a node or an instance: the full id (`prod.eu.vm1`) or a shorter reference LikeC4 links there (`vm1` where that name is unique). A logical element (`shop.api`) is not an endpoint.
+- **`element`** steps into the element the instance deploys. It is the FQN of an element below that element (as reads report it), and it is written as the path from the instance's element: with `api = instanceOf shop.api`, `{ id: 'prod.eu.vm1.api', element: 'shop.api.handler' }` is written `prod.eu.vm1.api.handler`.
+
+```typescript
+mutator.addDeploymentRelationship({ id: 'prod.eu.vm2.web' }, { id: 'prod.eu.vm1.db' }, {
+  kind: 'calls',
+  title: 'reads',
+  technology: 'SQL',
+  tags: ['internal'],
+});
+// at the end of the first deployment block:
+//   prod.eu.vm2.web -[calls]-> prod.eu.vm1.db 'reads' {
+//     #internal
+//     technology 'SQL'
+//   }
+
+mutator.addDeploymentRelationship({ id: 'vm2' }, { id: 'prod.eu.vm1.api', element: 'shop.api.handler' }, { bidirectional: true });
+//   vm2 <-> prod.eu.vm1.api.handler
+```
+
+Rejected, with nothing changed:
+
+- an `id` that is not a reference, does not resolve to one node or instance from the insertion point (an unknown or ambiguous name, a logical element, a name visible only in another file's `deployment` blocks), or itself steps into an element — `source.id` / `target.id`;
+- an `element` that is not an FQN, is given for a node, is not below the instance's element, or is not reached by the written path — `source.element` / `target.element`;
+- endpoints that are the same node or instance, or a node and something below it (LikeC4: `Invalid parent-child relationship`; only the `id` parts count, so two elements of one instance are rejected too) — `target`;
+- an undeclared `kind`, an undeclared tag, an invalid style value, metadata LikeC4 cannot hold, a `file` that is not loaded — `kind`, `tags[i]`, `style.<field>`, `metadata.<key>`, `file`.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.
@@ -1125,6 +1158,7 @@ Writes LikeC4 would reject are refused the same way:
 | `addView` | an element view's `target` does not resolve to an element. |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
+| `addDeploymentRelationship` | an endpoint does not resolve to a node or instance, or its element part to an element of that instance (LikeC4: `DeploymentRelation target '…' not resolved`); the endpoints are one node or instance, or a parent and its descendant (LikeC4: `Invalid parent-child relationship`); `kind` is not declared as a relationship kind; a tag is not declared (fields `source.id`, `source.element`, `target.id`, `target.element`, `target`, `kind`, `tags[i]`; see [Adding deployment relationships](#adding-deployment-relationships)). |
 
 Endpoints are resolved the way LikeC4 links them from the place they are written — the first `model` block of the first file that has one: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
 

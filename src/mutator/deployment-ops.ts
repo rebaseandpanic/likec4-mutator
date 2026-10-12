@@ -13,16 +13,17 @@ import type {
   DeploymentIndex,
   DeploymentRelationRef,
 } from '../query/deployment-index.js';
-import type { DeploymentResolver } from '../query/deployment-resolver.js';
+import type { DeploymentResolver, DeploymentTarget } from '../query/deployment-resolver.js';
+import type { DeploymentEndpoint } from '../query/types.js';
 import { mergeOrder } from '../query/workspace-index.js';
 import type { TextEdit } from './text-edit.js';
 import { lineEndingOf, withLineEnding } from './text-edit.js';
 import { getNodeIndent } from './indent.js';
 import { BodyInsertions } from './body-layout.js';
 import type { BodyOwnerNode, CstNodeLike } from './cst-helpers.js';
-import type { ElementStyle } from './codegen.js';
+import type { ElementStyle, RelationshipStyle } from './codegen.js';
 import type { UpdateElementPatch } from './element-ops.js';
-import { checkFile, InvalidWriteError } from './write-checks.js';
+import { checkFile, checkReferenceForm, InvalidWriteError } from './write-checks.js';
 
 /** Options of `LikeC4Mutator.addDeploymentNode`. */
 export interface AddDeploymentNodeOpts {
@@ -89,6 +90,33 @@ export interface AddDeploymentInstanceOpts {
    * value is rejected on `file`.
    */
   file?: never;
+}
+
+/** Options of `LikeC4Mutator.addDeploymentRelationship`. */
+export interface AddDeploymentRelationshipOpts {
+  /** Relationship kind, declared by a specification (`relationship calls`); written as `-[kind]->` */
+  kind?: string;
+  /** Written as `<->` (or `-[kind]<->`) */
+  bidirectional?: boolean;
+  /** Title, written inline after the target (`''` is written as `''`) */
+  title?: string;
+  /** Description, written in the body (LikeC4 ignores an inline one) */
+  description?: string;
+  /** Technology, written in the body (LikeC4 ignores an inline one) */
+  technology?: string;
+  /** Tags, declared by a specification; a leading `#` is optional */
+  tags?: string[];
+  /** Links, each a URL with an optional label */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata: key → value, or a list of values */
+  metadata?: Record<string, string | string[]>;
+  /** Style, as for a relationship */
+  style?: RelationshipStyle;
+  /**
+   * File the relationship is written to (one of the loaded files; see
+   * {@link chooseDeploymentPlacement})
+   */
+  file?: string;
 }
 
 /** A `deployment { ... }` block of a document (`ModelDeployments`). */
@@ -188,6 +216,103 @@ export function deploymentInsertEdit(
   const separator = fullText === '' ? '' : /\r?\n$/.test(fullText) ? '\n' : '\n\n';
   const newText = `${separator}deployment {\n${snippet('  ')}\n}\n`;
   return withLineEnding([{ offset: fullText.length, end: fullText.length, newText }], eol)[0]!;
+}
+
+/**
+ * The AST node a construct written at `placement` resolves its references
+ * from: the chosen `deployment` block, or — for a new block — the document
+ * itself (an empty block adds no names to the document's scopes).
+ */
+export function placementContainer(doc: ParsedDocument, placement: DeploymentPlacement): DeploymentAstNode {
+  return (placement.block ?? doc.ast) as DeploymentAstNode;
+}
+
+/**
+ * Form check of a relationship endpoint `{ id, element? }`: `id` is a
+ * reference (identifiers joined by `.`) and `element`, when given, an FQN.
+ *
+ * @param field - The endpoint option (`source`, `target`)
+ * @throws {InvalidWriteError} on `<field>` when the endpoint is not an
+ *   object, on `<field>.id` / `<field>.element` for a malformed part
+ */
+export function checkEndpointForm(endpoint: DeploymentEndpoint, field: string): void {
+  if (typeof endpoint !== 'object' || endpoint === null) {
+    throw new InvalidWriteError(field, `expected an endpoint { id, element? }, got ${JSON.stringify(endpoint)}`);
+  }
+  checkReferenceForm(endpoint.id, `${field}.id`);
+  if (endpoint.element !== undefined) checkReferenceForm(endpoint.element, `${field}.element`);
+}
+
+/**
+ * The text a relationship endpoint `{ id, element? }` is written as, and
+ * the target it links to from `container` (see {@link placementContainer}).
+ *
+ * `id` is written as given and must resolve, by LikeC4's deployment
+ * scoping, to a node or an instance.  `element` is the FQN of an element
+ * below the element that instance deploys, as reads report it; it is
+ * written as the path from the instance's element (`{ id: 'prod.vm1.db',
+ * element: 'app.db.replLog' }` for an instance of `app.db` is written
+ * `prod.vm1.db.replLog`), and that text must link to exactly this element.
+ *
+ * @param field - The endpoint option (`source`, `target`)
+ * @param where - The insertion point, for messages
+ * @throws {InvalidWriteError} on `<field>.id` when `id` does not resolve to
+ *   a node or instance (an unknown or ambiguous name, a logical element),
+ *   or steps into an element itself; on `<field>.element` when `id` is not
+ *   an instance, or `element` is not an element below the instance's
+ *   element that the written path links to
+ */
+export function endpointText(
+  index: DeploymentIndex,
+  resolver: DeploymentResolver,
+  endpoint: DeploymentEndpoint,
+  container: DeploymentAstNode,
+  field: string,
+  where: string,
+): { text: string; target: DeploymentTarget } {
+  const { id, element } = endpoint;
+  const resolved = resolver.resolveText(id, container);
+  if (resolved === undefined || !('deployment' in resolved)) {
+    throw new InvalidWriteError(
+      `${field}.id`,
+      `'${id}' does not resolve to one deployment node or instance from ${where} ` +
+        `(a logical element is not a deployment endpoint; LikeC4 would report the relationship as not resolved)`,
+    );
+  }
+  if (resolved.element !== undefined) {
+    throw new InvalidWriteError(
+      `${field}.id`,
+      `'${id}' steps into element '${resolved.element}' of instance '${resolved.deployment}'; ` +
+        `give the instance in id and the element FQN in element`,
+    );
+  }
+  if (element === undefined) return { text: id, target: { deployment: resolved.deployment } };
+
+  const declaration = index.declarations(resolved.deployment)[0];
+  if (declaration?.type !== 'instance') {
+    throw new InvalidWriteError(
+      `${field}.element`,
+      `'${id}' is the deployment node '${resolved.deployment}'; only an instance's element can be stepped into`,
+    );
+  }
+  const base = resolver.instanceElement(declaration.node);
+  if (base === undefined || !element.startsWith(base + '.')) {
+    throw new InvalidWriteError(
+      `${field}.element`,
+      base === undefined
+        ? `the element of instance '${resolved.deployment}' does not resolve, so '${element}' cannot be reached through it`
+        : `'${element}' is not an element below '${base}', the element of instance '${resolved.deployment}'`,
+    );
+  }
+  const text = `${id}.${element.slice(base.length + 1)}`;
+  const linked = resolver.resolveText(text, container);
+  if (!linked || !('deployment' in linked) || linked.deployment !== resolved.deployment || linked.element !== element) {
+    throw new InvalidWriteError(
+      `${field}.element`,
+      `'${element}' is not an element of the loaded files reachable as '${text}' from ${where}`,
+    );
+  }
+  return { text, target: { deployment: resolved.deployment, element } };
 }
 
 /** The placement in `file`: its first `deployment` block, else a new block. */
