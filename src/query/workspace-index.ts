@@ -514,6 +514,11 @@ export interface ReferenceResolution {
   text: string;
   /** Linked FQN; undefined when the reference does not resolve */
   fqn: string | undefined;
+  /**
+   * The AST node the reference is written in: the relation, the
+   * `extend a -> b` or `extend X` block, or the view
+   */
+  node: object;
 }
 
 /**
@@ -536,8 +541,8 @@ export function resolveDocumentReferences(
   const results: ReferenceResolution[] = [];
   for (const rel of resolveRelations(ast, workspace)) {
     const node = rel.node as AstNodeLike;
-    if (node.source) results.push({ role: 'relationship source', text: rel.sourceText, fqn: rel.linkedSource });
-    results.push({ role: 'relationship target', text: rel.targetText, fqn: rel.linkedTarget });
+    if (node.source) results.push({ role: 'relationship source', text: rel.sourceText, fqn: rel.linkedSource, node });
+    results.push({ role: 'relationship target', text: rel.targetText, fqn: rel.linkedTarget, node });
   }
 
   const models = ast.models ?? [];
@@ -554,12 +559,13 @@ export function resolveDocumentReferences(
             role: `extend relationship ${role}`,
             text: resolveFqnRef(ref),
             fqn: resolver.resolveEndpoint(ref, chain),
+            node: item,
           });
         }
       } else if (isExtendElement(item)) {
         const text = readStrictFqnRef(item.element);
         if (text !== undefined) {
-          results.push({ role: 'extend target', text, fqn: workspace.has(text) ? text : undefined });
+          results.push({ role: 'extend target', text, fqn: workspace.has(text) ? text : undefined, node: item });
         }
       }
     }
@@ -569,7 +575,7 @@ export function resolveDocumentReferences(
     for (const view of block.views ?? []) {
       const ref = view.viewOf?.modelElement as RefLike | undefined;
       if (!ref) continue;
-      results.push({ role: 'view target', text: resolveFqnRef(ref), fqn: resolver.resolveEndpoint(ref, []) });
+      results.push({ role: 'view target', text: resolveFqnRef(ref), fqn: resolver.resolveEndpoint(ref, []), node: view });
     }
   }
   return results;

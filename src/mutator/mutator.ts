@@ -17,13 +17,17 @@ import {
   type DeploymentRelationshipFilter,
 } from '../query/deployment-query.js';
 import { DeploymentResolver } from '../query/deployment-resolver.js';
+import {
+  compareReferenceSnapshots,
+  takeReferenceSnapshot,
+  type ReferenceSnapshot,
+  type TextRange,
+} from '../query/reference-snapshot.js';
 import { forEachElementDeclaration } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
   WorkspaceIndex,
-  resolveDocumentReferences,
   resolveReferenceText,
-  type ReferenceResolution,
   resolveRelations,
   type ExtendRelationBlockRef,
   type ResolvedRelation,
@@ -385,11 +389,11 @@ export class LikeC4Mutator {
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
     const edit = addElementEdit(doc, parentFqn, opts);
-    const before = this.referenceResolutions();
+    const before = this.referenceSnapshot();
     const snapshot = this.snapshot();
     try {
       this.applyEdit(filename, edit);
-      this.rejectChangedReferences(before, fqn);
+      this.rejectChangedReferences(before, new Map([[filename, insertedRanges(doc.fullText, [edit])]]), fqn);
     } catch (err) {
       this.restore(snapshot);
       throw err;
@@ -1053,47 +1057,46 @@ export class LikeC4Mutator {
     return fqn;
   }
 
-  /** Every element reference of every loaded file that the index resolves (see {@link resolveDocumentReferences}). */
-  private referenceResolutions(): Map<string, ReferenceResolution[]> {
-    const result = new Map<string, ReferenceResolution[]>();
-    for (const [file, doc] of this.documents) result.set(file, resolveDocumentReferences(doc.ast, this.workspace));
-    return result;
+  /**
+   * The reference snapshot of the loaded files (see {@link takeReferenceSnapshot}).
+   *
+   * @param removed - AST nodes the coming write deletes
+   */
+  private referenceSnapshot(removed?: ReadonlySet<object>): ReferenceSnapshot {
+    const documents = [...this.documents].map(([file, doc]) => ({ file, ast: doc.ast }));
+    return takeReferenceSnapshot(documents, this.workspace, this.deployments, removed);
   }
 
   /**
    * Throw when declaring element `fqn` changed what an existing reference
    * links to: a reference that resolved before (`before`, taken before the
-   * declaration was written) now resolves to another element or not at all.
+   * declaration was written) now resolves to another target or not at all.
    * A new name can do that by taking a unique descendant's name out of scope
    * (`api` resolving to `app.api` becomes ambiguous once `other.api` exists)
-   * or by shadowing it.  References that did not resolve before are not
-   * considered: they are not changed by the call.
+   * or by shadowing it — in the logical model, in `instanceOf` targets, in
+   * deployment relationship endpoints that step into an instance's element
+   * and in the rules of deployment views.  References that did not resolve
+   * before are not considered: they are not changed by the call.
    *
+   * @param inserted - Per file, the text ranges the write inserted
    * @throws {InvalidWriteError} on `name`
    */
-  private rejectChangedReferences(before: Map<string, ReferenceResolution[]>, fqn: string): void {
-    const after = this.referenceResolutions();
-    for (const [file, previous] of before) {
-      const current = after.get(file) ?? [];
-      // Declaring an element adds no reference, so both lists hold the same
-      // references in the same order.
-      if (current.length !== previous.length || current.some((ref, i) => ref.text !== previous[i]!.text)) {
-        throw new Error(`Internal error: the references of '${file}' changed while adding element '${fqn}'`);
-      }
-      previous.forEach((old, i) => {
-        const now = current[i]!.fqn;
-        if (old.fqn === undefined || now === old.fqn) return;
-        throw new InvalidWriteError(
-          'name',
-          `declaring '${fqn}' changes what an existing reference links to: the ${old.role} '${old.text}' in '${file}' ` +
-            `links to '${old.fqn}' and would ${
-              now === undefined
-                ? 'no longer resolve (LikeC4 would report: Could not resolve reference)'
-                : `link to '${now}' instead`
-            }`,
-        );
-      });
-    }
+  private rejectChangedReferences(
+    before: ReferenceSnapshot,
+    inserted: ReadonlyMap<string, readonly TextRange[]>,
+    fqn: string,
+  ): void {
+    const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(), inserted);
+    if (!change) return;
+    throw new InvalidWriteError(
+      'name',
+      `declaring '${fqn}' changes what an existing reference links to: the ${change.role} '${change.text}' in '${change.file}' ` +
+        `links to ${change.before.display} and would ${
+          change.after === undefined
+            ? 'no longer resolve (LikeC4 would report: Could not resolve reference)'
+            : `link to ${change.after.display} instead`
+        }`,
+    );
   }
 
   /** Ids of the views declared in every loaded file. */
@@ -1273,4 +1276,20 @@ function isWithin(
 /** True when a body contributes tags, links or metadata. */
 function hasContributions(contribution: Decorations): boolean {
   return contribution.tags !== undefined || contribution.links !== undefined || contribution.metadata !== undefined;
+}
+
+/**
+ * The ranges of the text that applying `edits` to `source` produces which
+ * hold the edits' new text (written with the line ending of `source`, as
+ * `applyEditsToFile` writes it).
+ */
+function insertedRanges(source: string, edits: readonly TextEdit[]): TextRange[] {
+  let shift = 0;
+  return withLineEnding(edits, lineEndingOf(source))
+    .sort((a, b) => a.offset - b.offset || a.end - b.end)
+    .map(({ offset, end, newText }) => {
+      const range = { offset: offset + shift, end: offset + shift + newText.length };
+      shift += newText.length - (end - offset);
+      return range;
+    });
 }
