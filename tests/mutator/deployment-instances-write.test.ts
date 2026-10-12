@@ -277,6 +277,9 @@ describe('rejection classes of an addition (row 58)', () => {
     { label: 'reserved name', files: zones, node: 'prod.eu.vm2', opts: { element: 'shop.api', name: 'this' }, field: 'name' },
     { label: 'undeclared tag', files: zones, node: 'prod.eu.vm2', opts: { element: 'shop.db', tags: ['public', 'undeclared'] }, field: 'tags[1]' },
     { label: 'invalid style', files: zones, node: 'prod.eu.vm2', opts: { element: 'shop.db', style: { color: 'nocolor' } }, field: 'style.color' },
+    { label: 'empty metadata list', files: zones, node: 'prod.eu.vm2', opts: { element: 'shop.db', metadata: { key: [] } }, field: 'metadata.key' },
+    { label: 'metadata key with a space', files: zones, node: 'prod.eu.vm2', opts: { element: 'shop.db', metadata: { 'bad key': 'v' } }, field: 'metadata.bad key' },
+    { label: 'keyword as metadata key', files: zones, node: 'prod.eu.vm2', opts: { element: 'shop.db', metadata: { title: 'v' } }, field: 'metadata.title' },
     { label: 'node is an instance', files: zones, node: 'prod.eu.vm1.api', opts: { element: 'shop.db' }, field: 'node' },
     { label: 'node is not declared', files: zones, node: 'prod.nowhere', opts: { element: 'shop.db' }, field: 'node' },
     { label: 'file', files: zones, node: 'prod.eu.vm2', opts: { element: 'shop.db', file: 'deployment.c4' } as unknown as AddDeploymentInstanceOpts, field: 'file' },
@@ -461,6 +464,20 @@ describe('D9 / D14 metadata (row 60)', () => {
       const m = LikeC4Mutator.fromFiles(files);
       expectRejected(m, field, () => m.updateDeploymentInstance(id, { metadata: patch }));
     }
+  });
+});
+
+describe('metadata LikeC4 cannot hold, in an update', () => {
+  // An empty list has no LikeC4 syntax, and a key must be an identifier; with
+  // and without an own map of the instance.
+  it.each<{ label: string; id: string; metadata: MetadataPatch; field: string }>([
+    { label: 'an empty list', id: 'prod.eu.vm1.api2', metadata: { key: [] }, field: 'metadata.key' },
+    { label: 'an empty list, no own map', id: 'prod.eu.vm1.api', metadata: { key: [] }, field: 'metadata.key' },
+    { label: 'a key with a space', id: 'prod.eu.vm1.api2', metadata: { 'bad key': 'v' }, field: 'metadata.bad key' },
+    { label: 'a keyword as key', id: 'prod.eu.vm1.api', metadata: { title: 'v' }, field: 'metadata.title' },
+  ])('$label → $field', ({ id, metadata, field }) => {
+    const m = LikeC4Mutator.fromFiles(readWorkspace('deployment-zones'));
+    expectRejected(m, field, () => m.updateDeploymentInstance(id, { metadata }));
   });
 });
 
