@@ -984,7 +984,8 @@ mutator.addDeploymentNode(null, { name: 'stage', kind: 'environment', file: 'dep
 `updateDeploymentNode(id, patch)` patches a node with the semantics of `updateElement`, on the node's effective values, and returns `{ changedFiles }`:
 
 - `title`, `summary`, `description`, `technology` replace every declaration LikeC4 reads — inline (after the kind in `name = kind 'Title'`, after the name in `kind name 'Title'`) and in the body. A new title is written inline; summary, description and technology go into the body.
-- `tags` and `links` replace (`[]` clears them); `metadata` merges, `null` deletes a key; `style` merges per field. `style.icon` is written into the body-level `icon` when the node has one (it overrides `style { icon ... }`), else into the style block.
+- `tags` and `links` replace; `metadata` merges, `null` deletes a key; `style` merges per field. `style.icon` is written into the body-level `icon` when the node has one (it overrides `style { icon ... }`), else into the style block.
+- The kind's defaults keep applying, as LikeC4 reads them: `tags: []` clears the node's own tags and those of its `extend` blocks, but the kind's tags stay; `links: []` clears own and `extend` links, and the kind's links apply again. A `title` equal to the node's name reads as the kind's title when the kind has one; an empty `title` (`''`) reads as `''`.
 - Patched tags, links and metadata keys are removed from every `extend <node>` block whose path is exactly `id`, in every file, so that the patched value is the effective one. Blocks of other nodes, descendants included, are not touched.
 - The kind is not changed. A node declared in an `extend` block is addressed by its id like any other.
 
