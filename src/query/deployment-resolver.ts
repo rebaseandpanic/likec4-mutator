@@ -203,14 +203,22 @@ export class DeploymentResolver {
    * not resolve.
    */
   resolveText(text: string, container: DeploymentAstNode): LinkedTarget | undefined {
-    let ref: RefLike | undefined;
-    for (const segment of text.split('.')) {
-      ref = ref === undefined
-        ? { $type: 'FqnRef', $container: container as AstLike, value: { $refText: segment } }
-        : { $type: 'FqnRef', parent: ref, $container: container as AstLike, value: { $refText: segment } };
-    }
+    const ref = writtenRef(text, container);
     if (!ref) return undefined;
     return toTarget(this.resolveRef(ref, hasContainer(container as AstLike, 'DeploymentViewBody', true) ? 'view' : 'deployment'));
+  }
+
+  /**
+   * The element an `instanceOf <text>` written directly in `container` (a
+   * node body) would deploy, as an absolute FQN: `text` is looked up as
+   * LikeC4 links `instanceOf` — the document's model scope and the root
+   * elements, then unique descendants — never among nodes or instances.
+   * Undefined when it does not resolve (an unknown or ambiguous name).
+   */
+  resolveElementText(text: string, container: DeploymentAstNode): string | undefined {
+    const ref = writtenRef(text, container);
+    const linked = ref && this.resolveRef(ref, 'element');
+    return linked?.type === 'Element' ? linked.fqn : undefined;
   }
 
   /** What a parsed `FqnRef` of a deployment model or deployment view links to. */
@@ -371,6 +379,17 @@ export class DeploymentResolver {
     const owner = body.$container && this.declarationOf.get(body.$container);
     return owner ? { deployment: owner.id } : undefined;
   }
+}
+
+/** The `FqnRef` chain of `text` (`a.b.c`) as if written directly in `container`. */
+function writtenRef(text: string, container: DeploymentAstNode): RefLike | undefined {
+  let ref: RefLike | undefined;
+  for (const segment of text.split('.')) {
+    ref = ref === undefined
+      ? { $type: 'FqnRef', $container: container as AstLike, value: { $refText: segment } }
+      : { $type: 'FqnRef', parent: ref, $container: container as AstLike, value: { $refText: segment } };
+  }
+  return ref;
 }
 
 function toTarget(linked: Linked | undefined): LinkedTarget | undefined {

@@ -62,7 +62,7 @@ import {
   type AddElementOpts,
   type UpdateElementPatch,
 } from './element-ops.js';
-import { generateDeploymentNode, type ElementStyle, type RelationshipStyle } from './codegen.js';
+import { generateDeployedInstance, generateDeploymentNode, type ElementStyle, type RelationshipStyle } from './codegen.js';
 import {
   chooseDeploymentPlacement,
   declarationBodyInsertEdit,
@@ -72,6 +72,7 @@ import {
   nodeDeclaration,
   relationEndpointInSubtree,
   viewReferencesIntoSubtree,
+  type AddDeploymentInstanceOpts,
   type AddDeploymentNodeOpts,
   type UpdateDeploymentNodePatch,
 } from './deployment-ops.js';
@@ -103,6 +104,7 @@ import {
 
 export type { AddElementOpts, UpdateElementPatch };
 export type { AddDeploymentNodeOpts, UpdateDeploymentNodePatch };
+export type { AddDeploymentInstanceOpts };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
@@ -1099,6 +1101,93 @@ export class LikeC4Mutator {
       throw err;
     }
     return { removedRelationships };
+  }
+
+  /**
+   * Add a deployed instance of element `opts.element` to deployment node
+   * `nodeId` and return its id (see {@link getDeploymentInstance}).  It is
+   * written at the end of the body of the node's declaration (a body
+   * `{ ... }` is created when the declaration has none), also when the node
+   * has children in `extend` blocks: `name = instanceOf element`, or
+   * `instanceOf element` without a name, with the title inline (an empty
+   * title is written as `''`) and summary, description, technology, tags,
+   * links, style and metadata in the body — an instance has no inline
+   * technology.
+   *
+   * Without `name` the instance is unnamed and LikeC4 names it after the
+   * last segment of `element` as written (`instanceOf app.api` is `api`);
+   * that id must be free, otherwise a name has to be given.
+   *
+   * The write is rejected, with no file changed, when:
+   *  - `name` is not one identifier or is reserved — `name`;
+   *  - `element` is not an element reference, or does not resolve as
+   *    LikeC4 links `instanceOf` from the node's body (the document's model
+   *    scope and the root elements, then unique descendants; nodes and
+   *    instances are never candidates) — `element`;
+   *  - a tag is not declared, or a style value is invalid — `tags[i]`,
+   *    `style.<field>`;
+   *  - `file` is given — `file`;
+   *  - `nodeId` is not declared, is an instance, or is declared more than
+   *    once — `node`;
+   *  - a node or instance of any loaded file already has the new id
+   *    (children declared in `extend` blocks included) — `name`;
+   *  - the new instance would change what an existing reference links to (a
+   *    deployment relationship endpoint, a deployment view rule, ...) —
+   *    `name`.
+   *
+   * @param nodeId - Deployment id of the node the instance is deployed in
+   * @param opts   - Element, name and properties of the new instance
+   * @returns The id of the new instance.
+   */
+  addDeploymentInstance(nodeId: string, opts: AddDeploymentInstanceOpts): string {
+    if (opts.name !== undefined) checkElementName(opts.name);
+    checkReferenceForm(opts.element, 'element');
+    checkTags(opts.tags, this.workspace);
+    checkStyle(opts.style, 'element', this.workspace);
+    if (opts.file !== undefined) {
+      throw new InvalidWriteError(
+        'file',
+        `an instance is written in the declaration of its node '${nodeId}'; file is not accepted`,
+      );
+    }
+    const node = nodeDeclaration(this.deployments, nodeId, 'node');
+    if (node.file === undefined) throw new Error(`Internal error: declaration of '${nodeId}' has no file name`);
+    const resolver = new DeploymentResolver(this.deployments, this.workspace);
+    if (resolver.resolveElementText(opts.element, node.node) === undefined) {
+      throw new InvalidWriteError(
+        'element',
+        `'${opts.element}' does not resolve to one element from '${nodeId}': instanceOf is looked up in the ` +
+          `document's model scope and among the root elements, then among unique descendants ` +
+          `(LikeC4 would report: Could not resolve reference)`,
+      );
+    }
+    const name = opts.name ?? opts.element.slice(opts.element.lastIndexOf('.') + 1);
+    const id = `${nodeId}.${name}`;
+    if (this.deployments.has(id)) {
+      // LikeC4 reports a duplicate for two nodes or instances of one id
+      // anywhere in the project.
+      throw new InvalidWriteError(
+        'name',
+        opts.name === undefined
+          ? `the implicit id '${id}' of an unnamed instance of '${opts.element}' is already used by a node or ` +
+              `instance (in a loaded file); give the instance a name`
+          : `a node or instance '${id}' is already declared (in a loaded file)`,
+      );
+    }
+
+    const { file: _file, ...props } = opts;
+    const doc = this.document(node.file);
+    const edit = declarationBodyInsertEdit(doc, node.node, (indent) => generateDeployedInstance({ indent, ...props }));
+    const before = this.referenceSnapshot();
+    const snapshot = this.snapshot();
+    try {
+      this.applyEdit(node.file, edit);
+      this.rejectChangedReferences(before, new Map([[node.file, insertedRanges(doc.fullText, [edit])]]), id);
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+    return id;
   }
 
   // ---------------------------------------------------------------------------

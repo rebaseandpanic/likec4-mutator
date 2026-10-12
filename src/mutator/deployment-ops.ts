@@ -54,6 +54,43 @@ export interface AddDeploymentNodeOpts {
   file?: string;
 }
 
+/** Options of `LikeC4Mutator.addDeploymentInstance`. */
+export interface AddDeploymentInstanceOpts {
+  /**
+   * The deployed element, written after `instanceOf` as given (`app.api`)
+   * and resolved as LikeC4 links `instanceOf`: the document's model scope
+   * and the root elements, then unique descendants
+   */
+  element: string;
+  /**
+   * Instance name: one identifier; the instance's id is the node's id + `.`
+   * + name.  Without it the instance is written unnamed and its name is the
+   * last segment of `element` as written
+   */
+  name?: string;
+  /** Title, written inline after the element (`''` is written as `''`) */
+  title?: string;
+  /** Summary, written in the body */
+  summary?: string;
+  /** Description, written in the body */
+  description?: string;
+  /** Technology, written in the body (an instance has no inline technology) */
+  technology?: string;
+  /** Tags, declared by a specification; a leading `#` is optional */
+  tags?: string[];
+  /** Links, each a URL with an optional label */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata: key → value, or a list of values */
+  metadata?: Record<string, string | string[]>;
+  /** Style, as for an element */
+  style?: ElementStyle;
+  /**
+   * Not accepted: an instance is written in the declaration of its node.  A
+   * value is rejected on `file`.
+   */
+  file?: never;
+}
+
 /** A `deployment { ... }` block of a document (`ModelDeployments`). */
 interface DeploymentBlockNode {
   $cstNode?: CstNodeLike;
