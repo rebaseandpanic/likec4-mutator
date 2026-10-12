@@ -14,6 +14,7 @@ import {
   type DeploymentElementSource,
   type DeploymentInstanceFilter,
   type DeploymentNodeFilter,
+  type DeploymentRelationshipFilter,
 } from '../query/deployment-query.js';
 import { DeploymentResolver } from '../query/deployment-resolver.js';
 import { forEachElementDeclaration } from '../query/fqn.js';
@@ -36,6 +37,7 @@ import type {
   DeploymentInstanceInfo,
   DeploymentNodeInfo,
   DeploymentNodeKindDefaults,
+  DeploymentRelationshipInfo,
   ElementInfo,
   RelationshipInfo,
   SpecificationInfo,
@@ -306,6 +308,23 @@ export class LikeC4Mutator {
    */
   listDeploymentInstances(opts?: DeploymentInstanceFilter): DeploymentInstanceInfo[] {
     return this.deploymentQuery.listInstances(opts);
+  }
+
+  /**
+   * List the relationships of the deployment model of every file (not
+   * those of the logical model, which {@link getRelationships} returns), in
+   * LikeC4 document order, then source order.  Endpoints are deployment ids,
+   * plus the element FQN when an endpoint steps into an instance's element
+   * (`prod.db.replLog`).  A relationship whose endpoint does not resolve is
+   * not listed, as LikeC4 drops it.
+   *
+   * @param opts.source - Only relationships from this node or instance; an
+   *                      instance id also matches sources that step into its element
+   * @param opts.target - Only relationships to this node or instance, as for `source`
+   * @param opts.kind   - Only relationships of this kind
+   */
+  listDeploymentRelationships(opts?: DeploymentRelationshipFilter): DeploymentRelationshipInfo[] {
+    return this.deploymentQuery.listRelationships(opts);
   }
 
   // ---------------------------------------------------------------------------

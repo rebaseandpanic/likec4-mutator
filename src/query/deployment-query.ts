@@ -1,31 +1,41 @@
 /**
- * Read API of the deployment model: deployment nodes and instances with
- * their effective values and provenance.
+ * Read API of the deployment model: deployment nodes, instances and
+ * relationships with their effective values and provenance.
  *
  * Effective values are LikeC4 1.59.4's computed model (language-server
- * `DeploymentModelParser.parseDeploymentNode` / `parseDeployedInstance`,
- * `MergedSpecification.toDeploymentElement`, `MergedExtends`, and the
- * `DeploymentNodeModel` / `DeployedInstanceModel` getters of
+ * `DeploymentModelParser.parseDeploymentNode` / `parseDeployedInstance` /
+ * `parseDeploymentRelation`, `MergedSpecification.toDeploymentElement` /
+ * `toDeploymentRelation`, `MergedExtends`, and the `DeploymentNodeModel` /
+ * `DeployedInstanceModel` / `DeploymentRelationModel` getters of
  * `@likec4/core`), except that summary and description are reported per
  * field, without the getters' fallback from one to the other (D2), and that
  * an instance inherits the library's element values, which derive no
  * technology from an icon (D10).
  */
-import type { DeploymentAstNode, DeploymentDeclaration, DeploymentIndex } from './deployment-index.js';
-import type { DeploymentResolver } from './deployment-resolver.js';
+import type {
+  DeploymentAstNode,
+  DeploymentDeclaration,
+  DeploymentIndex,
+  DeploymentRelationRef,
+} from './deployment-index.js';
+import type { DeploymentResolver, DeploymentTarget } from './deployment-resolver.js';
 import { mergeContributions, readContribution, readDeclared, type Decorations } from './extend-merge.js';
 import { markdownAsString, markdownOrString, readMarkdownOrString, removeIndent, type MarkdownOrString } from './likec4-text.js';
 import { toSourceRange } from './source-range.js';
-import { mergeStyle, readElementStyle } from './style-read.js';
+import { relationDecorationSource, relationKind, type RelationNodeLike } from './relation-node.js';
+import { mergeStyle, readElementStyle, readRelationshipStyle } from './style-read.js';
 import type {
+  DeploymentEndpoint,
   DeploymentInstanceInfo,
   DeploymentNodeInfo,
   DeploymentNodeKindDefaults,
+  DeploymentRelationshipInfo,
   ElementInfo,
   ExtendContribution,
+  KindDefaults,
 } from './types.js';
 import type { WorkspaceIndex } from './workspace-index.js';
-import type { ElementStyle } from '../mutator/codegen.js';
+import type { ElementStyle, RelationshipStyle } from '../mutator/codegen.js';
 
 /** Own strings of a node or instance declaration, read as LikeC4 `parseBaseProps` reads them. */
 interface OwnStrings {
@@ -49,6 +59,19 @@ export interface DeploymentInstanceFilter {
   nodeId?: string;
   /** Only the instances of this element (absolute FQN, as resolved) */
   element?: string;
+}
+
+/** Filters of {@link DeploymentQuery.listRelationships}. */
+export interface DeploymentRelationshipFilter {
+  /**
+   * Only relationships whose source is this node or instance — including a
+   * source that steps into the element of this instance
+   */
+  source?: string;
+  /** Only relationships whose target is this node or instance, as for `source` */
+  target?: string;
+  /** Only relationships of this kind, as written */
+  kind?: string;
 }
 
 /** The logical elements an instance inherits from. */
@@ -135,6 +158,27 @@ export class DeploymentQuery {
   }
 
   /**
+   * Every deployment relationship whose endpoints resolve, in LikeC4
+   * document order, then source order; optionally filtered.  A relationship
+   * with an endpoint that does not resolve is skipped, as LikeC4 drops it.
+   */
+  listRelationships(filter?: DeploymentRelationshipFilter): DeploymentRelationshipInfo[] {
+    const out: DeploymentRelationshipInfo[] = [];
+    for (const relation of this.index.relations()) {
+      const endpoints = this.resolver.relationEndpoints(relation);
+      if (!endpoints || !this.isReported(endpoints.source.deployment) || !this.isReported(endpoints.target.deployment)) {
+        continue;
+      }
+      if (filter?.source !== undefined && endpoints.source.deployment !== filter.source) continue;
+      if (filter?.target !== undefined && endpoints.target.deployment !== filter.target) continue;
+      const info = this.toRelationshipInfo(relation, endpoints.source, endpoints.target);
+      if (filter?.kind !== undefined && info.kind !== filter.kind) continue;
+      out.push(info);
+    }
+    return out;
+  }
+
+  /**
    * True when `id` is part of the model: declared — an instance with an
    * `instanceOf` target that resolves — and its parent (if any) is part of
    * the model.  LikeC4 drops an instance whose target does not resolve, and
@@ -175,6 +219,56 @@ export class DeploymentQuery {
       ...(style && { style }),
       declared: readDeclared(node.body),
       ...(declaration.file !== undefined && { file: declaration.file }),
+      sourceRange: toSourceRange(cstOf(node)),
+    };
+  }
+
+  private toRelationshipInfo(
+    relation: DeploymentRelationRef,
+    source: DeploymentTarget,
+    target: DeploymentTarget,
+  ): DeploymentRelationshipInfo {
+    const node = relation.node;
+    const relationNode = node as RelationNodeLike;
+    const own = readRelationStrings(node);
+    const kind = relationKind(relationNode);
+    const kindSpec = kind === undefined ? undefined : this.workspace.relationshipKind(kind);
+    const defaults = kindSpec?.defaults;
+    const bidirectional = node['isBidirectional'] === true;
+
+    // `toDeploymentRelation`: `{ ...kind, ...own }`, own links else the
+    // kind's, the kind's tags prepended.  The getters then read an empty
+    // title as none and an empty technology as the kind's.
+    const title = own.title ?? defaults?.title;
+    const technology = own.technology || defaults?.technology;
+    const contribution = readContribution(relationDecorationSource(relationNode));
+    const tags = unique([...(kindSpec?.contribution.tags ?? []), ...(contribution.tags ?? [])]);
+    const links = contribution.links ?? copy(kindSpec?.contribution.links);
+    const kindStyle = kindSpec?.style as RelationshipStyle | undefined;
+    let style = mergeStyle(kindStyle, readRelationshipStyle(node.body?.['props'] as unknown[] | undefined));
+    // `applyBidirectional`: a bidirectional relationship has a tail — the
+    // one written, else the head, else 'normal'.
+    if (bidirectional) style = { ...style, tail: style?.tail ?? style?.head ?? 'normal' };
+    const fromSpecification: (KindDefaults & { style?: RelationshipStyle }) | undefined = kindSpec && {
+      ...structuredClone(kindSpec.defaults),
+      ...(kindStyle && { style: structuredClone(kindStyle) }),
+    };
+
+    return {
+      source: toEndpoint(source),
+      target: toEndpoint(target),
+      ...(kind !== undefined && { kind }),
+      bidirectional,
+      ...(title && { title }),
+      description: own.description ?? defaults?.description,
+      technology,
+      tags: tags.length > 0 ? tags : undefined,
+      links,
+      metadata: contribution.metadata,
+      ...(style && { style }),
+      ...(fromSpecification && { fromSpecification }),
+      declared: readDeclared(relationDecorationSource(relationNode)),
+      ...(relation.file !== undefined && { file: relation.file }),
       sourceRange: toSourceRange(cstOf(node)),
     };
   }
@@ -287,6 +381,36 @@ export function readOwnStrings(node: DeploymentAstNode): OwnStrings {
     ...(description !== undefined && { description }),
     ...(technology !== undefined && { technology }),
   };
+}
+
+/**
+ * Title, description and technology of a deployment relationship as LikeC4
+ * `parseDeploymentRelation` reads them: the title written after the target
+ * (an empty one included), otherwise the body `title`; description and
+ * technology from the body only — those written on the relation line are
+ * ignored, as LikeC4 ignores them.  A body property without a value does
+ * not count; of a repeated key the last counts.
+ */
+function readRelationStrings(node: DeploymentAstNode): Omit<OwnStrings, 'summary'> {
+  const body: Partial<Record<string, MarkdownOrString>> = {};
+  for (const raw of (node.body?.['props'] as unknown[] | undefined) ?? []) {
+    const prop = raw as { $type?: string; key?: string; value?: unknown };
+    if (prop.$type !== 'RelationStringProperty' || prop.key === undefined || !prop.value) continue;
+    body[prop.key] = readMarkdownOrString(prop);
+  }
+  const inlineTitle = node['title'];
+  const title = typeof inlineTitle === 'string' ? removeIndent(inlineTitle) : markdownAsString(body['title']);
+  const description = markdownOrString(body['description']);
+  const technology = markdownAsString(body['technology']);
+  return {
+    ...(title !== undefined && { title }),
+    ...(description !== undefined && { description }),
+    ...(technology !== undefined && { technology }),
+  };
+}
+
+function toEndpoint(target: DeploymentTarget): DeploymentEndpoint {
+  return target.element === undefined ? { id: target.deployment } : { id: target.deployment, element: target.element };
 }
 
 /**

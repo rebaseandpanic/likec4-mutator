@@ -875,6 +875,67 @@ The effective values are LikeC4's (`DeploymentInstanceInfo`):
 - Two documented differences from LikeC4's model getters: summary and description are inherited field by field — LikeC4 shows the description as the summary (and the reverse) when only one of them is set, the library does not; and no technology is derived from an icon (LikeC4's `inferTechnologyFromIcon`, on by default), as for elements.
 - An instance whose `instanceOf` reference does not resolve is not reported, as LikeC4 drops it. Instances cannot be extended; `declared` holds the tags, links and metadata of the instance's own body as written.
 
+#### Relationships
+
+`listDeploymentRelationships({ source?, target?, kind? })` lists the relationships of the deployment model in LikeC4 document order; `getRelationships()` keeps returning the logical model only. Each endpoint is `{ id, element? }`: the deployment id of a node or instance, plus the element FQN when the endpoint steps into the element of an instance (`vm1.db.replLog`). A `source` / `target` filter by an instance id also matches endpoints that step into its element.
+
+```
+specification {
+  element service
+  deploymentNode vm
+  relationship replicates {
+    #data
+    technology 'TCP'
+    line dotted
+  }
+  tag data
+}
+model {
+  db = service {
+    replLog = service
+  }
+}
+deployment {
+  vm vm1 {
+    instanceOf db
+  }
+  vm vm2 {
+    instanceOf db
+    -> vm1 'heartbeat'
+  }
+  vm2.db -[replicates]-> vm1.db.replLog 'streams WAL'
+  vm1.db <-> vm2.db 'sync'
+}
+```
+
+```typescript
+mutator.listDeploymentRelationships();
+// [
+//   { source: { id: 'vm2' }, target: { id: 'vm1' }, bidirectional: false, title: 'heartbeat', ... },
+//   { source: { id: 'vm2.db' }, target: { id: 'vm1.db', element: 'db.replLog' }, kind: 'replicates',
+//     bidirectional: false, title: 'streams WAL', technology: 'TCP', tags: ['data'], style: { line: 'dotted' }, ... },
+//   { source: { id: 'vm1.db' }, target: { id: 'vm2.db' }, bidirectional: true, title: 'sync', style: { tail: 'normal' }, ... },
+// ]
+mutator.listDeploymentRelationships({ target: 'vm1.db' });   // ['streams WAL']
+```
+
+The effective values are LikeC4's (`DeploymentRelationshipInfo`):
+
+| Property | Rule |
+| --- | --- |
+| `source` | as written; for a relationship written without a source (`-> vm1`), the enclosing node or instance |
+| `kind` | `-[kind]->`, `-[kind]<->` or `.kind`, as written |
+| `title` | own (after the target, else in the body), else the kind's; an empty one is no title |
+| `description` | the body `description`, else the kind's. A description or technology written on the relation line is ignored, as LikeC4 ignores it |
+| `technology` | the body `technology` when non-empty, else the kind's |
+| `tags` | the kind's, then the tags written on the relation line — or, when there are none there, those of the body — without duplicates |
+| `links` | own, else the kind's |
+| `metadata` | the first `metadata { ... }` block |
+| `style` | the kind's style overridden field by field by the own `style { ... }`. A bidirectional relationship always has a `tail`, as LikeC4 computes it: the one written, else the `head`, else `'normal'` |
+
+- A relationship whose source or target does not resolve (an unknown or ambiguous name) is not listed, as LikeC4 drops it. Deployment relationships cannot be extended.
+- `declared` holds the tags, links and metadata written in the relationship, `fromSpecification` the kind's declaration with its style.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

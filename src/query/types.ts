@@ -484,8 +484,9 @@ export interface DeploymentRelationshipInfo {
   /** Whether the relationship is bidirectional (`<->`, `-[k]<->`) */
   bidirectional: boolean;
   /**
-   * Title: its own when non-empty, otherwise the title of its kind when that
-   * declares one, as LikeC4 computes it
+   * Title, as LikeC4 computes it: its own (written after the target, else
+   * in the body), otherwise the title of its kind; an empty own title is no
+   * title, also when the kind declares one
    */
   title?: string;
   /** Description: the body `description` property, otherwise the description of its kind */
@@ -506,7 +507,9 @@ export interface DeploymentRelationshipInfo {
   metadata?: Record<string, string | string[]>;
   /**
    * Effective style: the style of its kind overridden field by field by its
-   * own `style { ... }` block, values as written
+   * own `style { ... }` block, values as written.  A bidirectional
+   * relationship always has a `tail`, as LikeC4 computes it: the one
+   * written, otherwise its `head`, otherwise `'normal'`.
    */
   style?: RelationshipStyle;
   /**
