@@ -805,6 +805,76 @@ The effective values are LikeC4's (`DeploymentNodeInfo`):
 - `declared` holds the tags, links and metadata of the node's own body as written, `fromSpecification` the kind's declaration (`DeploymentNodeKindDefaults`).
 - A node whose kind no specification declares is still reported (LikeC4 leaves it out of its model), with its own values only. A node declared inside an `extend` block of a node that does not exist is not reported, as LikeC4 drops it. An id declared twice (a LikeC4 error) is listed once per declaration; `getDeploymentNode` returns the first in document order.
 
+#### Instances
+
+`getDeploymentInstance(id)` returns an instance (`instanceOf <element>`) by its deployment id — the id of its node + `.` + name — or `null`. `listDeploymentInstances({ nodeId?, element? })` lists instances of every file in LikeC4 document order; `nodeId` matches the instances directly in that node, `element` the FQN the `instanceOf` reference resolves to (not the text as written). An instance written without a name is named after the last segment of its reference as written: `instanceOf app.api` is `api`.
+
+```
+specification {
+  element service
+  deploymentNode vm
+  tag backend
+  tag replica
+}
+model {
+  api = service 'API' {
+    #backend
+    summary 'Public API'
+    technology 'Go'
+    metadata {
+      owner 'team-a'
+    }
+    style {
+      shape browser
+    }
+  }
+}
+deployment {
+  vm vm1 {
+    instanceOf api
+    replica = instanceOf api 'API replica' {
+      #replica
+      metadata {
+        region 'eu'
+      }
+      style {
+        color red
+      }
+    }
+  }
+}
+```
+
+```typescript
+const api = mutator.getDeploymentInstance('vm1.api')!;
+api.element;     // 'api'
+api.title;       // 'API' (inherited)
+api.technology;  // 'Go' (inherited)
+api.metadata;    // { owner: 'team-a' } (inherited)
+
+const replica = mutator.getDeploymentInstance('vm1.replica')!;
+replica.title;     // 'API replica'
+replica.summary;   // 'Public API' (inherited)
+replica.tags;      // ['replica', 'backend']
+replica.metadata;  // { region: 'eu' } — an own map replaces the element's
+replica.style;     // { shape: 'browser', color: 'red' }
+
+mutator.listDeploymentInstances({ element: 'api' });  // [vm1.api, vm1.replica]
+```
+
+The effective values are LikeC4's (`DeploymentInstanceInfo`):
+
+| Property | Rule |
+| --- | --- |
+| `title` | own when written (`''` included); else the element's title |
+| `summary`, `description`, `technology`, `links` | own, else the element's (as `getElement` reports it) |
+| `metadata` | the own map, else the element's map — an own map replaces the element's whole map, keys are not merged |
+| `tags` | own, then the element's, without duplicates |
+| `style` | the element's style (its kind's style overridden by its own) overridden field by field by the instance's own `style { ... }` |
+
+- Two documented differences from LikeC4's model getters: summary and description are inherited field by field — LikeC4 shows the description as the summary (and the reverse) when only one of them is set, the library does not; and no technology is derived from an icon (LikeC4's `inferTechnologyFromIcon`, on by default), as for elements.
+- An instance whose `instanceOf` reference does not resolve is not reported, as LikeC4 drops it. Instances cannot be extended; `declared` holds the tags, links and metadata of the instance's own body as written.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

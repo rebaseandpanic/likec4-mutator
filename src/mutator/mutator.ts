@@ -9,7 +9,14 @@
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
 import { DeploymentIndex } from '../query/deployment-index.js';
-import { DeploymentQuery, type DeploymentNodeFilter } from '../query/deployment-query.js';
+import {
+  DeploymentQuery,
+  type DeploymentElementSource,
+  type DeploymentInstanceFilter,
+  type DeploymentNodeFilter,
+} from '../query/deployment-query.js';
+import { DeploymentResolver } from '../query/deployment-resolver.js';
+import { forEachElementDeclaration } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
   WorkspaceIndex,
@@ -26,6 +33,7 @@ import { removeIndent } from '../query/likec4-text.js';
 import { readContribution, type Decorations } from '../query/extend-merge.js';
 import { specificationKinds } from '../query/kind-specs.js';
 import type {
+  DeploymentInstanceInfo,
   DeploymentNodeInfo,
   DeploymentNodeKindDefaults,
   ElementInfo,
@@ -147,7 +155,7 @@ export class LikeC4Mutator {
     this.queries = new Map();
     this.workspace = new WorkspaceIndex([]);
     this.deployments = new DeploymentIndex([]);
-    this.deploymentQuery = new DeploymentQuery(this.deployments, this.workspace);
+    this.deploymentQuery = this.createDeploymentQuery();
     this.parseAll();
   }
 
@@ -275,6 +283,29 @@ export class LikeC4Mutator {
    */
   listDeploymentNodes(opts?: DeploymentNodeFilter): DeploymentNodeInfo[] {
     return this.deploymentQuery.listNodes(opts);
+  }
+
+  /**
+   * Return the instance with deployment id `id` (its node's id + `.` + name,
+   * e.g. 'prod.vm1.api'), with its effective values — its own, otherwise
+   * those of its element — and their provenance (see
+   * {@link DeploymentInstanceInfo}).  Returns null when no instance has the
+   * id, or when its `instanceOf` target does not resolve (LikeC4 drops such
+   * an instance).  An id declared more than once (a LikeC4 error) is
+   * reported from its first declaration in LikeC4 document order.
+   */
+  getDeploymentInstance(id: string): DeploymentInstanceInfo | null {
+    return this.deploymentQuery.instance(id);
+  }
+
+  /**
+   * List instances of every file, in LikeC4 document order, optionally
+   * filtered by the node that holds them (direct instances only) and by the
+   * FQN of their element (as resolved, not as written).  An id declared more
+   * than once is listed once per declaration.
+   */
+  listDeploymentInstances(opts?: DeploymentInstanceFilter): DeploymentInstanceInfo[] {
+    return this.deploymentQuery.listInstances(opts);
   }
 
   // ---------------------------------------------------------------------------
@@ -811,11 +842,31 @@ export class LikeC4Mutator {
     const documents = [...this.documents].map(([file, doc]) => ({ file, ast: doc.ast }));
     this.workspace = new WorkspaceIndex(documents);
     this.deployments = new DeploymentIndex(documents);
-    this.deploymentQuery = new DeploymentQuery(this.deployments, this.workspace);
     this.queries = new Map();
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));
     }
+    this.deploymentQuery = this.createDeploymentQuery();
+  }
+
+  /**
+   * Deployment reads over the current indices.  An instance inherits from
+   * the element {@link getElement} reports: the first declaration of the
+   * FQN in file order.
+   */
+  private createDeploymentQuery(): DeploymentQuery {
+    const nodes = new Map<string, unknown>();
+    for (const doc of this.documents.values()) {
+      forEachElementDeclaration(doc.ast, (node, fqn) => {
+        if (!nodes.has(fqn)) nodes.set(fqn, node);
+      });
+    }
+    const elements: DeploymentElementSource = {
+      info: (fqn) => this.getElement(fqn),
+      node: (fqn) => nodes.get(fqn),
+    };
+    const resolver = new DeploymentResolver(this.deployments, this.workspace);
+    return new DeploymentQuery(this.deployments, this.workspace, resolver, elements);
   }
 
   /**

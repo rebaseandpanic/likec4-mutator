@@ -1,20 +1,29 @@
 /**
- * Read API of the deployment model: deployment nodes with their effective
- * values and provenance.
+ * Read API of the deployment model: deployment nodes and instances with
+ * their effective values and provenance.
  *
  * Effective values are LikeC4 1.59.4's computed model (language-server
- * `DeploymentModelParser.parseDeploymentNode`,
+ * `DeploymentModelParser.parseDeploymentNode` / `parseDeployedInstance`,
  * `MergedSpecification.toDeploymentElement`, `MergedExtends`, and the
- * `DeploymentNodeModel` getters of `@likec4/core`), except that summary and
- * description are reported per field, without the getters' fallback from
- * one to the other (D2).
+ * `DeploymentNodeModel` / `DeployedInstanceModel` getters of
+ * `@likec4/core`), except that summary and description are reported per
+ * field, without the getters' fallback from one to the other (D2), and that
+ * an instance inherits the library's element values, which derive no
+ * technology from an icon (D10).
  */
 import type { DeploymentAstNode, DeploymentDeclaration, DeploymentIndex } from './deployment-index.js';
+import type { DeploymentResolver } from './deployment-resolver.js';
 import { mergeContributions, readContribution, readDeclared, type Decorations } from './extend-merge.js';
 import { markdownAsString, markdownOrString, readMarkdownOrString, removeIndent, type MarkdownOrString } from './likec4-text.js';
 import { toSourceRange } from './source-range.js';
 import { mergeStyle, readElementStyle } from './style-read.js';
-import type { DeploymentNodeInfo, DeploymentNodeKindDefaults, ExtendContribution } from './types.js';
+import type {
+  DeploymentInstanceInfo,
+  DeploymentNodeInfo,
+  DeploymentNodeKindDefaults,
+  ElementInfo,
+  ExtendContribution,
+} from './types.js';
 import type { WorkspaceIndex } from './workspace-index.js';
 import type { ElementStyle } from '../mutator/codegen.js';
 
@@ -34,15 +43,35 @@ export interface DeploymentNodeFilter {
   parentId?: string;
 }
 
+/** Filters of {@link DeploymentQuery.listInstances}. */
+export interface DeploymentInstanceFilter {
+  /** Only the instances directly in this node */
+  nodeId?: string;
+  /** Only the instances of this element (absolute FQN, as resolved) */
+  element?: string;
+}
+
+/** The logical elements an instance inherits from. */
+export interface DeploymentElementSource {
+  /** Effective values of the element with this FQN, as the library reads them; null when there is none */
+  info(fqn: string): ElementInfo | null;
+  /** The `Element` AST node of the element with this FQN, for its style */
+  node(fqn: string): unknown;
+}
+
 /** Reads of the deployment model over a {@link DeploymentIndex}. */
 export class DeploymentQuery {
   /**
    * @param index     - Deployment index of the workspace
    * @param workspace - Element index of the same documents (specification kinds)
+   * @param resolver  - Resolver of the same documents (`instanceOf` targets)
+   * @param elements  - The logical elements of the same documents
    */
   constructor(
     private readonly index: DeploymentIndex,
     private readonly workspace: WorkspaceIndex,
+    private readonly resolver: DeploymentResolver,
+    private readonly elements: DeploymentElementSource,
   ) {}
 
   /**
@@ -76,15 +105,86 @@ export class DeploymentQuery {
   }
 
   /**
-   * True when `id` is part of the model: declared, and its parent (if any)
-   * is part of the model.  LikeC4 drops a declaration whose parent is not in
-   * its model (`No parent found`) — e.g. one inside an `extend` block of a
-   * node that does not exist.
+   * The instance with deployment id `id`; null when no instance has it.
+   * When the id is declared more than once (a LikeC4 error), the first
+   * declaration in LikeC4 document order is reported.
+   */
+  instance(id: string): DeploymentInstanceInfo | null {
+    if (!this.isReported(id)) return null;
+    const declaration = this.index.declarations(id).find((d) => d.type === 'instance');
+    return declaration ? this.toInstanceInfo(declaration) : null;
+  }
+
+  /**
+   * Every instance, in LikeC4 document order, optionally filtered.  An id
+   * declared more than once is reported once per declaration.
+   */
+  listInstances(filter?: DeploymentInstanceFilter): DeploymentInstanceInfo[] {
+    const out: DeploymentInstanceInfo[] = [];
+    for (const id of this.index.ids()) {
+      if (!this.isReported(id)) continue;
+      for (const declaration of this.index.declarations(id)) {
+        if (declaration.type !== 'instance') continue;
+        if (filter?.nodeId !== undefined && declaration.parentId !== filter.nodeId) continue;
+        const info = this.toInstanceInfo(declaration);
+        if (filter?.element !== undefined && info.element !== filter.element) continue;
+        out.push(info);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * True when `id` is part of the model: declared — an instance with an
+   * `instanceOf` target that resolves — and its parent (if any) is part of
+   * the model.  LikeC4 drops an instance whose target does not resolve, and
+   * a declaration whose parent is not in its model (`No parent found`), e.g.
+   * one inside an `extend` block of a node that does not exist.
    */
   private isReported(id: string): boolean {
     const [declaration] = this.index.declarations(id);
     if (!declaration) return false;
+    if (declaration.type === 'instance' && this.resolver.instanceElement(declaration.node) === undefined) return false;
     return declaration.parentId === undefined || this.isReported(declaration.parentId);
+  }
+
+  private toInstanceInfo(declaration: DeploymentDeclaration): DeploymentInstanceInfo {
+    const { id, name, node } = declaration;
+    const fqn = this.resolver.instanceElement(node)!;
+    const element = this.elements.info(fqn);
+    const own = readOwnStrings(node);
+    const contribution = readContribution(node.body);
+
+    // `DeployedInstanceModel`: own value, else the element's; the own tags
+    // first, then the element's; an own metadata map replaces the element's.
+    const tags = unique([...(contribution.tags ?? []), ...(element?.tags ?? [])]);
+    const style = mergeStyle(this.elementStyle(fqn), readElementStyle(node.body?.['props'] as unknown[] | undefined));
+
+    return {
+      id,
+      name,
+      parentId: declaration.parentId!,
+      element: fqn,
+      title: own.title ?? element?.title ?? name,
+      summary: own.summary ?? element?.summary,
+      description: own.description ?? element?.description,
+      technology: own.technology ?? element?.technology,
+      tags: tags.length > 0 ? tags : undefined,
+      links: contribution.links ?? copy(element?.links),
+      metadata: contribution.metadata ?? copy(element?.metadata),
+      ...(style && { style }),
+      declared: readDeclared(node.body),
+      ...(declaration.file !== undefined && { file: declaration.file }),
+      sourceRange: toSourceRange(cstOf(node)),
+    };
+  }
+
+  /** The style of an element: its kind's style overridden per field by its own (body `icon` included). */
+  private elementStyle(fqn: string): ElementStyle | undefined {
+    const node = this.elements.node(fqn) as { kind?: { $refText?: string }; body?: { props?: unknown[] } } | undefined;
+    if (!node) return undefined;
+    const kind = this.workspace.elementKind(node.kind?.$refText ?? '');
+    return mergeStyle(kind?.style as ElementStyle | undefined, readElementStyle(node.body?.props));
   }
 
   private toNodeInfo(declaration: DeploymentDeclaration): DeploymentNodeInfo {
@@ -200,6 +300,10 @@ function ownOrKind(own: Decorations, kind: Decorations | undefined): Decorations
     ...(!own.tags && kind?.tags && { tags: [...kind.tags] }),
     ...(!own.links && kind?.links && { links: kind.links.map((l) => ({ ...l })) }),
   };
+}
+
+function copy<T>(value: T | undefined): T | undefined {
+  return value === undefined ? undefined : structuredClone(value);
 }
 
 function unique<T>(values: T[]): T[] {
