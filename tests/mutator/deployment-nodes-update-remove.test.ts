@@ -359,6 +359,57 @@ describe('US-8 cascade (row 52)', () => {
     expect((await linkedReferences(after)).filter((r) => r.role === 'extend' && inSubtree(r.text, id))).toEqual([]);
     await expectValidWrite(m);
   });
+
+  it('removes the relationships declared in the removed text even when both endpoints survive', async () => {
+    // Three relationships between the surviving root nodes `a` and `b`: one
+    // written in the body of `gone`, one in its extend block (both removed
+    // with their text), one at the top level (it stays).
+    const files = {
+      'a.c4': `specification {
+  deploymentNode vm
+}
+deployment {
+  vm a
+  vm b
+  vm gone {
+    a -> b 'in body'
+  }
+  a -> b 'outside'
+}
+`,
+      'b.c4': `deployment {
+  extend gone {
+    a -> b 'in extend'
+  }
+}
+`,
+    };
+    await expectValidLikeC4(files);
+    // OP: LikeC4 links all three between the root nodes `a` and `b`.
+    const { deployments } = await buildLikeC4Model(files);
+    const byTitle = (title: string) => deployments.relations.filter((r) => deployments.relationGetters[r.id]!.title === title);
+    for (const title of ['in body', 'in extend', 'outside']) {
+      expect(byTitle(title).map((r) => [r.source, r.target])).toEqual([[{ deployment: 'a' }, { deployment: 'b' }]]);
+    }
+
+    const m = LikeC4Mutator.fromFiles(files);
+    const { removedRelationships } = m.removeDeploymentNode('gone');
+    expect(removedRelationships.map((r) => JSON.stringify(r)).sort()).toEqual(
+      [
+        { source: { id: 'a' }, target: { id: 'b' }, title: 'in body' },
+        { source: { id: 'a' }, target: { id: 'b' }, title: 'in extend' },
+      ]
+        .map((r) => JSON.stringify(r))
+        .sort(),
+    );
+    const after = await buildLikeC4Model(m.serialize());
+    expect(after.deployments.relations.map((r) => [r.source, r.target, after.deployments.relationGetters[r.id]!.title])).toEqual([
+      [{ deployment: 'a' }, { deployment: 'b' }, 'outside'],
+    ]);
+    expect(m.getDeploymentNode('a')).not.toBeNull();
+    expect(m.getDeploymentNode('b')).not.toBeNull();
+    await expectValidWrite(m);
+  });
 });
 
 describe('D5: deployment views that refer to the subtree (row 53)', () => {
