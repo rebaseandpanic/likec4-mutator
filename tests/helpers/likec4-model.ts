@@ -494,7 +494,8 @@ export type ReportedStyle = Record<string, string | boolean | undefined>;
 /** A deployment node or instance as the library reports it, as far as the comparison reads it. */
 export interface ReportedDeploymentElement extends EffectiveValues {
   id: string;
-  style?: ReportedStyle;
+  /** The library's `ElementStyle` (an interface, so typed as an object) */
+  style?: object;
 }
 
 /** A deployment relationship endpoint as the library reports it. */
@@ -509,7 +510,8 @@ export interface ReportedDeploymentRelationship extends Omit<EffectiveValues, 's
   target: ReportedDeploymentEndpoint;
   kind?: string;
   bidirectional?: boolean;
-  style?: ReportedStyle;
+  /** The library's `RelationshipStyle` (an interface, so typed as an object) */
+  style?: object;
 }
 
 /**
@@ -541,10 +543,37 @@ function reportedLinks(
   return links.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, label: l.title }));
 }
 
+/**
+ * Assert a reported node or instance style against LikeC4's computed
+ * `$data` style, with the written form of D18: the same fields; `opacity`
+ * is a written percent (`'40%'`, `'040%'`, `'150%'`) whose value, clamped
+ * to 0…100 as LikeC4 does, is LikeC4's number; `icon` equals LikeC4's for a
+ * library icon, `none` and an absolute URL, and for an icon LikeC4 resolves
+ * to a file of the project (a relative or root-relative path, an image
+ * alias) it is a path or alias as written, not resolved.  The exact written
+ * spelling of such values is asserted against the input literals by the
+ * tests that write them.
+ */
+function expectSameStyle(actual: object | undefined, computed: LikeC4ModelStyle | undefined, id: string): void {
+  const expected = reportedStyle(computed);
+  expect(Object.keys(actual ?? {}).sort(), `${id} style fields`).toEqual(Object.keys(expected ?? {}).sort());
+  for (const [key, value] of Object.entries(actual ?? {})) {
+    const lc4 = computed![key];
+    if (key === 'opacity') {
+      expect(value, `${id} style.opacity`).toMatch(/^\d+%$/);
+      expect(Math.min(100, Math.max(0, parseFloat(value as string))), `${id} style.opacity`).toBe(lc4);
+    } else if (key === 'icon' && typeof lc4 === 'string' && lc4.startsWith('file:')) {
+      expect(value, `${id} style.icon`).toMatch(/^(\.{1,2}\/|\/|@)/);
+    } else {
+      expect(value, `${id} style.${key}`).toBe(lc4);
+    }
+  }
+}
+
 /** Assert one reported deployment node or instance against its expected values; `id` names it in failures. */
 function expectSameDeploymentValues(
   actual: ReportedDeploymentElement,
-  expected: Omit<ReportedDeploymentElement, 'id'>,
+  expected: Omit<ReportedDeploymentElement, 'id' | 'style'> & { style?: LikeC4ModelStyle },
   id: string,
 ): void {
   expect(actual.title, `${id} title`).toBe(expected.title);
@@ -555,7 +584,7 @@ function expectSameDeploymentValues(
   expect(actual.links, `${id} links`).toEqual(expected.links);
   expect(actual.metadata, `${id} metadata`).toEqual(expected.metadata);
   if (expected.metadata) expect(Object.keys(actual.metadata!), `${id} metadata order`).toEqual(Object.keys(expected.metadata));
-  expect(actual.style, `${id} style`).toEqual(expected.style);
+  expectSameStyle(actual.style, expected.style, id);
 }
 
 /** Getter tags / metadata in the library's shape: none → absent. */
@@ -572,7 +601,8 @@ function nonEmpty<T extends object>(value: T): T | undefined {
  * - summary and description per field from the `$data` layer (D2: no
  *   fallback between the two, which the getters add);
  * - style from the `$data` layer (kind style overridden per field by own
- *   style), opacity `N` as `'N%'`; no theme defaults.
+ *   style), no theme defaults; opacity and icon in their written form (D18,
+ *   see `expectSameStyle`).
  * The reference is built without icon inference (D10).  An empty tag list,
  * link list, metadata map or style compares as absent.
  */
@@ -595,7 +625,7 @@ export async function expectDeploymentNodesAgreeWithLikeC4(
         tags: nonEmpty([...getters.tags]),
         links: reportedLinks(getters.links),
         metadata: nonEmpty(getters.metadata),
-        style: reportedStyle(node.style),
+        style: node.style,
       },
       node.id,
     );
@@ -613,7 +643,8 @@ export async function expectDeploymentNodesAgreeWithLikeC4(
  *   `$data` layer (D2: the getters fall back between the two);
  * - technology from a build without icon inference (D10);
  * - style: the element's `$data` style overridden per field by the
- *   instance's, opacity `N` as `'N%'`.
+ *   instance's; opacity and icon in their written form (D18, see
+ *   `expectSameStyle`).
  * An empty tag list, link list, metadata map or style compares as absent.
  */
 export async function expectDeploymentInstancesAgreeWithLikeC4(
@@ -637,7 +668,7 @@ export async function expectDeploymentInstancesAgreeWithLikeC4(
         tags: nonEmpty([...getters.tags]),
         links: reportedLinks(getters.links),
         metadata: nonEmpty(getters.metadata),
-        style: reportedStyle({ ...element.style, ...instance.style }),
+        style: { ...element.style, ...instance.style },
       },
       instance.id,
     );
