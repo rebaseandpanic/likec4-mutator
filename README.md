@@ -1068,6 +1068,24 @@ mutator.updateDeploymentInstance('prod.other', { metadata: { region: null } });
 
 Rejected, with nothing changed: an `id` no instance has, that is a node or that is declared more than once (`id`, naming the declarations); an undeclared tag or an invalid style value; a metadata key that would not read as requested (`metadata.<key>`); a `tags`, `links` or `metadata` update while any loaded file has syntax errors (field `tags`, `links` or `metadata`: the element values the instance inherits could hide in that file); the other fields can still be updated then.
 
+#### Removing instances
+
+`removeDeploymentInstance(id)` removes an instance with the relationships declared in its body, and every deployment relationship in any file whose source or target is the instance or an element stepped into through it (`prod.eu.vm1.api.handler`). The element it deploys is not touched. It returns `{ removedRelationships }`, listed as for [removing nodes](#removing-nodes).
+
+```typescript
+mutator.removeDeploymentInstance('prod.eu.vm1.db');
+// { removedRelationships: [
+//   { source: { id: 'prod.eu.vm1.api' }, target: { id: 'prod.eu.vm1.db' }, title: 'queries' },
+//   { source: { id: 'prod.eu.vm1.api2' }, target: { id: 'prod.eu.vm1.db' }, title: 'replicates' },
+// ] }
+```
+
+Rejected, with nothing changed (field `id`):
+
+- an `id` no instance has, that is a node or that is declared more than once — two unnamed instances of one element in one node share an id, and the error names both;
+- a rule of a deployment view refers to the instance or to an element through it (`style prod.eu.vm1.api.handler`) — the error lists the references; views are never edited;
+- the removal would change what a surviving reference links to. With `outer { n = instanceOf app.db  prod { a { n = ... }  b { n = ... }  c { -> n } } }`, `-> n` links to `outer.n` while `n` is ambiguous below `prod`; removing `outer.prod.b.n` would make it link to `outer.prod.a.n`. A removal that only makes an ambiguous reference resolve — one that did not resolve before — is accepted.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.
