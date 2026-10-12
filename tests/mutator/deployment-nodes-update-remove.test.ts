@@ -240,6 +240,64 @@ describe('US-7 collections and the extend strip (row 48)', () => {
   });
 });
 
+describe('kind defaults after an update (US-7 with US-2)', () => {
+  const files = {
+    'a.c4': `specification {
+  deploymentNode vm {
+    #kindtag
+    title 'Kind title'
+    link https://example.com/kind 'Kind link'
+  }
+  tag kindtag
+  tag own
+}
+deployment {
+  vm a 'A' {
+    #own
+    link https://example.com/own 'Own link'
+  }
+  vm b 'B'
+  vm c 'C'
+}
+`,
+    'b.c4': `deployment {
+  extend a {
+    #own
+    link https://example.com/extend 'Extend link'
+  }
+}
+`,
+  };
+
+  it('empty tags and links clear own and extend values; the kind defaults apply as LikeC4 reads them', async () => {
+    await expectValidLikeC4(files);
+    const m = LikeC4Mutator.fromFiles(files);
+    expect(m.updateDeploymentNode('a', { tags: [], links: [] })).toEqual({ changedFiles: ['a.c4', 'b.c4'] });
+
+    const { deployments } = await buildLikeC4Model(m.serialize());
+    const getters = deployments.getters['a']!;
+    // LikeC4 keeps the kind tag and brings the kind link back.
+    expect([...getters.tags]).toEqual(['kindtag']);
+    expect(getters.links.map((l) => l.url)).toEqual(['https://example.com/kind']);
+    expect(node(m, 'a').tags).toEqual([...getters.tags]);
+    expect(node(m, 'a').links?.map((l) => l.url)).toEqual(getters.links.map((l) => l.url));
+    await expectValidWrite(m);
+  });
+
+  it('a title equal to the node name reads as the kind title; an empty title stays empty', async () => {
+    const m = LikeC4Mutator.fromFiles(files);
+    m.updateDeploymentNode('b', { title: 'b' });
+    m.updateDeploymentNode('c', { title: '' });
+
+    const { deployments } = await buildLikeC4Model(m.serialize());
+    expect(deployments.getters['b']!.title).toBe('Kind title');
+    expect(deployments.getters['c']!.title).toBe('');
+    expect(node(m, 'b').title).toBe(deployments.getters['b']!.title);
+    expect(node(m, 'c').title).toBe(deployments.getters['c']!.title);
+    await expectValidWrite(m);
+  });
+});
+
 describe('style.icon with a body icon (row 49)', () => {
   it('writes the icon where LikeC4 reads it', async () => {
     const files = {
