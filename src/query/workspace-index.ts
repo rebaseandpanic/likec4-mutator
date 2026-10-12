@@ -780,12 +780,13 @@ function uniqueAcross(scopes: LocalScope[]): LocalScope {
 }
 
 /** A document with its optional file name. */
-interface IndexedDocument {
+export interface IndexedDocument {
   file?: string;
   ast: WorkspaceDocumentAst;
 }
 
-function toWorkspaceDocument(doc: WorkspaceDocumentAst | WorkspaceDocument): IndexedDocument {
+/** A document as given to an index constructor, with its file name when it has one. */
+export function toWorkspaceDocument(doc: WorkspaceDocumentAst | WorkspaceDocument): IndexedDocument {
   if ('file' in doc && typeof doc.file === 'string' && 'ast' in doc) {
     return { file: doc.file, ast: doc.ast };
   }
@@ -798,8 +799,10 @@ const compareByPath = compareNaturalHierarchically('/');
 /**
  * Documents in the order LikeC4 merges their `extend` blocks: sorted by
  * normalized path when every document is named, otherwise as given.
+ *
+ * @throws When two file names denote the same path.
  */
-function mergeOrder(docs: IndexedDocument[]): IndexedDocument[] {
+export function mergeOrder(docs: IndexedDocument[]): IndexedDocument[] {
   if (docs.some((d) => d.file === undefined)) return docs;
   const byPath = new Map<string, string>();
   const keyed = docs.map((doc) => {
