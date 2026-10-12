@@ -14,6 +14,7 @@ import { getNodeIndent } from './indent.js';
 import { BodyInsertions } from './body-layout.js';
 import type { BodyOwnerNode, CstNodeLike } from './cst-helpers.js';
 import type { ElementStyle } from './codegen.js';
+import type { UpdateElementPatch } from './element-ops.js';
 import { checkFile, InvalidWriteError } from './write-checks.js';
 
 /** Options of `LikeC4Mutator.addDeploymentNode`. */
@@ -64,6 +65,13 @@ export interface DeploymentPlacement {
    */
   block?: DeploymentBlockNode;
 }
+
+/**
+ * Patch of `LikeC4Mutator.updateDeploymentNode`: the fields of an element
+ * patch, with the same semantics (strings, tags and links replace, style
+ * merges per field, metadata merges with `null` deleting a key).
+ */
+export type UpdateDeploymentNodePatch = UpdateElementPatch;
 
 /**
  * Choose where a root deployment construct is written (D4, D11).  The
@@ -143,29 +151,27 @@ function firstDeploymentBlock(doc: ParsedDocument): DeploymentBlockNode | undefi
 }
 
 /**
- * The declaration of the node a child is added to: `parentId` must be
- * declared exactly once, and as a node.
+ * The one declaration of deployment node `id`: the id must be declared
+ * exactly once, and as a node.  Used for the node a write addresses and for
+ * the parent a child is added to.
  *
+ * @param field - The option that holds `id` (`id`, `parent`)
  * @throws {InvalidWriteError} on `field` when nothing is declared with the
  *   id, when it is an instance, or when it is declared more than once
  *   (naming the declarations)
  */
-export function parentNodeDeclaration(
-  index: DeploymentIndex,
-  parentId: string,
-  field = 'parent',
-): DeploymentDeclaration {
-  const declarations = index.declarations(parentId);
+export function nodeDeclaration(index: DeploymentIndex, id: string, field: string): DeploymentDeclaration {
+  const declarations = index.declarations(id);
   const [declaration] = declarations;
   if (!declaration) {
-    throw new InvalidWriteError(field, `${JSON.stringify(parentId)} is not the id of a deployment node of the loaded files`);
+    throw new InvalidWriteError(field, `${JSON.stringify(id)} is not the id of a deployment node of the loaded files`);
   }
   if (declarations.length > 1) {
     const candidates = declarations.map((d) => `a ${d.type} in '${d.file ?? ''}'`).join(', ');
-    throw new InvalidWriteError(field, `'${parentId}' is declared ${declarations.length} times (${candidates}); it is ambiguous`);
+    throw new InvalidWriteError(field, `'${id}' is declared ${declarations.length} times (${candidates}); it is ambiguous`);
   }
   if (declaration.type !== 'node') {
-    throw new InvalidWriteError(field, `'${parentId}' is an instance; only a deployment node holds nodes`);
+    throw new InvalidWriteError(field, `'${id}' is an instance, not a deployment node`);
   }
   return declaration;
 }

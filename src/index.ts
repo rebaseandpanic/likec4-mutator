@@ -39,6 +39,8 @@ export type {
   AddElementOpts,
   AddViewOpts,
   RemoveElementResult,
+  UpdateDeploymentNodePatch,
+  UpdateDeploymentNodeResult,
   UpdateElementResult,
   UpdateElementPatch,
   UpdateRelationshipMatcher,

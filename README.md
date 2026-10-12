@@ -979,6 +979,22 @@ mutator.addDeploymentNode(null, { name: 'stage', kind: 'environment', file: 'dep
 - **Rejected**, with nothing changed: a `name` that is not one identifier or is reserved, or whose id is already used by a node or instance of a loaded file — children declared in `extend` blocks included (`name`); a `kind` no specification declares as a deployment node kind (`kind`); an undeclared tag (`tags[i]`); an invalid style value (`style.<field>`); a `parentId` that is not declared, is an instance or is declared more than once (`parent`, naming the declarations); `file` on a child node, or a `file` that is not loaded (`file`).
 - **References stay as they are.** A new node can change how LikeC4 links a reference that is already written: with `prod { inner { x } y }`, `prod.x` links to `prod.inner.x`, the only `x` below `prod`, until `prod.y.x` exists. The write is rejected on `name` when a reference that resolved before — a deployment relationship endpoint, an `instanceOf` target, an `extend` target, a deployment view rule or a reference of the logical model — would then resolve to another target or not at all.
 
+#### Updating nodes
+
+`updateDeploymentNode(id, patch)` patches a node with the semantics of `updateElement`, on the node's effective values, and returns `{ changedFiles }`:
+
+- `title`, `summary`, `description`, `technology` replace every declaration LikeC4 reads — inline (after the kind in `name = kind 'Title'`, after the name in `kind name 'Title'`) and in the body. A new title is written inline; summary, description and technology go into the body.
+- `tags` and `links` replace (`[]` clears them); `metadata` merges, `null` deletes a key; `style` merges per field. `style.icon` is written into the body-level `icon` when the node has one (it overrides `style { icon ... }`), else into the style block.
+- Patched tags, links and metadata keys are removed from every `extend <node>` block whose path is exactly `id`, in every file, so that the patched value is the effective one. Blocks of other nodes, descendants included, are not touched.
+- The kind is not changed. A node declared in an `extend` block is addressed by its id like any other.
+
+```typescript
+mutator.updateDeploymentNode('prod.eu', { title: 'Europe', tags: ['primary'], metadata: { owner: null } });
+// { changedFiles: ['deployment.c4', 'ext/eu.c4'] }
+```
+
+Rejected, with nothing changed: an `id` no node has, that is an instance or that is declared more than once (`id`, naming the declarations); an undeclared tag or an invalid style value; a `tags`, `links` or `metadata` update while any loaded file has syntax errors (field `tags`, `links` or `metadata`: an `extend` block could hide in that file); the other fields can still be updated then.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

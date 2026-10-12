@@ -51,6 +51,8 @@ import { applyEdits, lineEndingOf, withLineEnding, type TextEdit } from './text-
 import {
   addElementEdit,
   updateElementEdit,
+  updateDeclarationEdits,
+  deploymentNodeInlineAnchor,
   removeElementEdit,
   findExtendBlocks,
   removeExtendBlockEdit,
@@ -64,8 +66,9 @@ import {
   chooseDeploymentPlacement,
   declarationBodyInsertEdit,
   deploymentInsertEdit,
-  parentNodeDeclaration,
+  nodeDeclaration,
   type AddDeploymentNodeOpts,
+  type UpdateDeploymentNodePatch,
 } from './deployment-ops.js';
 import {
   addRelationshipEdit,
@@ -94,7 +97,7 @@ import {
 } from './write-checks.js';
 
 export type { AddElementOpts, UpdateElementPatch };
-export type { AddDeploymentNodeOpts };
+export type { AddDeploymentNodeOpts, UpdateDeploymentNodePatch };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
@@ -120,6 +123,20 @@ export interface UpdateElementResult {
    * Files whose text changed, without duplicates, in the order the files
    * were loaded.  Besides the file of the declaration this includes files
    * whose `extend` blocks lost tags, links or metadata keys.  Empty when the
+   * update changed nothing.  Describes the in-memory state: nothing is
+   * written to disk.
+   */
+  changedFiles: string[];
+}
+
+/**
+ * Result of {@link LikeC4Mutator.updateDeploymentNode}.
+ */
+export interface UpdateDeploymentNodeResult {
+  /**
+   * Files whose text changed, without duplicates, in the order the files
+   * were loaded: the file of the node's declaration and files whose
+   * `extend <node>` blocks lost tags, links or metadata keys.  Empty when the
    * update changed nothing.  Describes the in-memory state: nothing is
    * written to disk.
    */
@@ -881,7 +898,7 @@ export class LikeC4Mutator {
         `a child node is written in the declaration of its parent '${parentId}'; file is accepted for a root node only`,
       );
     }
-    const parent = parentId === null ? undefined : parentNodeDeclaration(this.deployments, parentId);
+    const parent = parentId === null ? undefined : nodeDeclaration(this.deployments, parentId, 'parent');
     const id = parentId === null ? opts.name : `${parentId}.${opts.name}`;
     if (this.deployments.has(id)) {
       // LikeC4 reports a duplicate for two nodes or instances of one id
@@ -914,6 +931,75 @@ export class LikeC4Mutator {
       throw err;
     }
     return id;
+  }
+
+  /**
+   * Update the properties of deployment node `id` (see
+   * {@link getDeploymentNode} for how ids are written).  The node must be
+   * declared exactly once; a node declared in an `extend` block is
+   * addressed by its id like any other.
+   *
+   * Semantics apply to the node's effective values, as for
+   * {@link updateElement}:
+   *  - `title`, `summary`, `description`, `technology`: REPLACE every
+   *    declaration LikeC4 reads, inline and in the body.  A new title is
+   *    written inline; summary, description and technology go into the body
+   *    (a node has no inline technology).
+   *  - `tags`, `links`: REPLACE.  An empty array clears them.
+   *  - `style`: MERGE per field.  `style.icon` is written into the body-level
+   *    `icon` property when the body has one (it overrides the style block's
+   *    icon), else into the style block.
+   *  - `metadata`: MERGE with `null` deleting a key.
+   *
+   * When the patch sets `tags` or `links`, those are removed from every
+   * `extend <node>` block whose path is exactly `id`, in every loaded file;
+   * every metadata key of the patch is removed from those blocks too.
+   * Blocks of other nodes (descendants included) are not touched.  The kind
+   * is not changed, and its defaults keep applying as LikeC4 reads them.
+   *
+   * A `tags`, `links` or `metadata` update is rejected while any loaded file
+   * has syntax errors ({@link validate}): an `extend` block could hide in it.
+   * The operation is atomic in memory.
+   *
+   * @param id    - Deployment id of the node
+   * @param patch - Properties to change (undefined = keep existing)
+   * @returns The files that changed.
+   * @throws {InvalidWriteError} on `id` when no node has the id, it is an
+   *   instance or it is declared more than once; on `tags[i]` / `style.<field>`
+   *   for an invalid value; on `tags`, `links` or `metadata` while a file has
+   *   syntax errors
+   */
+  updateDeploymentNode(id: string, patch: UpdateDeploymentNodePatch): UpdateDeploymentNodeResult {
+    checkTags(patch.tags, this.workspace);
+    checkStyle(patch.style, 'element', this.workspace);
+    const declaration = nodeDeclaration(this.deployments, id, 'id');
+    if (declaration.file === undefined) throw new Error(`Internal error: declaration of '${id}' has no file name`);
+
+    const clearing = {
+      tags: patch.tags !== undefined,
+      links: patch.links !== undefined,
+      metadataKeys: patch.metadata ? Object.keys(patch.metadata) : [],
+    };
+    const crossField = clearing.tags ? 'tags' : clearing.links ? 'links' : clearing.metadataKeys.length > 0 ? 'metadata' : undefined;
+    if (crossField !== undefined) this.rejectFieldWhileSyntaxErrors(crossField, `'${id}'`);
+
+    const editsByFile = new Map<string, TextEdit[]>();
+    const node = declaration.node as Parameters<typeof deploymentNodeInlineAnchor>[0];
+    addEditGroup(
+      editsByFile,
+      declaration.file,
+      updateDeclarationEdits(node, this.document(declaration.file), patch, deploymentNodeInlineAnchor(node), {
+        styleIconInBodyIcon: true,
+      }),
+    );
+    if (crossField !== undefined) {
+      for (const block of this.deployments.extendBlocks(id)) {
+        if (block.file === undefined) throw new Error(`Internal error: extend block of '${id}' has no file name`);
+        const extend = block.node as Parameters<typeof clearExtendContributionsEdits>[1];
+        addEditGroup(editsByFile, block.file, clearExtendContributionsEdits(this.document(block.file), extend, clearing));
+      }
+    }
+    return { changedFiles: this.applyEditGroups(editsByFile) };
   }
 
   // ---------------------------------------------------------------------------
@@ -1033,6 +1119,24 @@ export class LikeC4Mutator {
       `Cannot update ${what}: extend blocks of loaded files ` +
         `cannot be located reliably while files have syntax errors:\n` +
         errors.map((e) => `  ${e}`).join('\n'),
+    );
+  }
+
+  /**
+   * Throw an {@link InvalidWriteError} on `field`, naming every syntax error,
+   * when any loaded file does not parse: `extend` blocks in such a file
+   * cannot be located reliably, so a value they may contribute cannot be
+   * replaced.
+   *
+   * @param target - The construct being updated, for the message
+   */
+  private rejectFieldWhileSyntaxErrors(field: string, target: string): void {
+    const errors = this.validate();
+    if (errors.length === 0) return;
+    throw new InvalidWriteError(
+      field,
+      `cannot be updated on ${target} while files have syntax errors: extend blocks of loaded files ` +
+        `cannot be located reliably (${errors.join('; ')})`,
     );
   }
 
