@@ -355,6 +355,18 @@ deployment {
   });
 });
 
+describe('metadata LikeC4 cannot hold', () => {
+  // An empty list has no LikeC4 syntax, and a key must be an identifier.
+  it.each<{ label: string; metadata: MetadataPatch; field: string }>([
+    { label: 'an empty list', metadata: { key: [] }, field: 'metadata.key' },
+    { label: 'a key with a space', metadata: { 'bad key': 'v' }, field: 'metadata.bad key' },
+    { label: 'a keyword as key', metadata: { title: 'v' }, field: 'metadata.title' },
+  ])('$label → $field', ({ metadata, field }) => {
+    const m = LikeC4Mutator.fromFiles(readWorkspace('deployment-zones'));
+    expectRejected(m, field, 'prod.eu.vm1', () => m.updateDeploymentNode('prod.eu.vm1', { metadata }));
+  });
+});
+
 describe('node selectors of update and remove (row 51)', () => {
   const TWICE = {
     'a.c4': 'specification {\n  deploymentNode vm\n}\ndeployment {\n  vm prod\n}\n',

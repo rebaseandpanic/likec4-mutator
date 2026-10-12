@@ -264,7 +264,7 @@ describe('the file option (row 41, D11)', () => {
 describe('rejection classes (rows 42, 91)', () => {
   const ZONES = readWorkspace('deployment-zones');
 
-  it.each([
+  it.each<{ name: string; parent: string | null; opts: AddDeploymentNodeOpts; field: string }>([
     { name: 'an undeclared kind', parent: 'prod.eu', opts: { name: 'added', kind: 'server' }, field: 'kind' },
     { name: 'a name with a dot', parent: 'prod.eu', opts: { name: 'a.b', kind: 'host' }, field: 'name' },
     { name: 'a reserved name', parent: 'prod.eu', opts: { name: 'this', kind: 'host' }, field: 'name' },
@@ -275,6 +275,9 @@ describe('rejection classes (rows 42, 91)', () => {
     { name: 'the id of a node', parent: null, opts: { name: 'prod', kind: 'environment' }, field: 'name' },
     { name: 'an undeclared tag', parent: 'prod.eu', opts: { name: 'added', kind: 'host', tags: ['unknown'] }, field: 'tags[0]' },
     { name: 'an invalid style value', parent: 'prod.eu', opts: { name: 'added', kind: 'host', style: { color: 'unknown' } }, field: 'style.color' },
+    { name: 'an empty metadata list', parent: 'prod.eu', opts: { name: 'added', kind: 'host', metadata: { key: [] } }, field: 'metadata.key' },
+    { name: 'a metadata key with a space', parent: 'prod.eu', opts: { name: 'added', kind: 'host', metadata: { 'bad key': 'v' } }, field: 'metadata.bad key' },
+    { name: 'a keyword as metadata key', parent: 'prod.eu', opts: { name: 'added', kind: 'host', metadata: { title: 'v' } }, field: 'metadata.title' },
     { name: 'a parent that is an instance', parent: 'prod.eu.vm1.api', opts: { name: 'added', kind: 'host' }, field: 'parent' },
     { name: 'a missing parent', parent: 'prod.us', opts: { name: 'added', kind: 'host' }, field: 'parent' },
     // Row 91: unsafe parent input.
