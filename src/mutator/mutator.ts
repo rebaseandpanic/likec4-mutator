@@ -72,6 +72,7 @@ import {
 } from './codegen.js';
 import {
   checkEndpointForm,
+  checkSelectorForm,
   chooseDeploymentPlacement,
   declarationBodyInsertEdit,
   deploymentInsertEdit,
@@ -82,11 +83,14 @@ import {
   nodeDeclaration,
   placementContainer,
   relationEndpointInSubtree,
+  selectDeploymentRelationship,
   viewReferencesIntoSubtree,
   type AddDeploymentInstanceOpts,
   type AddDeploymentNodeOpts,
   type AddDeploymentRelationshipOpts,
+  type DeploymentRelationshipSelector,
   type UpdateDeploymentInstancePatch,
+  type UpdateDeploymentRelationshipPatch,
   type UpdateDeploymentNodePatch,
 } from './deployment-ops.js';
 import {
@@ -98,6 +102,7 @@ import {
   matchResolvedRelations,
   buildExtendRelationTitleEdit,
   formatNotFoundError,
+  relationPatchEdits,
   type UpdateRelationshipMatcher,
   type UpdateRelationshipPatch,
 } from './relationship-ops.js';
@@ -120,7 +125,7 @@ import {
 export type { AddElementOpts, UpdateElementPatch };
 export type { AddDeploymentNodeOpts, UpdateDeploymentNodePatch };
 export type { AddDeploymentInstanceOpts, UpdateDeploymentInstancePatch };
-export type { AddDeploymentRelationshipOpts };
+export type { AddDeploymentRelationshipOpts, DeploymentRelationshipSelector, UpdateDeploymentRelationshipPatch };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
@@ -174,6 +179,18 @@ export interface UpdateDeploymentInstanceResult {
    * Files whose text changed: the file of the instance's declaration, or
    * none when the update changed nothing.  Describes the in-memory state:
    * nothing is written to disk.
+   */
+  changedFiles: string[];
+}
+
+/**
+ * Result of {@link LikeC4Mutator.updateDeploymentRelationship}.
+ */
+export interface UpdateDeploymentRelationshipResult {
+  /**
+   * Files whose text changed: the file of the relationship, or none when
+   * the update changed nothing.  Describes the in-memory state: nothing is
+   * written to disk.
    */
   changedFiles: string[];
 }
@@ -1362,6 +1379,74 @@ export class LikeC4Mutator {
     const snippet = (indent: string): string =>
       generateDeploymentRelationship({ indent, ...props, source: from.text, target: to.text });
     this.applyEdit(placement.file, deploymentInsertEdit(doc, placement, snippet));
+  }
+
+  /**
+   * Update the deployment relationship `selector` selects: by its source
+   * and target endpoints as {@link listDeploymentRelationships} reports them
+   * (deployment id, plus the element FQN when an endpoint steps into an
+   * instance's element), optionally narrowed by kind and title (as
+   * reported: own, else the kind's).  A bidirectional relationship matches
+   * its endpoints in either order.
+   *
+   *  - `title`: REPLACE, written inline after the target (LikeC4 reads it
+   *    over a title in the body).
+   *  - `description`, `technology`: REPLACE, written in the body.  A
+   *    description or technology on the relationship line, which LikeC4
+   *    ignores, is left as written.
+   *  - `tags`: REPLACE where LikeC4 reads them — on the relationship line
+   *    when it has tags there, else in the body.  An empty array clears
+   *    them; the kind's tags keep applying.
+   *  - `links`: REPLACE.  An empty array clears them.
+   *  - `metadata`: MERGE with `null` deleting a key.
+   *  - `style`: MERGE per field.
+   *
+   * The endpoints, kind and direction are not changed.  A `tags`, `links`
+   * or `metadata` update is rejected while any loaded file has syntax errors
+   * ({@link validate}).  The operation is atomic in memory.
+   *
+   * @param selector - Endpoints and optional kind / title of the relationship
+   * @param patch    - Properties to change (undefined = keep existing)
+   * @returns The files that changed.
+   * @throws {InvalidWriteError} on `source` when no relationship or several
+   *   match (naming them); on `source.id`, `source.element`, `target.id`,
+   *   `target.element` for a malformed endpoint; on `tags[i]`,
+   *   `style.<field>`, `metadata.<key>` for an invalid value; on `tags`,
+   *   `links` or `metadata` while a file has syntax errors
+   */
+  updateDeploymentRelationship(
+    selector: DeploymentRelationshipSelector,
+    patch: UpdateDeploymentRelationshipPatch,
+  ): UpdateDeploymentRelationshipResult {
+    checkSelectorForm(selector);
+    checkTags(patch.tags, this.workspace);
+    checkStyle(patch.style, 'relationship', this.workspace);
+    checkMetadata(patch.metadata);
+    const { relation } = selectDeploymentRelationship(
+      this.deployments.relations(),
+      this.listDeploymentRelationships(),
+      selector,
+    );
+    if (relation.file === undefined) throw new Error('Internal error: a deployment relationship without a file name');
+
+    const crossField =
+      patch.tags !== undefined ? 'tags' : patch.links !== undefined ? 'links' : patch.metadata !== undefined ? 'metadata' : undefined;
+    if (crossField !== undefined) {
+      this.rejectFieldWhileSyntaxErrors(
+        crossField,
+        'a deployment relationship',
+        'where LikeC4 reads them cannot be told reliably',
+      );
+    }
+
+    const { title, ...rest } = patch;
+    const edits = relationPatchEdits(
+      relation.node as Parameters<typeof relationPatchEdits>[0],
+      this.document(relation.file).fullText,
+      { ...rest, ...(title !== undefined && { label: title }) },
+      { inlineStrings: 'body-only' },
+    );
+    return { changedFiles: this.applyEditGroups(new Map(edits.length > 0 ? [[relation.file, edits]] : [])) };
   }
 
   // ---------------------------------------------------------------------------

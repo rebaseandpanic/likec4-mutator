@@ -14,7 +14,7 @@ import type {
   DeploymentRelationRef,
 } from '../query/deployment-index.js';
 import type { DeploymentResolver, DeploymentTarget } from '../query/deployment-resolver.js';
-import type { DeploymentEndpoint } from '../query/types.js';
+import type { DeploymentEndpoint, DeploymentRelationshipInfo } from '../query/types.js';
 import { mergeOrder } from '../query/workspace-index.js';
 import type { TextEdit } from './text-edit.js';
 import { lineEndingOf, withLineEnding } from './text-edit.js';
@@ -23,6 +23,7 @@ import { BodyInsertions } from './body-layout.js';
 import type { BodyOwnerNode, CstNodeLike } from './cst-helpers.js';
 import type { ElementStyle, RelationshipStyle } from './codegen.js';
 import type { UpdateElementPatch } from './element-ops.js';
+import type { MetadataPatch } from './metadata-ops.js';
 import { checkFile, checkReferenceForm, InvalidWriteError } from './write-checks.js';
 
 /** Options of `LikeC4Mutator.addDeploymentNode`. */
@@ -117,6 +118,45 @@ export interface AddDeploymentRelationshipOpts {
    * {@link chooseDeploymentPlacement})
    */
   file?: string;
+}
+
+/**
+ * Selects one deployment relationship by what
+ * `LikeC4Mutator.listDeploymentRelationships` reports: its endpoints, and
+ * optionally its kind and title.  A bidirectional relationship matches its
+ * endpoints in either order.
+ */
+export interface DeploymentRelationshipSelector {
+  /** Source endpoint: deployment id, plus the element FQN when it steps into an instance's element */
+  source: DeploymentEndpoint;
+  /** Target endpoint, as `source` */
+  target: DeploymentEndpoint;
+  /** Kind, as reported (`calls`); narrows the match */
+  kind?: string;
+  /** Title, as reported (own, else the kind's); narrows the match */
+  title?: string;
+}
+
+/**
+ * Patch of `LikeC4Mutator.updateDeploymentRelationship`.  Strings, tags and
+ * links replace, metadata merges with `null` deleting a key, style merges
+ * per field.
+ */
+export interface UpdateDeploymentRelationshipPatch {
+  /** Title, written inline after the target */
+  title?: string;
+  /** Description, written in the body */
+  description?: string;
+  /** Technology, written in the body */
+  technology?: string;
+  /** Tags; an empty array clears them */
+  tags?: string[];
+  /** Links; an empty array clears them */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata patch: key → value to set, or `null` to delete the key */
+  metadata?: MetadataPatch;
+  /** Style fields to set */
+  style?: RelationshipStyle;
 }
 
 /** A `deployment { ... }` block of a document (`ModelDeployments`). */
@@ -313,6 +353,104 @@ export function endpointText(
     );
   }
   return { text, target: { deployment: resolved.deployment, element } };
+}
+
+/**
+ * Form check of a relationship selector: both endpoints as
+ * {@link checkEndpointForm}, `kind` and `title` strings when given.
+ *
+ * @throws {InvalidWriteError} on `source` / `target` (and their `.id` /
+ *   `.element`), `kind` or `title`
+ */
+export function checkSelectorForm(selector: DeploymentRelationshipSelector): void {
+  if (typeof selector !== 'object' || selector === null) {
+    throw new InvalidWriteError('source', `expected a selector { source, target, kind?, title? }, got ${JSON.stringify(selector)}`);
+  }
+  checkEndpointForm(selector.source, 'source');
+  checkEndpointForm(selector.target, 'target');
+  for (const field of ['kind', 'title'] as const) {
+    if (selector[field] !== undefined && typeof selector[field] !== 'string') {
+      throw new InvalidWriteError(field, `expected a string, got ${JSON.stringify(selector[field])}`);
+    }
+  }
+}
+
+/**
+ * The one deployment relationship `selector` matches (see
+ * {@link DeploymentRelationshipSelector}) among the relationships of the
+ * index, compared with `reported` — what the reads report for them.
+ *
+ * @param relations - Every deployment relationship of the index
+ * @param reported  - The relationships as listed by the reads
+ * @throws {InvalidWriteError} on `source` when no relationship matches, or
+ *   several do (naming them)
+ */
+export function selectDeploymentRelationship(
+  relations: readonly DeploymentRelationRef[],
+  reported: readonly DeploymentRelationshipInfo[],
+  selector: DeploymentRelationshipSelector,
+): { relation: DeploymentRelationRef; info: DeploymentRelationshipInfo } {
+  const matches = reported.filter((info) => {
+    if (selector.kind !== undefined && info.kind !== selector.kind) return false;
+    if (selector.title !== undefined && info.title !== selector.title) return false;
+    const forward = sameEndpoint(info.source, selector.source) && sameEndpoint(info.target, selector.target);
+    const backward =
+      info.bidirectional && sameEndpoint(info.source, selector.target) && sameEndpoint(info.target, selector.source);
+    return forward || backward;
+  });
+  const [match] = matches;
+  if (!match) {
+    throw new InvalidWriteError(
+      'source',
+      `no deployment relationship ${describeSelector(selector)} is declared in the loaded files`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new InvalidWriteError(
+      'source',
+      `${matches.length} deployment relationships match ${describeSelector(selector)} (` +
+        matches.map(describeRelationship).join('; ') +
+        `); narrow the selector by kind or title` +
+        (matches.every((m) => m.kind === match.kind && m.title === match.title)
+          ? ', or tell them apart by an edit first: they have the same endpoints, kind and title'
+          : ''),
+    );
+  }
+  const relation = relations.find(
+    (r) => r.file === match.file && (r.node.$cstNode as { offset?: number } | undefined)?.offset === match.sourceRange.offset,
+  );
+  if (!relation) throw new Error('internal: a reported deployment relationship without its declaration');
+  return { relation, info: match };
+}
+
+function sameEndpoint(reported: DeploymentEndpoint, selected: DeploymentEndpoint): boolean {
+  return reported.id === selected.id && reported.element === selected.element;
+}
+
+function describeEndpoint(endpoint: DeploymentEndpoint): string {
+  return endpoint.element === undefined ? `'${endpoint.id}'` : `'${endpoint.id}' (element '${endpoint.element}')`;
+}
+
+function describeSelector(selector: DeploymentRelationshipSelector): string {
+  const narrowing = [
+    selector.kind !== undefined ? `kind '${selector.kind}'` : undefined,
+    selector.title !== undefined ? `title '${selector.title}'` : undefined,
+  ].filter((part) => part !== undefined);
+  return (
+    `from ${describeEndpoint(selector.source)} to ${describeEndpoint(selector.target)}` +
+    (narrowing.length > 0 ? ` with ${narrowing.join(' and ')}` : '')
+  );
+}
+
+/** `'a' -> 'b' [kind k] ['title'] in '<file>' at line <n>`, for the candidates of an ambiguous selector. */
+function describeRelationship(info: DeploymentRelationshipInfo): string {
+  const arrow = info.bidirectional ? '<->' : '->';
+  return (
+    `${describeEndpoint(info.source)} ${arrow} ${describeEndpoint(info.target)}` +
+    (info.kind !== undefined ? ` kind '${info.kind}'` : '') +
+    (info.title !== undefined ? ` title '${info.title}'` : '') +
+    ` in '${info.file ?? ''}' at line ${info.sourceRange.line + 1}`
+  );
 }
 
 /** The placement in `file`: its first `deployment` block, else a new block. */

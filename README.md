@@ -1119,6 +1119,33 @@ Rejected, with nothing changed:
 - endpoints that are the same node or instance, or a node and something below it (LikeC4: `Invalid parent-child relationship`; only the `id` parts count, so two elements of one instance are rejected too) — `target`;
 - an undeclared `kind`, an undeclared tag, an invalid style value, metadata LikeC4 cannot hold, a `file` that is not loaded — `kind`, `tags[i]`, `style.<field>`, `metadata.<key>`, `file`.
 
+#### Updating deployment relationships
+
+`updateDeploymentRelationship(selector, patch)` changes one deployment relationship and returns `{ changedFiles }`. The selector is `{ source, target, kind?, title? }`: the endpoints exactly as `listDeploymentRelationships` reports them (`{ id, element? }`, the element part being the FQN), narrowed when needed by the reported kind and title (the own title, else the kind's). A bidirectional relationship matches its endpoints in either order.
+
+```typescript
+mutator.updateDeploymentRelationship(
+  { source: { id: 'prod.eu.vm1' }, target: { id: 'prod.eu.vm2' }, title: 'mirrors' }, // matches `prod.eu.vm2 -[syncs]<-> prod.eu.vm1`
+  { title: 'Mirrors', technology: 'rsync', tags: ['public'] },
+);
+// prod.eu.vm2 -[syncs]<-> prod.eu.vm1 'Mirrors' #public {
+//   technology 'rsync'
+// }
+```
+
+- **`title`** replaces the title, written inline after the target (LikeC4 reads it over a `title` in the body).
+- **`description`, `technology`** replace the body values. A description or technology written on the relationship line, which LikeC4 ignores, is left as it is.
+- **`tags`** replace the tags where LikeC4 reads them: on the relationship line when the line has tags, otherwise in the body. **`links`** replace the links; `[]` clears either. The kind's tags and links keep applying as LikeC4 reads them.
+- **`metadata`** merges, `null` deleting a key; **`style`** merges per field.
+- The endpoints, kind and direction are never changed.
+
+Rejected, with nothing changed:
+
+- no relationship matches, or several do — `source`; the error names the candidates. Relationships with the same endpoints, kind and title cannot be told apart by a selector: change one of them by other means first;
+- a malformed endpoint — `source.id`, `source.element`, `target.id`, `target.element`;
+- an undeclared tag, an invalid style value, metadata LikeC4 cannot hold — `tags[i]`, `style.<field>`, `metadata.<key>`;
+- a `tags`, `links` or `metadata` update while a loaded file has syntax errors (`validate()` is not empty) — that field. A title, description, technology or style update is still accepted.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.
@@ -1153,7 +1180,7 @@ Writes LikeC4 would reject are refused the same way:
 | Call | Rejected when |
 | --- | --- |
 | `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`); the new name would change what an existing reference links to (field `name`, see below). |
-| `updateElement`, `updateRelationship` | a tag of `tags` is not declared. |
+| `updateElement`, `updateRelationship`, `updateDeploymentRelationship` | a tag of `tags` is not declared. |
 | `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
 | `addView` | an element view's `target` does not resolve to an element. |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
