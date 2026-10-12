@@ -132,6 +132,34 @@ describe('deployment node kinds (US-1)', () => {
     expect(mutator.getDeploymentNodeKind('vm')).toMatchObject({ kind: 'vm', file: 'b.c4' });
   });
 
+  it('reports tags and links as LikeC4 computes them: comma groups in its order, no duplicates, one-line labels', async () => {
+    const files = {
+      'spec.c4': `specification {
+  deploymentNode zone {
+    #a, #b
+    #c #a
+    link https://example.com/guide '  Zone
+      guide  '
+    link https://example.com/plain
+  }
+  tag a
+  tag b
+  tag c
+}
+`,
+    };
+    const { deployments } = await buildLikeC4Model(files);
+    const lc4 = deployments.specification['zone']!;
+    // OP: the comma splits `#a` from `#b #c #a`; LikeC4 takes the last group
+    // first, drops the repeated tag (not source order a, b, c, a) and reads
+    // the label as one line: dedented, trimmed, lines joined with a space.
+    expect(lc4.tags).toEqual(['b', 'c', 'a']);
+    expect(lc4.links?.[0]?.title).toBe('Zone     guide');
+
+    const mutator = LikeC4Mutator.fromFiles(files);
+    expect(reportedKind(mutator, 'zone')).toEqual(expectedKind(lc4));
+  });
+
   it.each(['deployment-zones', 'deployment-clusters'])(
     'reports every kind of the %s fixture as LikeC4 does, with the file and range of its declaration',
     async (fixture) => {

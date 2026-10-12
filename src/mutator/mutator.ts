@@ -258,12 +258,24 @@ export class LikeC4Mutator {
    * A kind declared more than once is taken as for an element kind: the
    * last declaration of the last file in LikeC4 document order.
    *
+   * Tags and links are the values LikeC4 computes for the kind: tags of
+   * every comma-separated group in LikeC4's order (the last group first),
+   * without duplicates; link labels read as one line.  (The
+   * `fromSpecification` of a node reports them as written.)
+   *
    * Returns null when no specification declares the kind.
    */
   getDeploymentNodeKind(kind: string): DeploymentNodeKindDefaults | null {
     const spec = this.workspace.deploymentNodeKind(kind);
     if (!spec) return null;
-    return { ...spec.defaults, ...(spec.style && { style: spec.style as ElementStyle }) };
+    const { tags: _declaredTags, links: _declaredLinks, ...defaults } = structuredClone(spec.defaults);
+    const { tags, links } = structuredClone(spec.contribution);
+    return {
+      ...defaults,
+      ...(tags && { tags }),
+      ...(links && { links }),
+      ...(spec.style && { style: structuredClone(spec.style as ElementStyle) }),
+    };
   }
 
   /**

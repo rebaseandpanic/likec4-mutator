@@ -730,7 +730,7 @@ mutator.getDeploymentNodeKind('vm');
 //   tags: ['infra'], style: { shape: 'rectangle', color: 'secondary', opacity: '40%' } }
 ```
 
-- The defaults are read as for an element kind (title, summary, description, technology, tags and links as written), plus `style`: the kind's first `style { ... }` block, the last value of a repeated field, no theme defaults.
+- The defaults are the values LikeC4 computes for the kind: title, summary, description and technology normalized as for an element kind; tags of every comma-separated group in LikeC4's order (the last group first) without duplicates — `#a, #b` reads as `['b', 'a']`; link labels read as one line; and `style`: the kind's first `style { ... }` block, the last value of a repeated field, no theme defaults. The `fromSpecification` of a node reports the kind's tags and links as written.
 - A kind declared more than once is taken as for an element kind: the last declaration of the last file in LikeC4 document order.
 
 #### Deployment nodes
