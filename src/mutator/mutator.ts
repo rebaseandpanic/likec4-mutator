@@ -9,6 +9,7 @@
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
 import { DeploymentIndex } from '../query/deployment-index.js';
+import { DeploymentQuery, type DeploymentNodeFilter } from '../query/deployment-query.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
   WorkspaceIndex,
@@ -25,6 +26,7 @@ import { removeIndent } from '../query/likec4-text.js';
 import { readContribution, type Decorations } from '../query/extend-merge.js';
 import { specificationKinds } from '../query/kind-specs.js';
 import type {
+  DeploymentNodeInfo,
   DeploymentNodeKindDefaults,
   ElementInfo,
   RelationshipInfo,
@@ -135,6 +137,8 @@ export class LikeC4Mutator {
   private workspace: WorkspaceIndex;
   /** Deployment model index over all documents */
   private deployments: DeploymentIndex;
+  /** Reads of the deployment model */
+  private deploymentQuery: DeploymentQuery;
 
   constructor(files: Record<string, string>) {
     this.parser = new C4Parser();
@@ -143,6 +147,7 @@ export class LikeC4Mutator {
     this.queries = new Map();
     this.workspace = new WorkspaceIndex([]);
     this.deployments = new DeploymentIndex([]);
+    this.deploymentQuery = new DeploymentQuery(this.deployments, this.workspace);
     this.parseAll();
   }
 
@@ -249,6 +254,27 @@ export class LikeC4Mutator {
     const spec = this.workspace.deploymentNodeKind(kind);
     if (!spec) return null;
     return { ...spec.defaults, ...(spec.style && { style: spec.style as ElementStyle }) };
+  }
+
+  /**
+   * Return the deployment node with deployment id `id` (parent id + `.` +
+   * name, e.g. 'prod.eu.vm1'), with its effective values as LikeC4 computes
+   * them and their provenance (see {@link DeploymentNodeInfo}).  Returns null
+   * when no node has the id.  An id declared more than once (a LikeC4 error)
+   * is reported from its first declaration in LikeC4 document order.
+   */
+  getDeploymentNode(id: string): DeploymentNodeInfo | null {
+    return this.deploymentQuery.node(id);
+  }
+
+  /**
+   * List deployment nodes of every file, in LikeC4 document order (a parent
+   * before its children), optionally filtered by kind (as written) and by
+   * parent id (direct children only).  An id declared more than once is
+   * listed once per declaration.
+   */
+  listDeploymentNodes(opts?: DeploymentNodeFilter): DeploymentNodeInfo[] {
+    return this.deploymentQuery.listNodes(opts);
   }
 
   // ---------------------------------------------------------------------------
@@ -785,6 +811,7 @@ export class LikeC4Mutator {
     const documents = [...this.documents].map(([file, doc]) => ({ file, ast: doc.ast }));
     this.workspace = new WorkspaceIndex(documents);
     this.deployments = new DeploymentIndex(documents);
+    this.deploymentQuery = new DeploymentQuery(this.deployments, this.workspace);
     this.queries = new Map();
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));

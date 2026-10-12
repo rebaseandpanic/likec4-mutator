@@ -733,6 +733,78 @@ mutator.getDeploymentNodeKind('vm');
 - The defaults are read as for an element kind (title, summary, description, technology, tags and links as written), plus `style`: the kind's first `style { ... }` block, the last value of a repeated field, no theme defaults.
 - A kind declared more than once is taken as for an element kind: the last declaration of the last file in LikeC4 document order.
 
+#### Deployment nodes
+
+`getDeploymentNode(id)` returns a node by its LikeC4 deployment id — the parent's id + `.` + name, e.g. `prod.vm1` — or `null`. `listDeploymentNodes({ kind?, parentId? })` lists nodes of every file in LikeC4 document order (a parent before its children); `parentId` matches direct children only.
+
+```
+// model.c4
+specification {
+  element service
+  deploymentNode environment
+  deploymentNode vm {
+    #infra
+    title 'Virtual machine'
+    style {
+      color secondary
+    }
+  }
+  tag infra
+  tag eu
+}
+model {
+  api = service 'API'
+}
+deployment {
+  environment prod 'Production' {
+    vm vm1 {
+      technology 'Ubuntu'
+      instanceOf api
+    }
+  }
+}
+
+// regions.c4
+deployment {
+  extend prod.vm1 {
+    #eu
+    metadata {
+      region 'eu-west'
+    }
+  }
+}
+```
+
+```typescript
+const vm1 = mutator.getDeploymentNode('prod.vm1')!;
+vm1.title;       // 'Virtual machine' (the kind title: vm1 has no title of its own)
+vm1.technology;  // 'Ubuntu'
+vm1.tags;        // ['infra', 'eu']
+vm1.metadata;    // { region: 'eu-west' }
+vm1.style;       // { color: 'secondary' }
+vm1.extendedBy;  // [{ file: 'regions.c4', sourceRange: {...}, tags: ['eu'], metadata: { region: 'eu-west' } }]
+vm1.instances;   // ['prod.vm1.api']
+vm1.parentId;    // 'prod'
+
+mutator.listDeploymentNodes({ parentId: 'prod' });      // [prod.vm1]
+mutator.listDeploymentNodes({ kind: 'environment' });   // [prod]
+```
+
+The effective values are LikeC4's (`DeploymentNodeInfo`):
+
+| Property | Rule |
+| --- | --- |
+| `title` | own when written (`''` included, inline or in the body); else the node name. A title equal to the node name — written or by default — is replaced by the kind title when the kind has one |
+| `summary`, `description`, `technology` | own (`''` included), else the kind's; summary and description are reported field by field, without the display fallback from one to the other |
+| `tags` | own — or the kind's when the node has none — then those of the `extend` blocks, then the kind's appended, without duplicates |
+| `links` | own — or the kind's when the node has none — then those of the `extend` blocks |
+| `metadata` | own, then the `extend` blocks, merged as for elements |
+| `style` | the kind's style overridden field by field by the node's own `style { ... }` |
+
+- `extendedBy` lists every `extend <node>` block whose written path is exactly the node's id — `extend prod.vm1` extends `prod.vm1`, never another node named `vm1` — including blocks that only add children. `children` (nodes) and `instances` include those declared in `extend` bodies.
+- `declared` holds the tags, links and metadata of the node's own body as written, `fromSpecification` the kind's declaration (`DeploymentNodeKindDefaults`).
+- A node whose kind no specification declares is still reported (LikeC4 leaves it out of its model), with its own values only. A node declared inside an `extend` block of a node that does not exist is not reported, as LikeC4 drops it. An id declared twice (a LikeC4 error) is listed once per declaration; `getDeploymentNode` returns the first in document order.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

@@ -11,6 +11,7 @@ export type {
   ExtendRelationBlockRef,
 } from './query/workspace-index.js';
 export type { ExtendRelationNode, RelationIdentity } from './query/relation-extends.js';
+export type { DeploymentNodeFilter } from './query/deployment-query.js';
 export type {
   DeploymentEndpoint,
   DeploymentInstanceInfo,
