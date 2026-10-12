@@ -27,10 +27,12 @@ import { buildMergeStyleEdits } from './style-ops.js';
 import {
   buildInsertBodySnippet,
   buildRemovalEdit,
+  firstVisibleLeaf,
   buildReplaceLinksEdit as buildReplaceLinksEditShared,
   buildReplaceTagsInPlaceEdit,
   collectLeaves,
   type BodyOwnerNode,
+  type CstNodeLike,
 } from './cst-helpers.js';
 import {
   buildReplaceMetadataEditOnNode,
@@ -40,20 +42,81 @@ import {
 } from './metadata-ops.js';
 
 /**
- * Minimal structural interface for AST element nodes accessed by the private
- * helpers in this module.  Extends {@link BodyOwnerNode} with element-specific
- * fields (`kind`) and the optional CST `content` array used by
- * {@link collectLeaves}.
+ * Minimal structural interface of a declaration whose properties
+ * {@link updateDeclarationEdits} patches: an element, a deployment node or a
+ * deployed instance.  Extends {@link BodyOwnerNode} with the optional CST
+ * `content` array used by {@link collectLeaves}.
  */
-interface AstElementNode extends BodyOwnerNode {
+export interface DeclarationNode extends BodyOwnerNode {
   $cstNode?: BodyOwnerNode['$cstNode'] & { content?: unknown[] };
+}
+
+/** Langium reference as far as the anchors read it. */
+interface KindRef {
+  $refText?: string;
+  /** Langium reference CST node — present when the reference resolved or carried any token. */
+  $refNode?: { offset: number; end: number };
+}
+
+/** An element AST node (`Element`). */
+interface AstElementNode extends DeclarationNode {
   /** Strings written after the kind: title, summary, technology */
   props?: unknown[];
-  kind?: {
-    $refText?: string;
-    /** Langium reference CST node — present when the reference resolved or carried any token. */
-    $refNode?: { offset: number; end: number };
-  };
+  kind?: KindRef;
+}
+
+/** A deployment node AST node (`DeploymentNode`). */
+interface AstDeploymentNode extends DeclarationNode {
+  kind?: KindRef;
+  /** Inline title */
+  title?: string;
+  /** Inline summary */
+  summary?: string;
+}
+
+/** A deployed instance AST node (`DeployedInstance`). */
+interface AstDeployedInstance extends DeclarationNode {
+  /** The `instanceOf` element reference */
+  target?: { $cstNode?: { offset: number; end: number } };
+  /** Inline title */
+  title?: string;
+  /** Inline summary */
+  summary?: string;
+}
+
+/** An `extend <node> { ... }` block (`ExtendDeployment`). */
+export interface ExtendDeploymentNode extends BodyOwnerNode {
+  $type: 'ExtendDeployment';
+  /** The extended node's path (`StrictFqnRef`) */
+  deploymentNode?: unknown;
+}
+
+/**
+ * Where the strings written on a declaration's line start, and how they are
+ * read and written.  The strings are the quoted tokens after `offset` and
+ * before the body's `{`, in the order title, summary, technology.
+ */
+export interface InlineAnchor {
+  /** Offset after which the inline strings start (a new inline title is inserted here) */
+  offset: number;
+  /**
+   * The inline strings as parsed, by position: title, summary, technology.
+   * A position the declaration does not write (or its form does not have,
+   * like technology on deployment nodes and instances) is not a string.
+   */
+  strings: readonly unknown[];
+  /** Escape of a title value written as a string literal */
+  escapeTitle: (value: string) => string;
+}
+
+/** Options of {@link updateDeclarationEdits}. */
+export interface DeclarationEditOptions {
+  /**
+   * Write `style.icon` into the body-level `icon` properties when the body
+   * has any (they override the style block's icon), instead of into the
+   * style block.  Used by deployment nodes and instances.
+   */
+  styleIconInBodyIcon?: boolean;
 }
 
 /**
@@ -159,12 +222,71 @@ export function updateElementEdit(
   fqn: string,
   props: UpdateElementPatch,
 ): TextEdit[] {
-  const { ast, fullText } = doc;
-  const index = buildFqnIndex(ast);
-  const entry = index.get(fqn);
+  const entry = buildFqnIndex(doc.ast).get(fqn);
   if (!entry) throw new Error(`Element '${fqn}' not found`);
+  return updateDeclarationEdits(entry.node, doc, props, elementInlineAnchor(entry.node));
+}
 
-  const node = entry.node;
+/**
+ * The inline anchor of an element: its kind reference (in both declaration
+ * forms the strings follow the kind).  Undefined when the kind carries no
+ * token.
+ */
+export function elementInlineAnchor(node: AstElementNode): InlineAnchor | undefined {
+  const kindCst = node.kind?.$refNode;
+  if (!node.$cstNode || !kindCst) return undefined;
+  return { offset: kindCst.end, strings: node.props ?? [], escapeTitle };
+}
+
+/**
+ * The inline anchor of a deployment node: the name token in the
+ * `kind name` form, the kind reference in the `name = kind` form.  Titles
+ * are written with the plain string escape.  Undefined when the kind
+ * carries no token.
+ */
+export function deploymentNodeInlineAnchor(node: AstDeploymentNode): InlineAnchor | undefined {
+  const cst = node.$cstNode as CstNodeLike | undefined;
+  const kindCst = node.kind?.$refNode;
+  if (!cst || !kindCst) return undefined;
+  const kindFirst = firstVisibleLeaf(cst, cst.offset)?.offset === kindCst.offset;
+  const offset = kindFirst ? firstVisibleLeaf(cst, kindCst.end)?.end : kindCst.end;
+  if (offset === undefined) return undefined;
+  return { offset, strings: [node.title, node.summary], escapeTitle: escapeString };
+}
+
+/**
+ * The inline anchor of a deployed instance: the end of its `instanceOf`
+ * target.  Titles are written with the plain string escape.  Undefined when
+ * the target carries no token.
+ */
+export function deployedInstanceInlineAnchor(node: AstDeployedInstance): InlineAnchor | undefined {
+  const targetCst = node.target?.$cstNode;
+  if (!node.$cstNode || !targetCst) return undefined;
+  return { offset: targetCst.end, strings: [node.title, node.summary], escapeTitle: escapeString };
+}
+
+/**
+ * Build TextEdits that patch the properties of a declaration (element,
+ * deployment node or instance).  Strings replace every declaration LikeC4
+ * reads (inline and body); tags and links replace; style merges per field;
+ * metadata merges with `null` deleting a key.
+ *
+ * @param node    - The declaration's AST node
+ * @param doc     - Parsed document holding it
+ * @param props   - Patch (undefined fields are kept)
+ * @param anchor  - Where its inline strings are; undefined when it has none
+ *                  to read (strings then go into the body only)
+ * @param options - See {@link DeclarationEditOptions}
+ * @returns List of TextEdits (may be empty if nothing changed)
+ */
+export function updateDeclarationEdits(
+  node: DeclarationNode,
+  doc: ParsedDocument,
+  props: UpdateElementPatch,
+  anchor: InlineAnchor | undefined,
+  options: DeclarationEditOptions = {},
+): TextEdit[] {
+  const { fullText } = doc;
   const edits: TextEdit[] = [];
 
   // Handle title update.  A title can be declared inline
@@ -173,7 +295,7 @@ export function updateElementEdit(
   // whichever declaration takes precedence; a new inline title is only added
   // when no declaration exists at all.
   if (props.title !== undefined) {
-    edits.push(...buildTitleEdits(node, props.title));
+    edits.push(...buildTitleEdits(node, anchor, props.title));
   }
 
   // Summary and technology written after the title are what LikeC4 reads
@@ -181,13 +303,13 @@ export function updateElementEdit(
   // when non-empty.  They are replaced there.  An empty summary no longer
   // overrides the body, so it goes into the body too.
   let patch = props;
-  const [, inlineSummary, inlineTechnology] = node.props ?? [];
-  if (patch.technology !== undefined && typeof inlineTechnology === 'string') {
-    edits.push(buildInlineElementStringEdit(node, INLINE_TECHNOLOGY, patch.technology));
+  const [, inlineSummary, inlineTechnology] = anchor?.strings ?? [];
+  if (anchor && patch.technology !== undefined && typeof inlineTechnology === 'string') {
+    edits.push(buildInlineStringEdit(node, anchor, INLINE_TECHNOLOGY, patch.technology));
     patch = { ...patch, technology: undefined };
   }
-  if (patch.summary !== undefined && typeof inlineSummary === 'string' && inlineSummary !== '') {
-    edits.push(buildInlineElementStringEdit(node, INLINE_SUMMARY, patch.summary));
+  if (anchor && patch.summary !== undefined && typeof inlineSummary === 'string' && inlineSummary !== '') {
+    edits.push(buildInlineStringEdit(node, anchor, INLINE_SUMMARY, patch.summary));
     if (patch.summary !== '') patch = { ...patch, summary: undefined };
   }
 
@@ -243,7 +365,16 @@ export function updateElementEdit(
   // field overwrites the corresponding existing value; absent fields are
   // preserved.  An empty patch object is a no-op.
   if (patch.style !== undefined && Object.keys(patch.style).length > 0) {
-    edits.push(...buildReplaceStyleEdits(node, fullText, patch.style, inserts));
+    let style = patch.style;
+    if (options.styleIconInBodyIcon && typeof style.icon === 'string' && style.icon !== '') {
+      const iconEdits = buildBodyIconEdits(node, fullText, style.icon);
+      if (iconEdits.length > 0) {
+        edits.push(...iconEdits);
+        const { icon: _icon, ...rest } = style;
+        style = rest;
+      }
+    }
+    if (Object.keys(style).length > 0) edits.push(...buildReplaceStyleEdits(node, fullText, style, inserts));
   }
 
   // Handle metadata — MERGE + null-deletion: each key in the patch upserts
@@ -263,7 +394,7 @@ export function updateElementEdit(
  * tags first, then string props, links, style, metadata.
  */
 function buildCombinedBodyInsertElement(
-  node: AstElementNode,
+  node: DeclarationNode,
   fullText: string,
   patch: UpdateElementPatch,
 ): TextEdit | null {
@@ -384,7 +515,8 @@ export interface ExtendClearing {
 
 /**
  * Build the TextEdits that remove tags, links and/or metadata keys from an
- * `extend X { ... }` block (or an `extend a -> b { ... }` block), so that
+ * `extend X { ... }` block (or an `extend a -> b { ... }` or
+ * `extend <node> { ... }` block), so that
  * the block no longer contributes them to X.  Nested elements and relations, other properties and comments outside
  * the removed constructs are left as they are; a block that ends up empty
  * stays in place.
@@ -400,7 +532,7 @@ export interface ExtendClearing {
  */
 export function clearExtendContributionsEdits(
   doc: ParsedDocument,
-  node: ExtendElementNode | ExtendRelationNode,
+  node: ExtendElementNode | ExtendRelationNode | ExtendDeploymentNode,
   clear: ExtendClearing,
 ): TextEdit[] {
   const { fullText } = doc;
@@ -426,28 +558,27 @@ export function clearExtendContributionsEdits(
 // ---------------------------------------------------------------------------
 
 /**
- * Build the TextEdits that set the title of an element.
+ * Build the TextEdits that set the title of a declaration.
  *
  * - The inline title string (`name = kind 'title'`) is replaced when present.
  * - The value of a `title '...'` body property is replaced when present.
- * - When neither exists, an inline title is inserted right after the kind.
+ * - When neither exists, an inline title is inserted right after the anchor.
  *
- * Uses the kind reference's CST node directly as an anchor so the inline
- * lookup is not confused when `name === kindText` (a legal — if unusual —
- * case in the grammar).
+ * Uses the anchor's offset (for an element, the end of the kind reference's
+ * CST node) so the inline lookup is not confused when `name === kindText` (a
+ * legal — if unusual — case in the grammar).
  */
-function buildTitleEdits(node: AstElementNode, newTitle: string): TextEdit[] {
-  const newText = `'${escapeTitle(newTitle)}'`;
+function buildTitleEdits(node: DeclarationNode, anchor: InlineAnchor | undefined, newTitle: string): TextEdit[] {
+  const newText = `'${(anchor?.escapeTitle ?? escapeTitle)(newTitle)}'`;
   const edits: TextEdit[] = [];
 
-  const kindCst = node.kind?.$refNode;
   let inlineInsertAt: number | null = null;
-  if (node.$cstNode && kindCst) {
-    const kindEnd = kindCst.end;
-    inlineInsertAt = kindEnd;
-    // Look for the next quoted string leaf after kindEnd (and before any `{`).
+  if (node.$cstNode && anchor) {
+    const anchorEnd = anchor.offset;
+    inlineInsertAt = anchorEnd;
+    // Look for the next quoted string leaf after the anchor (and before any `{`).
     for (const leaf of collectLeaves(node.$cstNode)) {
-      if (leaf.offset < kindEnd) continue;
+      if (leaf.offset < anchorEnd) continue;
       if (leaf.text === '{') break;
       if (leaf.text.startsWith("'") || leaf.text.startsWith('"')) {
         edits.push({ offset: leaf.offset, end: leaf.end, newText });
@@ -472,35 +603,48 @@ function buildTitleEdits(node: AstElementNode, newTitle: string): TextEdit[] {
     bodyTitleFound = true;
   }
   if (!bodyTitleFound && inlineInsertAt !== null) {
-    // No existing title anywhere — insert an inline one after the kind.
+    // No existing title anywhere — insert an inline one after the anchor.
     edits.push({ offset: inlineInsertAt, end: inlineInsertAt, newText: ` ${newText}` });
   }
   return edits;
 }
 
-/** Position of the summary among the strings written after the kind. */
+/** Position of the summary among the inline strings. */
 const INLINE_SUMMARY = 1;
-/** Position of the technology among the strings written after the kind. */
+/** Position of the technology among the inline strings. */
 const INLINE_TECHNOLOGY = 2;
 
 /**
- * Replace the `position`-th string written after the kind of an element
+ * Replace the `position`-th string written after the anchor of a declaration
  * (`name = kind 'title' 'summary' 'technology'`).  The caller guarantees the
- * string is there (the AST node carries its value).
+ * string is there (the anchor's strings carry its value).
  */
-function buildInlineElementStringEdit(node: AstElementNode, position: number, value: string): TextEdit {
-  const kindCst = node.kind?.$refNode;
-  if (node.$cstNode && kindCst) {
+function buildInlineStringEdit(node: DeclarationNode, anchor: InlineAnchor, position: number, value: string): TextEdit {
+  if (node.$cstNode) {
     let index = 0;
     for (const leaf of collectLeaves(node.$cstNode)) {
-      if (leaf.offset < kindCst.end) continue;
+      if (leaf.offset < anchor.offset) continue;
       if (leaf.text === '{') break;
       if (!leaf.text.startsWith("'") && !leaf.text.startsWith('"')) continue;
       if (index === position) return { offset: leaf.offset, end: leaf.end, newText: `'${escapeString(value)}'` };
       index++;
     }
   }
-  throw new Error('internal: string written after the element kind not found');
+  throw new Error('internal: inline string of the declaration not found');
+}
+
+/**
+ * Build the edits that set the value of every body-level `icon` property of
+ * a declaration (LikeC4 reads it over the style block's icon).  Empty when
+ * the body has none.
+ */
+function buildBodyIconEdits(node: DeclarationNode, fullText: string, icon: string): TextEdit[] {
+  const body = node.body;
+  const icons = (body?.props ?? []).filter((p) => p.$type === 'IconProperty' && p.$cstNode);
+  if (!body?.$cstNode || icons.length === 0) return [];
+  // The icon properties are merged like the fields of a style block: each
+  // one's value is rewritten, nothing is added (the field is present).
+  return buildMergeStyleEdits(fullText, { $cstNode: body.$cstNode, props: icons }, [['icon', icon]], '');
 }
 
 /**
@@ -510,7 +654,7 @@ function buildInlineElementStringEdit(node: AstElementNode, position: number, va
  * is none, the property is inserted (creating the body when needed).
  */
 function buildBodyPropEdits(
-  node: AstElementNode,
+  node: DeclarationNode,
   key: 'summary' | 'description' | 'technology',
   value: string,
   inserts: BodyInsertions,
@@ -546,7 +690,7 @@ function buildBodyPropEdits(
  * position.
  */
 function buildReplaceLinksEdit(
-  node: AstElementNode,
+  node: DeclarationNode,
   fullText: string,
   links: Array<{ url: string; label?: string }>,
   inserts: BodyInsertions,
@@ -566,7 +710,7 @@ function buildReplaceLinksEdit(
  * {@link buildMergeStyleEdits}).
  */
 function buildReplaceStyleEdits(
-  node: AstElementNode,
+  node: DeclarationNode,
   fullText: string,
   patch: ElementStyle,
   inserts: BodyInsertions,
@@ -585,7 +729,7 @@ function buildReplaceStyleEdits(
  * parent indent automatically from the element's CST position.
  */
 function buildReplaceMetadataEdit(
-  node: AstElementNode,
+  node: DeclarationNode,
   fullText: string,
   patch: MetadataPatch,
   inserts: BodyInsertions,
@@ -607,8 +751,8 @@ function buildReplaceMetadataEdit(
  *
  * If the element has no body at all, one is created with the tags inside.
  */
-function buildReplaceTagsEdit(
-  node: AstElementNode,
+export function buildReplaceTagsEdit(
+  node: DeclarationNode,
   fullText: string,
   tags: string[],
   inserts: BodyInsertions,
@@ -621,7 +765,7 @@ function buildReplaceTagsEdit(
   // helpers — we widen via a narrow cast for the tags field which is not part
   // of AstElementNode.
   const body = node.body as
-    | (NonNullable<AstElementNode['body']> & {
+    | (NonNullable<DeclarationNode['body']> & {
         tags?: { $cstNode?: { offset: number; end: number } };
       })
     | undefined;

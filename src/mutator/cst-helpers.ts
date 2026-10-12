@@ -143,6 +143,19 @@ export function buildRemovalEdit(fullText: string, offset: number, end: number):
 }
 
 /**
+ * The first leaf token of `node` that is not hidden (comment or whitespace)
+ * and starts at or after `from`; undefined when there is none.
+ */
+export function firstVisibleLeaf(node: CstNodeLike, from: number): CstNodeLike | undefined {
+  if (!node.content) return !node.hidden && node.offset >= from ? node : undefined;
+  for (const child of node.content) {
+    const leaf = firstVisibleLeaf(child, from);
+    if (leaf) return leaf;
+  }
+  return undefined;
+}
+
+/**
  * Single leaf CST token: contiguous range plus the matched text.
  */
 export interface CstLeaf {
