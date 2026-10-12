@@ -97,40 +97,58 @@ async function errorSet(files: Record<string, string>): Promise<string[]> {
 const inSubtree = (id: string, root: string): boolean => id === root || id.startsWith(root + '.');
 
 describe('US-7 strings (row 47)', () => {
+  /**
+   * Where a declaration is in the input text: its first line, and its last
+   * line (`close`) as the start of `after`, the text that follows it.
+   */
+  interface Declaration {
+    id: string;
+    first: string;
+    close: string;
+    after: string;
+  }
+
   // Per fixture: a node in the `kind name` form and one in the `name = kind`
   // form.  One of them gets a body title next to its inline title, the
   // `kind name` node of the clusters has no inline title (the new one goes
   // after its name).
-  const CASES = [
+  const CASES: Array<{ fixture: string; file: string; prepare: (files: Record<string, string>) => Record<string, string>; kindName: Declaration; nameKind: Declaration }> = [
     {
       fixture: 'deployment-zones',
       file: 'deployment.c4',
-      prepare: (files: Record<string, string>) =>
+      prepare: (files) =>
         edited(files, 'deployment.c4', "environment prod 'Production' {\n    #primary\n", "environment prod 'Production' {\n    #primary\n    title 'Body title'\n"),
-      kindName: 'prod',
-      nameKind: 'prod.eu.vm1',
+      kindName: { id: 'prod', first: "  environment prod 'Production' {\n", close: '  }\n', after: '  }\n\n  prod.eu.vm1.api -[calls]->' },
+      nameKind: { id: 'prod.eu.vm1', first: "      vm1 = host 'VM 1' {\n", close: '      }\n', after: '      }\n\n      host vm2 {' },
     },
     {
       fixture: 'deployment-clusters',
       file: 'deployment.c4',
-      prepare: (files: Record<string, string>) =>
+      prepare: (files) =>
         edited(files, 'deployment.c4', "k8s = cluster 'Main cluster' {\n      #critical\n", "k8s = cluster 'Main cluster' {\n      #critical\n      title 'Body title'\n"),
-      kindName: 'main.k8s.apps',
-      nameKind: 'main.k8s',
+      kindName: { id: 'main.k8s.apps', first: '      namespace apps {\n', close: '      }\n', after: '      }\n\n      namespace data {' },
+      nameKind: { id: 'main.k8s', first: "    k8s = cluster 'Main cluster' {\n", close: '    }\n', after: '    }\n  }\n\n  main.k8s.apps.ui ->' },
     },
-  ] as const;
+  ];
 
   it.each(CASES.flatMap((c) => [
-    { ...c, form: 'kind name', id: c.kindName },
-    { ...c, form: 'name = kind', id: c.nameKind },
-  ]))('$fixture: $form ($id)', async ({ fixture, file, prepare, id }) => {
-    const files = prepare(readWorkspace(fixture));
+    { ...c, form: 'kind name', declaration: c.kindName },
+    { ...c, form: 'name = kind', declaration: c.nameKind },
+  ]))('$fixture: $form ($declaration.id)', async ({ fixture, file, prepare, declaration }) => {
+    const { id, first, close, after: following } = declaration;
+    // Comments right before and right after the declaration mark the text
+    // that must stay as it is.
+    const indent = /^ */.exec(first)![0];
+    const beforeMark = `${indent}// before ${id}\n`;
+    const afterMark = `${indent}// after ${id}\n`;
+    let files = prepare(readWorkspace(fixture));
+    files = edited(files, file, first, beforeMark + first);
+    files = edited(files, file, following, close + afterMark + following.slice(close.length));
     // P: the input is valid and LikeC4 has the node.
     await expectValidLikeC4(files);
     expect((await buildLikeC4Model(files)).deployments.elements[id]).toBeDefined();
 
     const m = LikeC4Mutator.fromFiles(files);
-    const { offset, end } = node(m, id).sourceRange;
     const patch = { title: 'New title', summary: 'New summary', description: 'New description', technology: 'New technology' };
     expect(m.updateDeploymentNode(id, patch)).toEqual({ changedFiles: [file] });
 
@@ -141,11 +159,14 @@ describe('US-7 strings (row 47)', () => {
       patch.description,
       patch.technology,
     ]);
-    // Only the declaration's text changed.
+    // Only the declaration's text changed: everything up to the comment
+    // before it and from the comment after it is byte-equal.
     const before = files[file]!;
     const after = m.serialize()[file]!;
-    expect(after.slice(0, offset)).toBe(before.slice(0, offset));
-    expect(after.slice(after.length - (before.length - end))).toBe(before.slice(end));
+    const head = before.indexOf(beforeMark) + beforeMark.length;
+    expect(after.slice(0, head)).toBe(before.slice(0, head));
+    expect(after).toContain(afterMark);
+    expect(after.slice(after.indexOf(afterMark))).toBe(before.slice(before.indexOf(afterMark)));
     await expectValidWrite(m);
   });
 });
