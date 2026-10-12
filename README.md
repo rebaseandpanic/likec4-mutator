@@ -411,6 +411,55 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`. Required: `o
 
 `includes` is an array of strings; each item becomes one `include` rule of the view, in order. An item is what follows the keyword: one or more comma-separated predicates, as LikeC4 accepts them after `include` (`"*"`, `"app.db"`, `"app.*, app.api -> app.db"`). One leading `include` keyword followed by whitespace is stripped, so `"include *"` writes `include *`, not `include include *` (`"include*"` is not stripped and is rejected); surrounding whitespace is trimmed. Each item must form exactly one `include` rule of the view's type: an item that is empty or only `include`, that LikeC4 cannot parse, or that would add anything beyond that rule (another rule such as `"* exclude x"` or `"*\n autoLayout LeftRight"`, a view property, or another view) is rejected before any file is touched (exit code 1, path `mutations[i].includes[j]`). Without `includes` (or with `[]`) an element view gets `include *` and other view types get no include rule. The library's `addView({ includes })` handles items the same way and throws on such an item.
 
+#### Deployment operations
+
+Every deployment write of the library is an op with the same fields as its options (see [Writing](#writing) for what each write does and rejects). The arguments the library takes before its options are fields too:
+
+| Op | Fields besides the library options | Library call |
+|---|---|---|
+| `addDeploymentNode` | `parent` (optional: without it the node is a root node) | `addDeploymentNode(parent ?? null, opts)` |
+| `updateDeploymentNode` | `id` | `updateDeploymentNode(id, patch)` |
+| `removeDeploymentNode` | `id` | `removeDeploymentNode(id)` |
+| `addDeploymentInstance` | `node` | `addDeploymentInstance(node, opts)` |
+| `updateDeploymentInstance` | `id` | `updateDeploymentInstance(id, patch)` |
+| `removeDeploymentInstance` | `id` | `removeDeploymentInstance(id)` |
+| `addDeploymentRelationship` | `source`, `target` | `addDeploymentRelationship(source, target, opts)` |
+| `updateDeploymentRelationship` | `source`, `target`, `matchKind`, `matchTitle` | `updateDeploymentRelationship({ source, target, kind: matchKind, title: matchTitle }, patch)` |
+| `removeDeploymentRelationship` | `source`, `target`, `matchKind`, `matchTitle` | `removeDeploymentRelationship({ source, target, kind: matchKind, title: matchTitle })` |
+| `addDeploymentExtend` | `node` | `addDeploymentExtend(node, { file, tags, links, metadata })` |
+| `removeDeploymentExtend` | — | `removeDeploymentExtend({ node, file, occurrence })` |
+
+- `source` and `target` are endpoint objects `{ "id": ..., "element": ... }`: `id` is the deployment id of a node or instance, `element` (optional) the FQN of an element inside the instance's element. Other keys of an endpoint are rejected (`mutations[i].source.x`).
+- The selector of a deployment relationship names its kind and title `matchKind` and `matchTitle`, as in `updateRelationship`, because `title` of `updateDeploymentRelationship` is the new title. Both ops use the same selector.
+- An update needs at least one patch field; `addDeploymentExtend` needs at least one tag, link or metadata key. Otherwise the op is rejected at `mutations[i]`.
+- `occurrence` is a whole number from 1; `bidirectional` is a boolean. `addDeploymentInstance` has no `file` field (an instance is written in its node).
+- A value the library rejects is reported at the same path as its option: `mutations[i].metadata.<key>`, `mutations[i].file`, `mutations[i].source.id`, `mutations[i].target.element`, `mutations[i].occurrence`; a selector that matches no relationship or several at `mutations[i].source`.
+
+```json
+{
+  "mutations": [
+    { "op": "addDeploymentNode", "parent": "prod", "name": "vm3", "kind": "vm", "title": "VM 3" },
+    { "op": "addDeploymentInstance", "node": "prod.vm3", "element": "app.api", "name": "api" },
+    {
+      "op": "addDeploymentRelationship",
+      "source": { "id": "prod.vm3.api", "element": "app.api.handler" },
+      "target": { "id": "prod.vm2.db" },
+      "kind": "calls",
+      "title": "writes"
+    },
+    {
+      "op": "updateDeploymentRelationship",
+      "source": { "id": "prod.vm1.api" },
+      "target": { "id": "prod.vm2.db" },
+      "matchTitle": "reads",
+      "title": "queries"
+    },
+    { "op": "addDeploymentExtend", "node": "prod.vm1", "file": "deployment.c4", "tags": ["internal"] },
+    { "op": "removeDeploymentExtend", "node": "prod.vm2", "file": "deployment.c4", "occurrence": 1 }
+  ]
+}
+```
+
 ### Full batch example
 
 ```json

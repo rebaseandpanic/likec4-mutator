@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSy
 import { resolve, join, relative, extname, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
 import { LikeC4Mutator } from './mutator/mutator.js';
-import { mutationFieldPath, parseMutationsFile, type Mutation } from './mutations-file.js';
+import { deploymentRelationshipSelector, mutationFieldPath, parseMutationsFile, type Mutation } from './mutations-file.js';
 import { InvalidWriteError } from './mutator/write-checks.js';
 
 const _require = createRequire(import.meta.url);
@@ -473,6 +473,12 @@ program
         }
       }
 
+      function writeRemoved(op: Mutation['op'], what: string, relationships: number): void {
+        process.stdout.write(`  ${op}: removed ${what}`);
+        if (relationships > 0) process.stdout.write(` (${relationships} relationship(s) also removed)`);
+        process.stdout.write('\n');
+      }
+
       function applyMutation(mutation: Mutation): void {
         switch (mutation.op) {
           case 'addElement': {
@@ -569,6 +575,124 @@ program
                 style: m.style,
               },
             );
+            applied++;
+            break;
+          }
+          case 'addDeploymentNode': {
+            const m = mutation;
+            const createdId = mutator.addDeploymentNode(m.parent ?? null, {
+              name: m.name,
+              kind: m.kind,
+              title: m.title,
+              summary: m.summary,
+              description: m.description,
+              technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              style: m.style,
+              metadata: m.metadata,
+              file: m.file,
+            });
+            process.stdout.write(`  addDeploymentNode: created '${createdId}'\n`);
+            applied++;
+            break;
+          }
+          case 'updateDeploymentNode':
+          case 'updateDeploymentInstance': {
+            const m = mutation;
+            const patch = {
+              title: m.title,
+              summary: m.summary,
+              description: m.description,
+              technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              style: m.style,
+              metadata: m.metadata,
+            };
+            if (m.op === 'updateDeploymentNode') mutator.updateDeploymentNode(m.id, patch);
+            else mutator.updateDeploymentInstance(m.id, patch);
+            applied++;
+            break;
+          }
+          case 'removeDeploymentNode':
+          case 'removeDeploymentInstance': {
+            const m = mutation;
+            const { removedRelationships } =
+              m.op === 'removeDeploymentNode' ? mutator.removeDeploymentNode(m.id) : mutator.removeDeploymentInstance(m.id);
+            writeRemoved(m.op, `'${m.id}'`, removedRelationships.length);
+            applied++;
+            break;
+          }
+          case 'addDeploymentInstance': {
+            const m = mutation;
+            const createdId = mutator.addDeploymentInstance(m.node, {
+              element: m.element,
+              name: m.name,
+              title: m.title,
+              summary: m.summary,
+              description: m.description,
+              technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              style: m.style,
+              metadata: m.metadata,
+            });
+            process.stdout.write(`  addDeploymentInstance: created '${createdId}'\n`);
+            applied++;
+            break;
+          }
+          case 'addDeploymentRelationship': {
+            const m = mutation;
+            mutator.addDeploymentRelationship(m.source, m.target, {
+              kind: m.kind,
+              bidirectional: m.bidirectional,
+              title: m.title,
+              description: m.description,
+              technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              metadata: m.metadata,
+              style: m.style,
+              file: m.file,
+            });
+            applied++;
+            break;
+          }
+          case 'updateDeploymentRelationship': {
+            const m = mutation;
+            mutator.updateDeploymentRelationship(deploymentRelationshipSelector(m), {
+              title: m.title,
+              description: m.description,
+              technology: m.technology,
+              tags: m.tags,
+              links: m.links,
+              metadata: m.metadata,
+              style: m.style,
+            });
+            applied++;
+            break;
+          }
+          case 'removeDeploymentRelationship': {
+            const m = mutation;
+            mutator.removeDeploymentRelationship(deploymentRelationshipSelector(m));
+            applied++;
+            break;
+          }
+          case 'addDeploymentExtend': {
+            const m = mutation;
+            mutator.addDeploymentExtend(m.node, { file: m.file, tags: m.tags, links: m.links, metadata: m.metadata });
+            applied++;
+            break;
+          }
+          case 'removeDeploymentExtend': {
+            const m = mutation;
+            const { removedRelationships } = mutator.removeDeploymentExtend({
+              node: m.node,
+              file: m.file,
+              occurrence: m.occurrence,
+            });
+            writeRemoved(m.op, `'extend ${m.node}' in '${m.file}'`, removedRelationships.length);
             applied++;
             break;
           }

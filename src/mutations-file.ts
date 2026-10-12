@@ -10,11 +10,14 @@
  * violation with its JSON path, e.g. `mutations[2].links[0].url`.
  */
 import type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
+import { checkEndpointForm, checkSelectorForm, type DeploymentRelationshipSelector } from './mutator/deployment-ops.js';
 import type { MetadataPatch } from './mutator/metadata-ops.js';
+import type { DeploymentEndpoint } from './query/types.js';
 import {
   InvalidWriteError,
   checkElementName,
   checkKind,
+  checkMetadata,
   checkReferenceForm,
   checkStyle,
   checkTags,
@@ -104,6 +107,138 @@ export interface RemoveRelationshipMutation {
   target: string;
 }
 
+/** `addDeploymentNode`: a root node without `parent`, else a child of `parent`. */
+export interface AddDeploymentNodeMutation {
+  op: 'addDeploymentNode';
+  parent?: string;
+  name: string;
+  kind: string;
+  title?: string;
+  summary?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  style?: ElementStyle;
+  metadata?: Record<string, string | string[]>;
+  file?: string;
+}
+
+export interface UpdateDeploymentNodeMutation {
+  op: 'updateDeploymentNode';
+  id: string;
+  title?: string;
+  summary?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  style?: ElementStyle;
+  metadata?: MetadataPatch;
+}
+
+export interface RemoveDeploymentNodeMutation {
+  op: 'removeDeploymentNode';
+  id: string;
+}
+
+/** `addDeploymentInstance`: an instance of `element` in node `node`. */
+export interface AddDeploymentInstanceMutation {
+  op: 'addDeploymentInstance';
+  node: string;
+  element: string;
+  name?: string;
+  title?: string;
+  summary?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  style?: ElementStyle;
+  metadata?: Record<string, string | string[]>;
+}
+
+export interface UpdateDeploymentInstanceMutation {
+  op: 'updateDeploymentInstance';
+  id: string;
+  title?: string;
+  summary?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  style?: ElementStyle;
+  metadata?: MetadataPatch;
+}
+
+export interface RemoveDeploymentInstanceMutation {
+  op: 'removeDeploymentInstance';
+  id: string;
+}
+
+export interface AddDeploymentRelationshipMutation {
+  op: 'addDeploymentRelationship';
+  source: DeploymentEndpoint;
+  target: DeploymentEndpoint;
+  kind?: string;
+  bidirectional?: boolean;
+  title?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  metadata?: Record<string, string | string[]>;
+  style?: RelationshipStyle;
+  file?: string;
+}
+
+/**
+ * `updateDeploymentRelationship`: the selector is `source`, `target` and
+ * the optional `matchKind` / `matchTitle` (the library's selector `kind` /
+ * `title`, renamed as in `updateRelationship` because `title` is also a
+ * patch field); the rest is the patch.
+ */
+export interface UpdateDeploymentRelationshipMutation {
+  op: 'updateDeploymentRelationship';
+  source: DeploymentEndpoint;
+  target: DeploymentEndpoint;
+  matchKind?: string;
+  matchTitle?: string;
+  title?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  metadata?: MetadataPatch;
+  style?: RelationshipStyle;
+}
+
+/** `removeDeploymentRelationship`: the selector of `updateDeploymentRelationship`. */
+export interface RemoveDeploymentRelationshipMutation {
+  op: 'removeDeploymentRelationship';
+  source: DeploymentEndpoint;
+  target: DeploymentEndpoint;
+  matchKind?: string;
+  matchTitle?: string;
+}
+
+/** `addDeploymentExtend`: an `extend <node>` block in `file`. */
+export interface AddDeploymentExtendMutation {
+  op: 'addDeploymentExtend';
+  node: string;
+  file: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  metadata?: Record<string, string | string[]>;
+}
+
+export interface RemoveDeploymentExtendMutation {
+  op: 'removeDeploymentExtend';
+  node: string;
+  file: string;
+  occurrence?: number;
+}
+
 export type Mutation =
   | AddElementMutation
   | AddRelationshipMutation
@@ -111,7 +246,18 @@ export type Mutation =
   | UpdateElementMutation
   | UpdateRelationshipMutation
   | RemoveElementMutation
-  | RemoveRelationshipMutation;
+  | RemoveRelationshipMutation
+  | AddDeploymentNodeMutation
+  | UpdateDeploymentNodeMutation
+  | RemoveDeploymentNodeMutation
+  | AddDeploymentInstanceMutation
+  | UpdateDeploymentInstanceMutation
+  | RemoveDeploymentInstanceMutation
+  | AddDeploymentRelationshipMutation
+  | UpdateDeploymentRelationshipMutation
+  | RemoveDeploymentRelationshipMutation
+  | AddDeploymentExtendMutation
+  | RemoveDeploymentExtendMutation;
 
 export interface MutationsFile {
   mutations: Mutation[];
@@ -216,13 +362,48 @@ function optionalStringArray(obj: JsonObject, key: string, path: string): void {
   });
 }
 
+function optionalPositiveInteger(obj: JsonObject, key: string, path: string): void {
+  const value = obj[key];
+  if (value !== undefined && !(typeof value === 'number' && Number.isInteger(value) && value >= 1)) {
+    throw new MutationsFileError(
+      `${path}.${key}`,
+      `expected a whole number from 1, got ${typeof value === 'number' ? value : describeValue(value)}`,
+    );
+  }
+}
+
+const ENDPOINT_FIELDS = ['id', 'element'] as const satisfies ReadonlyArray<keyof DeploymentEndpoint>;
+
+/** A deployment relationship endpoint `{ id, element? }` at `obj[key]`. */
+function requireEndpoint(obj: JsonObject, key: string, path: string): void {
+  const value = obj[key];
+  const endpointPath = `${path}.${key}`;
+  if (!isObject(value)) {
+    throw new MutationsFileError(
+      endpointPath,
+      value === undefined
+        ? 'required endpoint { id, element? } is missing'
+        : `expected an endpoint { id, element? }, got ${describeValue(value)}`,
+    );
+  }
+  rejectUnknownFields(value, ENDPOINT_FIELDS, endpointPath, 'an endpoint');
+  requireString(value, 'id', endpointPath);
+  optionalString(value, 'element', endpointPath);
+}
+
 /**
  * The JSON path of a field named by an {@link InvalidWriteError} raised for a
  * mutation of `op` at `path`.  The library names fields after the options of
- * its calls; `apply` names the element of addElement `id`.
+ * its calls; `apply` names the element of addElement `id`, and the selector
+ * `kind` / `title` of a deployment relationship `matchKind` / `matchTitle`.
  */
 export function mutationFieldPath(op: Mutation['op'], path: string, field: string): string {
-  const jsonField = op === 'addElement' && (field === 'name' || field.startsWith('name.')) ? `id${field.slice(4)}` : field;
+  let jsonField = field;
+  if (op === 'addElement' && (field === 'name' || field.startsWith('name.'))) jsonField = `id${field.slice(4)}`;
+  if (op === 'updateDeploymentRelationship' || op === 'removeDeploymentRelationship') {
+    if (field === 'kind') jsonField = 'matchKind';
+    if (field === 'title') jsonField = 'matchTitle';
+  }
   return `${path}.${jsonField}`;
 }
 
@@ -388,6 +569,93 @@ const MUTATION_FIELDS = {
   ],
   removeRelationship: ['op', 'source', 'target'],
   addView: ['op', 'id', 'type', 'target', 'title', 'includes'],
+  addDeploymentNode: [
+    'op',
+    'parent',
+    'name',
+    'kind',
+    'title',
+    'summary',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'style',
+    'metadata',
+    'file',
+  ],
+  updateDeploymentNode: [
+    'op',
+    'id',
+    'title',
+    'summary',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'style',
+    'metadata',
+  ],
+  removeDeploymentNode: ['op', 'id'],
+  addDeploymentInstance: [
+    'op',
+    'node',
+    'element',
+    'name',
+    'title',
+    'summary',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'style',
+    'metadata',
+  ],
+  updateDeploymentInstance: [
+    'op',
+    'id',
+    'title',
+    'summary',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'style',
+    'metadata',
+  ],
+  removeDeploymentInstance: ['op', 'id'],
+  addDeploymentRelationship: [
+    'op',
+    'source',
+    'target',
+    'kind',
+    'bidirectional',
+    'title',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'metadata',
+    'style',
+    'file',
+  ],
+  updateDeploymentRelationship: [
+    'op',
+    'source',
+    'target',
+    'matchKind',
+    'matchTitle',
+    'title',
+    'description',
+    'technology',
+    'tags',
+    'links',
+    'metadata',
+    'style',
+  ],
+  removeDeploymentRelationship: ['op', 'source', 'target', 'matchKind', 'matchTitle'],
+  addDeploymentExtend: ['op', 'node', 'file', 'tags', 'links', 'metadata'],
+  removeDeploymentExtend: ['op', 'node', 'file', 'occurrence'],
 } as const satisfies { [Op in Mutation['op']]: ReadonlyArray<keyof Extract<Mutation, { op: Op }>> };
 
 /** Interface fields absent from {@link MUTATION_FIELDS}; must be `never`. */
@@ -404,6 +672,25 @@ const MUTATIONS_FILE_FIELDS = ['mutations'] as const satisfies ReadonlyArray<key
 
 function isKnownOp(op: unknown): op is Mutation['op'] {
   return typeof op === 'string' && Object.prototype.hasOwnProperty.call(MUTATION_FIELDS, op);
+}
+
+/** An update op must change something: at least one of `fields` is given. */
+function requirePatchField(m: JsonObject, path: string, fields: ReadonlyArray<string>): void {
+  if (!fields.some((key) => m[key] !== undefined)) {
+    throw new MutationsFileError(path, `${String(m.op)} requires at least one of ${fields.join(', ')}`);
+  }
+}
+
+/** The library selector of a deployment relationship mutation. */
+export function deploymentRelationshipSelector(
+  m: JsonObject | UpdateDeploymentRelationshipMutation | RemoveDeploymentRelationshipMutation,
+): DeploymentRelationshipSelector {
+  return {
+    source: m.source as DeploymentEndpoint,
+    target: m.target as DeploymentEndpoint,
+    ...(m.matchKind !== undefined && { kind: m.matchKind as string }),
+    ...(m.matchTitle !== undefined && { title: m.matchTitle as string }),
+  };
 }
 
 function validateMutation(m: JsonObject, path: string): void {
@@ -509,6 +796,125 @@ function validateMutation(m: JsonObject, path: string): void {
         }
         checkViewIncludes(m.includes as string[] | undefined, m.type as AddViewMutation['type']);
       });
+      return;
+    case 'addDeploymentNode':
+      optionalString(m, 'parent', path);
+      requireString(m, 'name', path);
+      requireString(m, 'kind', path);
+      for (const key of ['title', 'summary', 'description', 'technology', 'file']) optionalString(m, key, path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalStyle(m, path, 'element');
+      optionalMetadata(m, path, false);
+      formChecks('addDeploymentNode', path, () => {
+        checkElementName(m.name as string);
+        checkKind(m.kind as string, 'deploymentNode', undefined);
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as ElementStyle | undefined, 'element', undefined);
+        checkMetadata(m.metadata as Record<string, string | string[]> | undefined);
+      });
+      return;
+    case 'updateDeploymentNode':
+    case 'updateDeploymentInstance':
+      requireString(m, 'id', path);
+      for (const key of ['title', 'summary', 'description', 'technology']) optionalString(m, key, path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalStyle(m, path, 'element');
+      optionalMetadata(m, path, true);
+      formChecks(m.op, path, () => {
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as ElementStyle | undefined, 'element', undefined);
+        checkMetadata(m.metadata as MetadataPatch | undefined);
+      });
+      requirePatchField(m, path, ['title', 'summary', 'description', 'technology', 'tags', 'links', 'style', 'metadata']);
+      return;
+    case 'removeDeploymentNode':
+    case 'removeDeploymentInstance':
+      requireString(m, 'id', path);
+      return;
+    case 'addDeploymentInstance':
+      requireString(m, 'node', path);
+      requireString(m, 'element', path);
+      for (const key of ['name', 'title', 'summary', 'description', 'technology']) optionalString(m, key, path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalStyle(m, path, 'element');
+      optionalMetadata(m, path, false);
+      formChecks('addDeploymentInstance', path, () => {
+        if (m.name !== undefined) checkElementName(m.name as string);
+        checkReferenceForm(m.element as string, 'element');
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as ElementStyle | undefined, 'element', undefined);
+        checkMetadata(m.metadata as Record<string, string | string[]> | undefined);
+      });
+      return;
+    case 'addDeploymentRelationship':
+      requireEndpoint(m, 'source', path);
+      requireEndpoint(m, 'target', path);
+      for (const key of ['kind', 'title', 'description', 'technology', 'file']) optionalString(m, key, path);
+      optionalBoolean(m, 'bidirectional', path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalStyle(m, path, 'relationship');
+      optionalMetadata(m, path, false);
+      formChecks('addDeploymentRelationship', path, () => {
+        checkEndpointForm(m.source as DeploymentEndpoint, 'source');
+        checkEndpointForm(m.target as DeploymentEndpoint, 'target');
+        if (m.kind !== undefined) checkKind(m.kind as string, 'relationship', undefined);
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as RelationshipStyle | undefined, 'relationship', undefined);
+        checkMetadata(m.metadata as Record<string, string | string[]> | undefined);
+      });
+      return;
+    case 'updateDeploymentRelationship':
+      requireEndpoint(m, 'source', path);
+      requireEndpoint(m, 'target', path);
+      for (const key of ['matchKind', 'matchTitle', 'title', 'description', 'technology']) optionalString(m, key, path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalStyle(m, path, 'relationship');
+      optionalMetadata(m, path, true);
+      formChecks('updateDeploymentRelationship', path, () => {
+        checkSelectorForm(deploymentRelationshipSelector(m));
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkStyle(m.style as RelationshipStyle | undefined, 'relationship', undefined);
+        checkMetadata(m.metadata as MetadataPatch | undefined);
+      });
+      requirePatchField(m, path, ['title', 'description', 'technology', 'tags', 'links', 'metadata', 'style']);
+      return;
+    case 'removeDeploymentRelationship':
+      requireEndpoint(m, 'source', path);
+      requireEndpoint(m, 'target', path);
+      optionalString(m, 'matchKind', path);
+      optionalString(m, 'matchTitle', path);
+      formChecks('removeDeploymentRelationship', path, () => checkSelectorForm(deploymentRelationshipSelector(m)));
+      return;
+    case 'addDeploymentExtend': {
+      requireString(m, 'node', path);
+      requireString(m, 'file', path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalMetadata(m, path, false);
+      formChecks('addDeploymentExtend', path, () => {
+        checkReferenceForm(m.node as string, 'node');
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkMetadata(m.metadata as Record<string, string | string[]> | undefined);
+      });
+      const contributes =
+        (m.tags as string[] | undefined)?.length ||
+        (m.links as LinkSpec[] | undefined)?.length ||
+        Object.keys((m.metadata as JsonObject | undefined) ?? {}).length;
+      if (!contributes) {
+        throw new MutationsFileError(path, 'addDeploymentExtend requires at least one tag, link or metadata key');
+      }
+      return;
+    }
+    case 'removeDeploymentExtend':
+      requireString(m, 'node', path);
+      requireString(m, 'file', path);
+      optionalPositiveInteger(m, 'occurrence', path);
+      formChecks('removeDeploymentExtend', path, () => checkReferenceForm(m.node as string, 'node'));
       return;
     default:
       throw new MutationsFileError(
