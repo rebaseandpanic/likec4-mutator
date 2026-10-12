@@ -80,50 +80,74 @@ export interface GenerateElementOpts {
  */
 export function generateElement(opts: GenerateElementOpts): string {
   const { indent, name, kind, title, summary, description, technology, tags, links, style, metadata } = opts;
-  const innerIndent = indent + '  ';
-
-  const hasBody = !!(
-    summary ||
-    description ||
-    technology ||
-    (tags && tags.length > 0) ||
-    (links && links.length > 0) ||
-    (style && Object.keys(style).length > 0) ||
-    (metadata && Object.keys(metadata).length > 0)
-  );
 
   let result = `${indent}${name} = ${kind}`;
   if (title) result += ` '${escapeTitle(title)}'`;
+  result += generateBody(indent, {
+    tags,
+    strings: [
+      ['summary', summary],
+      ['description', description],
+      ['technology', technology],
+    ],
+    links,
+    style: style && Object.keys(style).length > 0 ? generateStyleBlock(style, indent + '  ') : '',
+    metadata,
+  });
+  return result;
+}
 
-  if (hasBody) {
-    result += ' {\n';
-    // Tags come first, each on its own line with a # prefix.
-    if (tags && tags.length > 0) {
-      for (const tag of tags) {
-        result += `${innerIndent}${formatTag(tag)}\n`;
-      }
-    }
-    if (summary) result += `${innerIndent}summary '${escapeString(summary)}'\n`;
-    if (description) result += `${innerIndent}description '${escapeString(description)}'\n`;
-    if (technology) result += `${innerIndent}technology '${escapeString(technology)}'\n`;
-    if (links && links.length > 0) {
-      for (const lnk of links) {
-        if (lnk.label) {
-          result += `${innerIndent}link ${formatLinkUrl(lnk.url)} '${escapeString(lnk.label)}'\n`;
-        } else {
-          result += `${innerIndent}link ${formatLinkUrl(lnk.url)}\n`;
-        }
-      }
-    }
-    if (style && Object.keys(style).length > 0) {
-      result += generateStyleBlock(style, innerIndent);
-    }
-    if (metadata && Object.keys(metadata).length > 0) {
-      result += generateMetadataBlock(metadata, innerIndent);
-    }
-    result += `${indent}}`;
+/** The parts of a declaration body, in the order they are written. */
+export interface BodyParts {
+  /** Tags, each written on its own line with a `#` prefix (first, as the grammar requires) */
+  tags?: string[];
+  /** String properties `[key, value]`, each written when the value is non-empty */
+  strings?: Array<[key: string, value: string | undefined]>;
+  /** Hyperlinks, each a `link <url> ['label']` statement */
+  links?: Array<{ url: string; label?: string }>;
+  /** A complete `style { ... }` block (see {@link generateStyleBlock}), or '' for none */
+  style?: string;
+  /** Metadata, written as a `metadata { ... }` block (see {@link generateMetadataBlock}) */
+  metadata?: Record<string, string | string[]>;
+}
+
+/**
+ * The `{ ... }` body of a declaration whose line is indented by `indent`:
+ * ` {`, the parts one level deeper (tags, string properties, links, style,
+ * metadata) and `}` at `indent`.  Returns '' when no part has content, so the
+ * declaration stays a single line.
+ */
+export function generateBody(indent: string, parts: BodyParts): string {
+  const { tags, strings = [], links, style = '', metadata } = parts;
+  const innerIndent = indent + '  ';
+  const writtenStrings = strings.filter((entry): entry is [string, string] => !!entry[1]);
+  const hasBody =
+    (tags !== undefined && tags.length > 0) ||
+    writtenStrings.length > 0 ||
+    (links !== undefined && links.length > 0) ||
+    style !== '' ||
+    (metadata !== undefined && Object.keys(metadata).length > 0);
+  if (!hasBody) return '';
+
+  let result = ' {\n';
+  for (const tag of tags ?? []) {
+    result += `${innerIndent}${formatTag(tag)}\n`;
   }
-
+  for (const [key, value] of writtenStrings) {
+    result += `${innerIndent}${key} '${escapeString(value)}'\n`;
+  }
+  for (const lnk of links ?? []) {
+    if (lnk.label) {
+      result += `${innerIndent}link ${formatLinkUrl(lnk.url)} '${escapeString(lnk.label)}'\n`;
+    } else {
+      result += `${innerIndent}link ${formatLinkUrl(lnk.url)}\n`;
+    }
+  }
+  result += style;
+  if (metadata && Object.keys(metadata).length > 0) {
+    result += generateMetadataBlock(metadata, innerIndent);
+  }
+  result += `${indent}}`;
   return result;
 }
 
@@ -195,54 +219,175 @@ export interface GenerateRelationshipOpts {
 export function generateRelationship(opts: GenerateRelationshipOpts): string {
   const { indent, source, target, label, technology, description, tags, links, metadata, style } =
     opts;
-  const innerIndent = indent + '  ';
 
   let result = `${indent}${source} -> ${target}`;
   if (label) result += ` '${escapeString(label)}'`;
-
-  const hasBody = !!(
-    technology ||
-    description ||
-    (tags && tags.length > 0) ||
-    (links && links.length > 0) ||
-    (metadata && Object.keys(metadata).length > 0) ||
-    (style && Object.keys(style).length > 0)
-  );
-
-  if (hasBody) {
-    result += ' {\n';
-
-    if (tags) {
-      for (const tag of tags) {
-        result += `${innerIndent}${formatTag(tag)}\n`;
-      }
-    }
-
-    if (description) result += `${innerIndent}description '${escapeString(description)}'\n`;
-    if (technology) result += `${innerIndent}technology '${escapeString(technology)}'\n`;
-
-    if (links) {
-      for (const link of links) {
-        if (link.label) {
-          result += `${innerIndent}link ${formatLinkUrl(link.url)} '${escapeString(link.label)}'\n`;
-        } else {
-          result += `${innerIndent}link ${formatLinkUrl(link.url)}\n`;
-        }
-      }
-    }
-
-    if (style && Object.keys(style).length > 0) {
-      result += generateRelationshipStyleBlock(style, innerIndent);
-    }
-
-    if (metadata && Object.keys(metadata).length > 0) {
-      result += generateMetadataBlock(metadata, innerIndent);
-    }
-
-    result += `${indent}}`;
-  }
-
+  result += generateBody(indent, {
+    tags,
+    strings: [
+      ['description', description],
+      ['technology', technology],
+    ],
+    links,
+    style: style && Object.keys(style).length > 0 ? generateRelationshipStyleBlock(style, indent + '  ') : '',
+    metadata,
+  });
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Deployment generation
+// ---------------------------------------------------------------------------
+
+/** Options shared by deployment nodes and deployed instances. */
+interface DeploymentElementOpts {
+  /** Leading whitespace for the declaration line */
+  indent: string;
+  /** Inline title; written whenever defined, `''` included */
+  title?: string;
+  /** Body summary */
+  summary?: string;
+  /** Body description */
+  description?: string;
+  /** Body technology (the grammar has no inline technology for nodes and instances) */
+  technology?: string;
+  /** Tags — each tag name is prefixed with `#` in the output */
+  tags?: string[];
+  /** Hyperlinks — each becomes a `link <url> ['label']` statement */
+  links?: Array<{ url: string; label?: string }>;
+  /** Visual style — emitted as a `style { ... }` block */
+  style?: ElementStyle;
+  /** Metadata key/value pairs — emitted as a `metadata { ... }` block (see {@link GenerateElementOpts.metadata}) */
+  metadata?: Record<string, string | string[]>;
+}
+
+export interface GenerateDeploymentNodeOpts extends DeploymentElementOpts {
+  /** Node name (one identifier, not the id) */
+  name: string;
+  /** Deployment node kind, e.g. 'vm' */
+  kind: string;
+}
+
+export interface GenerateDeployedInstanceOpts extends DeploymentElementOpts {
+  /** Element reference as written after `instanceOf`, e.g. 'app.api' */
+  element: string;
+  /** Instance name; omitted for an unnamed instance (its name is the last segment of `element`) */
+  name?: string;
+}
+
+/** The inline title and body of a deployment node or instance declaration. */
+function deploymentElementTail(opts: DeploymentElementOpts): string {
+  const { indent, title, summary, description, technology, tags, links, style, metadata } = opts;
+  let result = title === undefined ? '' : ` '${escapeString(title)}'`;
+  result += generateBody(indent, {
+    tags,
+    strings: [
+      ['summary', summary],
+      ['description', description],
+      ['technology', technology],
+    ],
+    links,
+    style: style && Object.keys(style).length > 0 ? generateStyleBlock(style, indent + '  ') : '',
+    metadata,
+  });
+  return result;
+}
+
+/**
+ * Generate a deployment node declaration in the `name = kind` form:
+ * `prod = vm 'Production' { ... }`.  The title is written inline whenever it
+ * is defined (an empty title is kept as `''`); summary, description and
+ * technology go into the body.
+ */
+export function generateDeploymentNode(opts: GenerateDeploymentNodeOpts): string {
+  return `${opts.indent}${opts.name} = ${opts.kind}${deploymentElementTail(opts)}`;
+}
+
+/**
+ * Generate a deployed instance declaration: `api = instanceOf app.api 'API'
+ * { ... }`, or `instanceOf app.api ...` without a name.  Title, body and
+ * strings as for {@link generateDeploymentNode}.
+ */
+export function generateDeployedInstance(opts: GenerateDeployedInstanceOpts): string {
+  const name = opts.name === undefined ? '' : `${opts.name} = `;
+  return `${opts.indent}${name}instanceOf ${opts.element}${deploymentElementTail(opts)}`;
+}
+
+export interface GenerateDeploymentRelationshipOpts {
+  /** Leading whitespace for the relationship line */
+  indent: string;
+  /** Source endpoint as written, e.g. 'prod.api' */
+  source: string;
+  /** Target endpoint as written */
+  target: string;
+  /** Relationship kind, written as `-[kind]->` */
+  kind?: string;
+  /** Written as `<->` (or `-[kind]<->`) */
+  bidirectional?: boolean;
+  /** Inline title; written whenever defined, `''` included */
+  title?: string;
+  /** Body description (never inline: LikeC4 ignores an inline one) */
+  description?: string;
+  /** Body technology (never inline: LikeC4 ignores an inline one) */
+  technology?: string;
+  /** Tags — written first in the body */
+  tags?: string[];
+  /** Hyperlinks — each becomes a `link <url> ['label']` statement */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata key/value pairs — emitted as a `metadata { ... }` block */
+  metadata?: Record<string, string | string[]>;
+  /** Visual style — emitted as a `style { ... }` block */
+  style?: RelationshipStyle;
+}
+
+/**
+ * Generate a deployment relationship: `source -> target 'title' { ... }` with
+ * the connector `->`, `<->`, `-[kind]->` or `-[kind]<->`.  Description and
+ * technology are written in the body only: LikeC4 parses the inline forms on
+ * a deployment relation but ignores them.
+ */
+export function generateDeploymentRelationship(opts: GenerateDeploymentRelationshipOpts): string {
+  const { indent, source, target, kind, bidirectional, title, description, technology, tags, links, metadata, style } =
+    opts;
+  const arrow = bidirectional ? '<->' : '->';
+  const connector = kind === undefined ? arrow : `-[${kind}]${arrow}`;
+  let result = `${indent}${source} ${connector} ${target}`;
+  if (title !== undefined) result += ` '${escapeString(title)}'`;
+  result += generateBody(indent, {
+    tags,
+    strings: [
+      ['description', description],
+      ['technology', technology],
+    ],
+    links,
+    style: style && Object.keys(style).length > 0 ? generateRelationshipStyleBlock(style, indent + '  ') : '',
+    metadata,
+  });
+  return result;
+}
+
+export interface GenerateDeploymentExtendOpts {
+  /** Leading whitespace for the `extend` line */
+  indent: string;
+  /** Id of the extended node, written as its path, e.g. 'prod.eu' */
+  node: string;
+  /** Tags contributed to the node */
+  tags?: string[];
+  /** Links contributed to the node */
+  links?: Array<{ url: string; label?: string }>;
+  /** Metadata contributed to the node */
+  metadata?: Record<string, string | string[]>;
+}
+
+/**
+ * Generate an `extend <node> { ... }` block.  Only tags, links and metadata
+ * are written: the grammar allows no string or style properties in an
+ * `extend` body.
+ */
+export function generateDeploymentExtend(opts: GenerateDeploymentExtendOpts): string {
+  const { indent, node, tags, links, metadata } = opts;
+  const body = generateBody(indent, { tags, links, metadata });
+  return `${indent}extend ${node}${body === '' ? ' {\n' + indent + '}' : body}`;
 }
 
 // ---------------------------------------------------------------------------
