@@ -6,7 +6,14 @@
  * mutator applies them atomically.
  */
 import type { ParsedDocument } from '../parser/types.js';
-import type { DeploymentAstNode, DeploymentDeclaration, DeploymentIndex } from '../query/deployment-index.js';
+import type {
+  DeploymentAstNode,
+  DeploymentDeclaration,
+  DeploymentFrame,
+  DeploymentIndex,
+  DeploymentRelationRef,
+} from '../query/deployment-index.js';
+import type { DeploymentResolver } from '../query/deployment-resolver.js';
 import { mergeOrder } from '../query/workspace-index.js';
 import type { TextEdit } from './text-edit.js';
 import { lineEndingOf, withLineEnding } from './text-edit.js';
@@ -203,3 +210,60 @@ export function declarationBodyInsertEdit(
   if (!edit) throw new Error('internal: no edit for the body insertion');
   return edit;
 }
+
+/** True when deployment id `id` is `root` or lies below it. */
+export function isInSubtree(id: string, root: string): boolean {
+  return id === root || id.startsWith(root + '.');
+}
+
+/**
+ * True when frames `frames` (of a relationship or declaration) lie inside
+ * the subtree of `root`: in the body of a node or instance of the subtree,
+ * or in an `extend` block of one.
+ */
+export function isNestedInSubtree(frames: readonly DeploymentFrame[], root: string): boolean {
+  return frames.some((frame) => isInSubtree(frame.type === 'extend' ? frame.target : frame.id, root));
+}
+
+/**
+ * True when the source or the target written on `relation` resolves into
+ * the subtree of `root` (a node or instance of it, or an element stepped
+ * into through an instance of it).  Each endpoint is resolved on its own,
+ * so a relationship whose other endpoint does not resolve still counts.
+ */
+export function relationEndpointInSubtree(
+  resolver: DeploymentResolver,
+  relation: DeploymentRelationRef,
+  root: string,
+): boolean {
+  return (['source', 'target'] as const).some((role) => {
+    const ref = relation.node[role] as Parameters<DeploymentResolver['resolveReference']>[0] | undefined;
+    const target = ref && resolver.resolveReference(ref);
+    return target !== undefined && 'deployment' in target && isInSubtree(target.deployment, root);
+  });
+}
+
+/**
+ * The references in the rules of deployment views that resolve into the
+ * subtree of `root`, each as `'<reference>' in view '<name>' ('<file>')`, in
+ * document order.
+ */
+export function viewReferencesIntoSubtree(index: DeploymentIndex, resolver: DeploymentResolver, root: string): string[] {
+  const out: string[] = [];
+  index.documents.forEach(({ file }, document) => {
+    for (const reference of resolver.viewReferences(document)) {
+      const target = reference.target;
+      if (target === undefined || !('deployment' in target) || !isInSubtree(target.deployment, root)) continue;
+      out.push(`'${reference.text}' in view '${viewName(reference.node) ?? ''}' ('${file ?? ''}')`);
+    }
+  });
+  return out;
+}
+
+/** Name of the view enclosing AST node `node`. */
+function viewName(node: DeploymentAstNode): string | undefined {
+  let current = node as { $type?: string; $container?: unknown; name?: string } | undefined;
+  while (current && current.$type !== 'DeploymentView') current = current.$container as typeof current;
+  return current?.name;
+}
+

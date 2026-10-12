@@ -38,6 +38,7 @@ import { removeIndent } from '../query/likec4-text.js';
 import { readContribution, type Decorations } from '../query/extend-merge.js';
 import { specificationKinds } from '../query/kind-specs.js';
 import type {
+  DeploymentEndpoint,
   DeploymentInstanceInfo,
   DeploymentNodeInfo,
   DeploymentNodeKindDefaults,
@@ -66,7 +67,11 @@ import {
   chooseDeploymentPlacement,
   declarationBodyInsertEdit,
   deploymentInsertEdit,
+  isInSubtree,
+  isNestedInSubtree,
   nodeDeclaration,
+  relationEndpointInSubtree,
+  viewReferencesIntoSubtree,
   type AddDeploymentNodeOpts,
   type UpdateDeploymentNodePatch,
 } from './deployment-ops.js';
@@ -141,6 +146,17 @@ export interface UpdateDeploymentNodeResult {
    * written to disk.
    */
   changedFiles: string[];
+}
+
+/**
+ * Result of {@link LikeC4Mutator.removeDeploymentNode}.  Lists every
+ * deployment relationship removed with the node, as
+ * {@link LikeC4Mutator.listDeploymentRelationships} reported it before the
+ * removal: endpoints as deployment ids (plus the element FQN when an
+ * endpoint steps into an instance's element) and the title.
+ */
+export interface RemoveDeploymentNodeResult {
+  removedRelationships: Array<{ source: DeploymentEndpoint; target: DeploymentEndpoint; title?: string }>;
 }
 
 /**
@@ -1002,6 +1018,89 @@ export class LikeC4Mutator {
     return { changedFiles: this.applyEditGroups(editsByFile) };
   }
 
+  /**
+   * Remove deployment node `id` with its whole subtree — child nodes,
+   * instances and the relationships declared in them — together with:
+   *  - every `extend <node>` block whose path is the node or a node of its
+   *    subtree, in every loaded file (with what is declared in it);
+   *  - every deployment relationship anywhere whose source or target
+   *    resolves into the subtree (to a node or instance of it, or to an
+   *    element stepped into through an instance of it).
+   *
+   * The node must be declared exactly once; a node declared in an `extend`
+   * block is addressed by its id like any other.  The removal is rejected,
+   * with no file changed, while a rule of a deployment view refers to the
+   * node or anything in its subtree (the view is not edited), and when the
+   * removal would change what a surviving reference links to (a name that
+   * becomes unique can re-target a reference written elsewhere).  The
+   * operation is atomic.
+   *
+   * @param id - Deployment id of the node
+   * @returns The deployment relationships that were removed.
+   * @throws {InvalidWriteError} on `id` when no node has the id, it is an
+   *   instance or it is declared more than once; when a deployment view
+   *   refers to the subtree (listing the references); when a surviving
+   *   reference would link to another target
+   */
+  removeDeploymentNode(id: string): RemoveDeploymentNodeResult {
+    const declaration = nodeDeclaration(this.deployments, id, 'id');
+    const resolver = new DeploymentResolver(this.deployments, this.workspace);
+    const viewReferences = viewReferencesIntoSubtree(this.deployments, resolver, id);
+    if (viewReferences.length > 0) {
+      throw new InvalidWriteError(
+        'id',
+        `'${id}' cannot be removed while deployment views refer to it or its subtree: ${viewReferences.join(', ')}`,
+      );
+    }
+
+    // What disappears: the declaration, the extend blocks of the subtree and
+    // the relationships outside them with an endpoint in the subtree (the
+    // relationships declared inside go along with their container).
+    const removed = new Set<object>([declaration.node]);
+    for (const extend of this.deployments.allExtendBlocks()) {
+      if (isInSubtree(extend.target, id)) removed.add(extend.node);
+    }
+    const removedRelations = new Set<string>();
+    for (const relation of this.deployments.relations()) {
+      const nested = isNestedInSubtree(relation.frames, id);
+      const cascaded = !nested && relationEndpointInSubtree(resolver, relation, id);
+      if (cascaded) removed.add(relation.node);
+      const cst = (relation.node as { $cstNode?: { offset: number } }).$cstNode;
+      if ((nested || cascaded) && cst) removedRelations.add(`${relation.file ?? ''}:${cst.offset}`);
+    }
+    const removedRelationships = this.listDeploymentRelationships()
+      .filter((r) => removedRelations.has(`${r.file ?? ''}:${r.sourceRange.offset}`))
+      .map(({ source, target, title }) => ({ source, target, ...(title !== undefined && { title }) }));
+
+    const before = this.referenceSnapshot(removed);
+    const snapshot = this.snapshot();
+    try {
+      // One construct at a time (each removal reparses its file): the
+      // relationships outside the subtree, the extend blocks, the node.
+      for (;;) {
+        const next = this.deployments.relations().find((relation) =>
+          !isNestedInSubtree(relation.frames, id) &&
+          relationEndpointInSubtree(new DeploymentResolver(this.deployments, this.workspace), relation, id),
+        );
+        if (!next) break;
+        this.removeDeploymentConstruct(next.file, next.node);
+      }
+      for (;;) {
+        const next = this.deployments.allExtendBlocks().find((extend) => isInSubtree(extend.target, id));
+        if (!next) break;
+        this.removeDeploymentConstruct(next.file, next.node);
+      }
+      const [current] = this.deployments.declarations(id);
+      if (!current) throw new Error(`Internal error: the declaration of '${id}' is gone before its removal`);
+      this.removeDeploymentConstruct(current.file, current.node);
+      this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing' });
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+    return { removedRelationships };
+  }
+
   // ---------------------------------------------------------------------------
   // Validation & serialization
   // ---------------------------------------------------------------------------
@@ -1325,25 +1424,39 @@ export class LikeC4Mutator {
    * and in the rules of deployment views.  References that did not resolve
    * before are not considered: they are not changed by the call.
    *
+   * A removal is checked the same way, with `before` taken over the
+   * surviving references only (see {@link referenceSnapshot}): removing a
+   * name can make a surviving reference resolve to another target.
+   *
    * @param inserted - Per file, the text ranges the write inserted
-   * @throws {InvalidWriteError} on `name`
+   * @param write    - The field the error names and the verb of the message
+   * @throws {InvalidWriteError} on `write.field` (`name` by default)
    */
   private rejectChangedReferences(
     before: ReferenceSnapshot,
     inserted: ReadonlyMap<string, readonly TextRange[]>,
     fqn: string,
+    write: { field: string; action: string } = { field: 'name', action: 'declaring' },
   ): void {
     const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(), inserted);
     if (!change) return;
     throw new InvalidWriteError(
-      'name',
-      `declaring '${fqn}' changes what an existing reference links to: the ${change.role} '${change.text}' in '${change.file}' ` +
+      write.field,
+      `${write.action} '${fqn}' changes what an existing reference links to: the ${change.role} '${change.text}' in '${change.file}' ` +
         `links to ${change.before.display} and would ${
           change.after === undefined
             ? 'no longer resolve (LikeC4 would report: Could not resolve reference)'
             : `link to ${change.after.display} instead`
         }`,
     );
+  }
+
+  /** Remove one deployment construct (a declaration, relationship or extend block) from `file`. */
+  private removeDeploymentConstruct(file: string | undefined, node: object): void {
+    const cst = (node as { $cstNode?: { offset: number; end: number } }).$cstNode;
+    if (file === undefined || !cst) throw new Error('Internal error: a deployment construct without file or position');
+    const { offset, end, newText } = buildRemovalEdit(this.document(file).fullText, cst.offset, cst.end);
+    this.applyEdit(file, { offset, end, newText });
   }
 
   /** Ids of the views declared in every loaded file. */

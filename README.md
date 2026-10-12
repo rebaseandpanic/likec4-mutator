@@ -995,6 +995,26 @@ mutator.updateDeploymentNode('prod.eu', { title: 'Europe', tags: ['primary'], me
 
 Rejected, with nothing changed: an `id` no node has, that is an instance or that is declared more than once (`id`, naming the declarations); an undeclared tag or an invalid style value; a `tags`, `links` or `metadata` update while any loaded file has syntax errors (field `tags`, `links` or `metadata`: an `extend` block could hide in that file); the other fields can still be updated then.
 
+#### Removing nodes
+
+`removeDeploymentNode(id)` removes a node with its whole subtree — child nodes, instances and the relationships declared in them — and returns `{ removedRelationships }`. Removed with it, in every file:
+
+- every `extend <node>` block of the node or of a node of its subtree, with what is declared in it;
+- every deployment relationship whose source or target is in the subtree — a node or instance of it, or an element stepped into through an instance of it.
+
+`removedRelationships` lists each removed relationship as `listDeploymentRelationships()` reported it before the call: `{ source, target, title? }`, endpoints as `{ id, element? }`.
+
+```typescript
+mutator.removeDeploymentNode('prod.eu.vm1');
+// { removedRelationships: [{ source: { id: 'prod.eu.vm2.web' }, target: { id: 'prod.eu.vm1.api' }, title: 'requests' }, ...] }
+```
+
+Rejected, with nothing changed (field `id`):
+
+- an `id` no node has, that is an instance or that is declared more than once;
+- a rule of a deployment view (`include`, `exclude`, a relationship predicate, `style`) refers to the node or anything in its subtree — the error lists the references; views are never edited;
+- the removal would change what a surviving reference links to. A name can become unique: with `vm n` at the root and `prod { a { n } b { n } c { -> n } }`, `-> n` links to the root `n` while `n` is ambiguous below `prod`; removing `prod.b` would make it link to `prod.a.n`.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.
