@@ -458,7 +458,7 @@ class StepReader {
       const title = typeof node.title === 'string' ? removeIndent(node.title) : '';
       const position = sequence(i);
       const cst = node.$cstNode;
-      const text = i === 0 ? (cst?.text ?? '') : this.sourceText(segment);
+      const text = stepSegmentText(segment);
       result.push({
         source,
         target: to,
@@ -474,14 +474,6 @@ class StepReader {
       });
     });
     return result;
-  }
-
-  /** The source text of a later chain segment: from the end of the previous segment to its own end. */
-  private sourceText(segment: ViewStepSegment): string {
-    const root = this.root(segment.node);
-    const text = (root.$cstNode as { text?: string } | undefined)?.text;
-    const rootOffset = root.$cstNode?.offset ?? 0;
-    return text === undefined ? '' : text.slice(segment.offset - rootOffset, segment.end - rootOffset);
   }
 
   /** Line and column of a segment's start offset. */
@@ -548,4 +540,19 @@ class StepReader {
     if (style) body.style = style;
     return Object.keys(body).length > 0 ? body : undefined;
   }
+}
+
+/**
+ * The source text of a step segment as reads report it (and as an address
+ * `text` guard must give it): a single step's or a chain's first segment's
+ * node text; for a later chain segment, the text from the end of the
+ * previous segment to its own end (from its connector on).
+ */
+export function stepSegmentText(segment: ViewStepSegment): string {
+  if (segment.segment === 0) return segment.node.$cstNode?.text ?? '';
+  let root = segment.node;
+  while (root.$container) root = root.$container;
+  const text = root.$cstNode?.text;
+  const rootOffset = root.$cstNode?.offset ?? 0;
+  return text === undefined ? '' : text.slice(segment.offset - rootOffset, segment.end - rootOffset);
 }
