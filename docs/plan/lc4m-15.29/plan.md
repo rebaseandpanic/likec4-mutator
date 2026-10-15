@@ -13,9 +13,10 @@ Approach:
   - linker targets of view-body references.
 - **Read side.** A new workspace-level `ViewIndex` recovers source order from CST offsets. A new `ViewReferenceResolver` mirrors LikeC4's view scoping (D25). It reuses `EndpointResolver` through a new `ReferencePosition` variant, and `DeploymentResolver.resolveText` for deployment views.
 - **Write side.** New writers reuse the existing seams: `BodyInsertions`, `buildRemovalEdit`, the tag/link editors, `applyEditGroups`, snapshot/restore and the reference snapshot. Two seams are generalized instead of forked:
-  - deployment block placement, which becomes a shared block placement;
+  - deployment block placement, which becomes a shared block placement (D27, D41);
   - `isSingleIncludeRule`, which becomes a rule-text parser.
 - **Rule checks.** One rule admissibility check (D23, D34, D35) serves `addView`, `addViewRule` and `replaceViewRule`.
+- **`par` blocks.** A `par` block is never left contributing no LikeC4 step (D40). One step-contribution predicate, mirroring LikeC4's step parse, decides it for reads and writes.
 - **`apply`.** It gains 10 operations and the new `addView` fields under the existing `MUTATION_FIELDS` exhaustiveness check.
 
 ## Technical context
@@ -26,11 +27,11 @@ Approach:
   - `npm run lint` = `tsc --noEmit` + `tsc -p scripts` + `scripts/grammar-rules.ts --check docs/likec4-coverage.md`.
   - Oracles live in `tests/helpers/likec4-model.ts`.
 - **Contracts touched:**
-  - `LikeC4Mutator`: new read and write methods. `addView` gains fields, rejections and block creation. Its return stays `void`.
+  - `LikeC4Mutator`: new read and write methods. `addView` gains fields, rejections, block creation and the LikeC4 document-order default (D41). Its return stays `void`.
   - `src/index.ts`: new exported types.
   - `apply` mutations file: new ops, and new `addView` fields.
   - Docs: README, CHANGELOG, `docs/likec4-coverage.md`.
-- **Unchanged:** `C4Query`, element, relationship and deployment reads and writes (INV-7). The only exceptions are `addView`'s new rejections and its new placement.
+- **Unchanged:** `C4Query`, element, relationship and deployment reads and writes (INV-7). The only exceptions are the `addView` changes INV-7 lists.
 - **Code facts this plan relies on (verified):**
   - **`addView` today** (`src/mutator/mutator.ts:922-944`):
     - checks the id, duplicates (`viewIds`, `mutator.ts:2111-2119`), the `target` form, includes (`checkViewIncludes`, `src/mutator/write-checks.ts:190-218`) and `autoLayout`;
@@ -51,7 +52,8 @@ Approach:
   - **Placement and layout:**
     - `chooseDeploymentPlacement` / `deploymentInsertEdit` (`src/mutator/deployment-ops.ts:242-286`) implement D4/D11 in LikeC4 document order (`mergeOrder`, `workspace-index.ts:811-825`);
     - `BodyInsertions` (`src/mutator/body-layout.ts`) knows `elements` as nested declarations only (`forBody`), plus `forBlock`.
-  - **Atomic writes:** `applyEditGroups` (`mutator.ts:1781-1795`) and snapshot/restore (`mutator.ts:2180-2189`). Edits that produce parse errors are refused (`applyEditsToFile`, `mutator.ts:2230-2252`).
+  - **Atomic writes:** `applyEditGroups` (`mutator.ts:1781-1795`) and snapshot/restore (`mutator.ts:2180-2189`). Edits that produce parse errors in the edited file are refused (`applyEditsToFile`, `mutator.ts:2230-2252`).
+  - **Element syntax-error guard:** `rejectFieldWhileSyntaxErrors` (`mutator.ts:1733-1744`) exists because of `extend` blocks; view writes do not use it (D42).
   - **`apply` today:**
     - `AddViewMutation` (`src/mutations-file.ts:61-69`) has no `autoLayout`; its field list is at `mutations-file.ts:571`, validation at `:779-807`;
     - the exhaustiveness check is at `mutations-file.ts:661-669`;
@@ -63,9 +65,11 @@ Approach:
     - a bodyless view hits `invariant(body)` (LS:6426, LS:6545, LS:5571) inside the try/catch (LS:6418-6419), so it is absent;
     - `extends` resolution and title defaulting happen later, in `buildModelData` (`toC4View` LS:3590-3600; `resolveRulesExtendedViews` LS:3632).
   - **How LikeC4 parses steps:**
-    - `parseStep` swaps `<-` (LS:6648-6660); a chain infers backward segments (LS:6615-6646);
-    - `parallel` is normalized to `par` (LS:6718);
-    - an empty subflow throws `Parallel steps must have at least one step` (LS:6726), and `tryMap` (LS:5183-5198) drops the statement.
+    - `parseStepStatement` dispatches subflow, try, alt, series and single steps (LS:6596-6606);
+    - a chain whose first step is backward contributes nothing (LS:6620-6621); a chain infers backward segments (LS:6615-6646); `parseStep` swaps `<-` (LS:6648-6660);
+    - `par` / `opt` / `loop` / `break` require a non-empty parsed inner list (LS:6724-6726); `parallel` is normalized to `par` (LS:6718); `if` / `when` / `else` outside `alt` throw (LS:6732-6734);
+    - `try` requires a non-empty `try` list (LS:6764-6765); `alt` requires at least one non-empty branch (LS:6773-6785);
+    - `tryMap` (LS:5183-5198) drops a statement whose parse throws, and drops a node with an error diagnostic (`isValid`, LS:5015, LS:5157). So `par { }` and `par { opt { } }` both vanish (D40).
 
 ## Multi-repo and contracts
 
@@ -89,21 +93,23 @@ N/A: one repository, one stream. No cross-repository contracts.
 | Decision | Why | Rejected |
 |---|---|---|
 | **Read API** (names fixed here; spec "Integration points"): `listViews({ type?, file? }): ViewInfo[]` and `getView(id): ViewInfo \| null`. `getView` returns the first declaration in LikeC4 document order; `listViews` lists every declaration, duplicates included (US-1). | Same duplicate rule as `getDeploymentNode` (`src/query/deployment-query.ts:100-108`); one id addressing scheme (D28) | `getView` returning an array; `getView` throwing on duplicates |
-| **Write API**, each returning `{ changedFiles }`: `updateView(id, patch)`, `addViewRule(id, rule, { before? })`, `replaceViewRule(id, address, rule)`, `removeViewRule(id, address)`, `removeView(id)`, `addViewStep(id, step, { path? })`, `updateViewStep(id, address, patch)`, `moveViewStep(id, from, to)`, `removeViewStep(id, address)`, `addViewParallel(id, { path? })`. A `par` block is removed through `removeViewStep`. `addView` keeps its `void` return (INV-7). | D32: one operation per address kind; the same names are used in `apply` (US-12) | One `updateView` patch carrying rules and steps (D32 rejected it) |
-| **Addresses and error fields.** Rule address `{ index, text? }` (D22). Step address `{ path, segment?, text? }` (D24); a move destination is a `path` (D37). Error fields: `id` (view); `address.index` / `address.text` / `before.index` / `before.text`; `rule.kind` / `rule.expression`; `path`, `segment`, `text`, `to`; `step.<field>`; `patch.<field>`. | INV-2 / INV-3 need the field; `apply` gets `mutations[i].<field>` through `mutationFieldPath` unchanged | Free-text error locations |
-| **Placement (D27).** `chooseDeploymentPlacement` is generalized into one block placement for `deployment` and `views`. An explicit `file` must be loaded and is authoritative (its first block, else a new block at its end). Without `file`, the default walks files in LikeC4 document order. | Same rule as D4/D11; one tested code path | A second copy of the placement code; keeping load order (behaviour change listed in CHANGELOG, spec D41) |
+| **Write API**, each returning `{ changedFiles }`: `updateView(id, patch)`, `addViewRule(id, rule, { before? })`, `replaceViewRule(id, address, rule)`, `removeViewRule(id, address)`, `removeView(id)`, `addViewStep(id, step, { path? })`, `updateViewStep(id, address, patch)`, `moveViewStep(id, from, to)`, `removeViewStep(id, address)`, `addViewParallel(id, { path?, statements?, steps? })`. `moveViewStep` and `removeViewStep` also return `removedParallelBlocks`, the pre-write paths of `par` blocks removed because the write literally emptied them (D40). A `par` block is removed whole through `removeViewStep`. `addView` keeps its `void` return (INV-7). | D32: one operation per address kind; the same names are used in `apply` (US-12); D40 asks for removed blocks to be reported | One `updateView` patch carrying rules and steps (D32 rejected it) |
+| **Addresses and error fields.** Rule address `{ index, text? }` (D22). Step address `{ path, segment?, text? }` (D24); a move destination is a `path` (D37). Error fields: `id` (view); `address.index` / `address.text` / `before.index` / `before.text`; `rule.kind` / `rule.expression`; `path`, `segment`, `text`, `from`, `to`, `address`; `statements` / `statements[i]`; `steps[i].<field>`; `step.<field>`; `patch.<field>`. | INV-2 / INV-3 need the field; `apply` gets `mutations[i].<field>` through `mutationFieldPath` unchanged | Free-text error locations |
+| **Step-contribution predicate** (`contributesSteps`, defined once in T005; used by T009 and T021). A step statement contributes a LikeC4 step exactly when LikeC4's step parse (LS:6596-6790) would return at least one step for it. Per form: a single step whose endpoints resolve and that is not a known invalid construct; a chain whose first step is not backward; a `par` / `opt` / `loop` / `break` block with at least one contributing inner statement; a `try` block whose `try` part contributes; an `alt` with at least one contributing `if` / `when` / `else` branch. A stray `if` / `when` / `else` never contributes. Known invalid constructs are those of RECON S4: parent-child step, chain after a backward step, nested `par`. | D40 defines "empty" as contributing no parsed step; one predicate for reads (`inModel`) and writes | Checking only for literal emptiness (misses `par { opt { } }`) |
+| **`par` creation, auto-removal and rejection (D40).** `addViewParallel` needs at least one of `statements` and `steps`, and the new block must satisfy `contributesSteps`; otherwise it is rejected on `statements`. `statements` are existing top-level step statements addressed by pre-move paths (D37); `steps` are new step specs checked as `addViewStep`. **Plan-level mechanism (accepted):** the block goes at the top-level insertion boundary `path`, a pre-move path (default: after the last top-level statement). Inside it, moved statements come first in the order given, then new steps in the order given. Rules between moved statements stay where they are (statements move individually). **Leaving a block:** a move or removal that takes away a block's last statement removes the block in the same edit group (`removedParallelBlocks`). A move or removal that would leave the block holding only non-contributing statements (for example an empty `opt { }`) is rejected on `from` / `address`, naming the block path; the remaining opaque text is never deleted silently. A `par` block already in the text that does not contribute reads with `inModel: false`. | LikeC4 silently drops such blocks (LS:6724-6726, LS:5183-5198); same principle as D34 | Empty placeholder blocks; rejecting the last move-out; silently deleting leftover opaque statements |
+| **Placement (D27, D41).** `chooseDeploymentPlacement` is generalized into one block placement for `deployment` and `views`. An explicit `file` must be loaded and is authoritative (its first block, else a new block at its end). Without `file`: the first file in LikeC4 document order with a block, else the first file with a `model` block, else the first file. This replaces `findFileWithViews`' load order. | One file-choice rule across the library (D4, D41) | A second copy of the placement code; keeping load order for views |
 | **Rule admissibility check** (`checkViewRule`, defined once in T010; referenced by T015 and T018). The check, in order: (1) the text parses to exactly one rule of the requested kind, allowed for the view type; (2) structural D34 rejections; (3) every reference resolves at the insertion place through `ViewReferenceResolver` (unresolved, ambiguous, wrong target type, model reference in a deployment `include`); (4) kinds, tags and relationship kinds are declared. Structural rejections in (2): `with` in `exclude`; `with` on `element.kind` / `element.tag`; a dynamic relation predicate; dynamic `with` on wildcard / kind / tag; deployment `with`. | D23, D34, D35: one write path, INV-1, and silent no-ops rejected | Parse-only checks; relying on `validate()` (RECON note 7) |
 | **`ViewReferenceResolver`** in a new module. Element references use `EndpointResolver` through a new `ReferencePosition` variant ("view body": document scope, plus the `of` element frame, or the `extends` parent's `of` frame). Deployment views use `DeploymentResolver.resolveText` with the view body as container. View references are typed by role. | Mirrors LS:7403-7431 and LS:7564-7573 / LS:7640 without forking `EndpointResolver`; same pattern as D7 | Language-server linking at run time (lc4m-15.31, D25 rejected it) |
-| **Reference snapshot extended opt-in** (`views` option): view-body element and deployment references, step endpoints, `navigateTo`, `extends`. Taken by view writes only. | INV-8 guard. Turning it on for `addElement` would add new `addElement` rejections, which INV-7 forbids. | Always-on view references; no guard |
+| **Reference snapshot extended opt-in** (`views` option): view-body element and deployment references, step endpoints, `navigateTo`, `extends`. Taken by view writes only. | INV-8 guard. Turning it on for `addElement` would add new `addElement` rejections, which INV-7 forbids (see Known residuals). | Always-on view references; no guard |
 | **Steps are written from structured fields**, never as text. Backward is written `target <- source` (D36). The kind form is chosen by `kindForm: 'bracket' \| 'dot'`. A single step that is both backward and kind-bearing is rejected (D38). | US-9 contract; D36 round trip | Step text input |
 | **Step sequence position** is reported as `sequence: { step, parallel? }`, mirroring LikeC4's computed `step-NN[:par.MM]`. Inner steps of opaque stage-6 blocks are counted. | US-4 one-to-one comparison; FOR-PLAN 8: compare by content, ids are positional | LikeC4 `astPath` as an address (D24 rejected it) |
 | **`extends` cycle and parent checks** are a graph walk over `ViewIndex` (named element view with a body, no cycle after the write). Rejected on `extends`. | `validate()` is silent on cycles (RECON S4; FOR-PLAN 6); INV-9 | Relying on the oracle |
 | **Links of view writes** get a new `checkLinks` (`InvalidWriteError` on `links[i].url`). Existing operations keep `formatLinkUrl`'s plain `Error`. | INV-2 for the new writes; INV-7 for the old ones | Changing the error type of existing operations |
-| **Syntax-error guard.** Tag and link updates of `updateView` are rejected while any file has syntax errors, through `rejectFieldWhileSyntaxErrors` (`mutator.ts:1733-1744`). | Spec "Edge cases" | — |
+| **No syntax-error guard for view writes (D42).** View tag and link updates are allowed while other files have syntax errors; `rejectFieldWhileSyntaxErrors` is not used. A write that leaves the edited file unparsable is still refused by `applyEditsToFile`. | Views have no `extend` blocks, the reason for the element restriction | Copying the element restriction |
 | **Files.** View writers in `src/mutator/view-ops.ts`, step writers in a new `src/mutator/step-ops.ts`. `LikeC4Mutator` keeps thin public methods around its private snapshot / `applyEditGroups` / `rebuildQueries`. | One atomic-apply path; `mutator.ts` is already 2303 lines | A second mutator class |
-| **Release 0.10.0** (minor; the `addView` behaviour changes are listed in CHANGELOG). | SC-008 | 1.0.0 |
+| **Release 0.10.0** (minor; the `addView` behaviour changes, D41 included, are listed in CHANGELOG). | SC-008 | 1.0.0 |
 
-Spec decisions D21 to D39 are implemented as mapped in the traceability table. No `[DECISION-NEEDED]`.
+Spec decisions D21 to D42 are implemented as mapped in the traceability table. No `[DECISION-NEEDED]`.
 
 ## Complexity Tracking
 
@@ -111,8 +117,10 @@ Spec decisions D21 to D39 are implemented as mapped in the traceability table. N
 |---|---|---|
 | `ViewIndex` (`src/query/view-index.ts`) | The source order of a view body exists only in CST offsets (FOR-PLAN 1). Addresses, the reverse reference index (FOR-PLAN 7) and duplicate ids need one workspace-level structure. | Each reader and writer would re-walk and re-sort ASTs; addresses would drift between read and write |
 | `ViewReferenceResolver` (`src/query/view-resolver.ts`) | View scoping differs from model scoping (`of` / `extends` frames, dynamic document scope, typed view targets; RECON S3) | No reference checks at all: INV-1 breaks on unresolved, ambiguous or wrong-type references |
+| Step-contribution predicate | D40: "empty" is defined by LikeC4's parse result, not by text | `par { opt { } }` would be written or left in place and silently vanish from LikeC4's model |
 | Reference snapshot `views` option | INV-8 guard over view references without changing `addElement` (INV-7) | INV-8 would rest on argument only, with no runtime rollback |
-| Generalized block placement and view-body insertion anchors | D27 equals D4/D11. View bodies have tags, props and rules/steps (FOR-PLAN 2), which `forBody` (`elements` only) cannot place. | A forked placement and an ad hoc insertion per writer |
+| Generalized block placement and view-body insertion anchors | D27/D41 equal D4/D11. View bodies have tags, props and rules/steps (FOR-PLAN 2), which `forBody` (`elements` only) cannot place. | A forked placement and an ad hoc insertion per writer |
+| `par` auto-removal inside move and remove | D40: LikeC4 silently drops an emptied block | Leaving an empty block that reads as a statement but vanishes from LikeC4's model |
 
 No new dependency.
 
@@ -131,7 +139,7 @@ No new dependency.
   - block-level `views { style … }`;
   - every predicate form of the grammar (element, relation, `with`, `where` with each leaf and participant variant), with a trailing-comma include;
   - every stage-6 rule kind;
-  - a dynamic view where rules and steps interleave, with every step form: `->`, `<-`, `-[k]->`, `.k`, a chain, a returning chain, a step body with each property, `par`, `parallel`, and stage-6 blocks containing steps;
+  - a dynamic view where rules and steps interleave, with every step form: `->`, `<-`, `-[k]->`, `.k`, a chain, a returning chain, a step body with each property, `par`, `parallel`, an empty `par { }`, a `par { opt { } }`, and stage-6 blocks containing steps;
   - every `navigateTo` role (element `with`, relation `with`, step, model relationship body, deployment relationship body);
   - a CRLF file.
 - Gate: both fixtures pass `expectValidLikeC4`, asserted as a precondition in the consuming test files.
@@ -145,19 +153,21 @@ No new dependency.
 - `expectViewsAgreeWithLikeC4(views, files)` encodes every INV-4 exception:
   - folder prefix stripped;
   - block-level style rules removed from LikeC4's list;
-  - bodyless and empty-`par` absence (spec INV-4, D40);
+  - a bodyless view compared by its absence;
+  - a `par` statement that contributes no LikeC4 step (`par { }`, `par { opt { } }`) compared by its absence (D40);
   - D18 style written forms;
   - D34 constructs;
   - source-only fields ignored.
 - `expectComputedViewsSurvive(before, after, removedId?)` checks INV-9; generated and unnamed views are exempt.
-- Gate: `tests/likec4-validate-oracle.test.ts` unchanged and green. Consuming test files assert the oracle preconditions they rely on: bodyless absence, empty-`par` absence, folder prefix.
+- Gate: `tests/likec4-validate-oracle.test.ts` unchanged and green. Consuming test files assert the oracle preconditions they rely on: bodyless absence, absence of non-contributing `par` blocks (both forms), folder prefix.
 
 **T003** — `src/query/types.ts`, `src/index.ts`. Mechanism: the public read and address contract.
 - `ViewInfo`: `id` (null if unnamed), `type`, `of`, `extends`, `title`, `description`, `tags`, `links`, `folder`, `file`, `sourceRange`, `inModel`, `rules`, `steps`.
 - `ViewRuleInfo`: `index`, `kind` (`include` / `exclude` / `autoLayout` / opaque kinds), `text`, `sourceRange`, plus `autoLayout` values or predicate items.
 - `ViewPredicateItem`: element / relation expression, `with` props, `where` tree. Reference fields are "as written + resolved target or `null`"; deployment views use the `LinkedTarget` shape.
-- `ViewStepStatementInfo` (step / chain / `par` / opaque) and `ViewStepInfo` (`source`, `target`, `direction`, `arrow`, `kind` + form, `title`, body properties, `sequence`, `segment`).
-- `ViewRuleAddress`, `ViewStepAddress`; exports.
+- `ViewStepStatementInfo` (step / chain / `par` / opaque). A `par` statement carries `inModel`, which is false when the block contributes no LikeC4 step (D40).
+- `ViewStepInfo` (`source`, `target`, `direction`, `arrow`, `kind` + form, `title`, body properties, `sequence`, `segment`).
+- `ViewRuleAddress`, `ViewStepAddress`, and the result type with `removedParallelBlocks`; exports.
 - Gate: `tsc --noEmit`; no existing member changes.
 
 **T004** — new `src/query/view-index.ts`, and `src/mutator/mutator.ts` (`rebuildQueries` builds the index beside `WorkspaceIndex`). Mechanism: `ViewIndex`.
@@ -165,17 +175,17 @@ No new dependency.
 - Body items merged and sorted by CST offset (FOR-PLAN 1).
 - Rule list with opaque kinds.
 - Expression item lists from the `prev`-linked `Expressions` / `FqnExpressions` / `Tags`; a trailing-comma item without a value is dropped (FOR-PLAN 3).
-- Step-statement tree with paths. Chain segments come from nested `StepSeries.source`; segment i spans the previous node's end to its own end (FOR-PLAN 4).
+- Step-statement tree with paths, including the inner statements of opaque stage-6 blocks (unaddressable, but needed by `contributesSteps`). Chain segments come from nested `StepSeries.source`; segment i spans the previous node's end to its own end (FOR-PLAN 4).
 - Reverse index of view references (`navigateTo` in element `with`, relation `with`, steps, model and deployment relationship bodies; `extends`) with file and position (FOR-PLAN 7).
 - Gate: full existing suite green unchanged (INV-7); covered by T006 to T009.
 
-**T005** — new `src/query/view-resolver.ts`; `src/query/workspace-index.ts` (new `ReferencePosition` variant for a view body scope). Mechanism: `ViewReferenceResolver` (D25, FOR-PLAN 5). It resolves:
+**T005** — new `src/query/view-resolver.ts`; `src/query/workspace-index.ts` (new `ReferencePosition` variant for a view body scope). Mechanism: `ViewReferenceResolver` (D25, FOR-PLAN 5), plus the step-contribution predicate `contributesSteps` (defined in Key design decisions; it needs the resolver for step endpoints). The resolver resolves:
 - element references: document-unique names; the `of` frame; the `extends` parent's `of` frame; dynamic views use the document scope only;
 - deployment references in deployment views, flagged as model or deployment targets, through `DeploymentResolver.resolveText`;
 - view references by role: element `with` → any view; relation `with` / step → dynamic view; `extends` → element view;
 - tag, element kind, deployment kind and relationship kind references against the index.
 
-Gate: covered by T006.
+Gate: resolver covered by T006; predicate covered by T009 (reads) and T021 (writes).
 
 **T006 [TEST]** — new `tests/query/view-resolution.test.ts`. Mechanism: the resolver against `linkedViewReferences`, one block per reference class. Each class asserts the resolved target and the unresolved / ambiguous outcomes:
 - no-`of` view: same file, ambiguous, cross-file, qualified (spike 03 a1-a6);
@@ -211,9 +221,12 @@ Gate: every class equals LikeC4's linker observation.
 - Statement paths; chain segments with numbers.
 - Source / target in LikeC4's sense; direction, including the inferred backward segment of a returning chain (D36).
 - Written arrow, kind form, title, body properties.
-- `par` / `parallel` with `[i, j]` paths; opaque stage-6 blocks.
+- `par` / `parallel` with `[i, j]` paths; `inModel` of a `par` block from `contributesSteps` (D40); opaque stage-6 blocks.
 - `sequence` counting inner steps of opaque blocks.
-- Gate: every step form equals LikeC4's parsed steps one to one, by `sequence` and content. Backward and returning-chain examples included. Interleaved rules and steps appear in separate lists.
+- Gate:
+  - every step form equals LikeC4's parsed steps one to one, by `sequence` and content, backward and returning-chain examples included;
+  - `par { }`, `par { opt { } }` and a `par` holding only a stray `if { … }` read `inModel: false` and are absent from LikeC4's steps; a `par` with one contributing statement reads `inModel: true` and is present;
+  - interleaved rules and steps appear in separate lists.
 
 ### Phase Foundational, write side (BLOCKING for US-5 to US-12)
 
@@ -223,7 +236,7 @@ Gate: every class equals LikeC4's linker observation.
 - `checkLinks`.
 - Gate: `tests/mutator/view-includes.test.ts` and `tests/cli/cli-apply-view-includes.test.ts` green unchanged. Behaviour is tested in T015 and T018.
 
-**T011** — new `src/mutator/block-placement.ts`, `src/mutator/deployment-ops.ts`. Mechanism: `chooseDeploymentPlacement` / `deploymentInsertEdit` generalized over the block keyword (`deployment` | `views`), D27. Gate: all deployment write tests green unchanged.
+**T011** — new `src/mutator/block-placement.ts`, `src/mutator/deployment-ops.ts`. Mechanism: `chooseDeploymentPlacement` / `deploymentInsertEdit` generalized over the block keyword (`deployment` | `views`), with the LikeC4 document-order default (D27, D41). Gate: all deployment write tests green unchanged.
 
 **T012** — `src/mutator/body-layout.ts`, `src/mutator/codegen.ts`. Mechanism:
 - `BodyInsertions.forViewBody` with the grammar anchors (FOR-PLAN 2):
@@ -231,7 +244,10 @@ Gate: every class equals LikeC4's linker observation.
   - props go after tags and before the first rule or step;
   - an insertion goes before an arbitrary body item or step statement, or inside a `par` block.
 - `generateView` gains `description` and `extends`; output for existing options is byte-identical.
-- New generators: `generateViewRule`, `generateStep` (D36 / D38 forms), `generateParallel`.
+- New generators:
+  - `generateViewRule`;
+  - `generateStep` (D36 / D38 forms);
+  - `generateParallel`, which takes its inner statement texts and requires at least one (D40).
 - Gate: `tests/mutator/codegen.test.ts` and `tests/mutator/insert-layout.test.ts` green unchanged.
 
 **T013** — new `src/mutator/view-address.ts`. Mechanism: the shared address resolvers.
@@ -250,19 +266,23 @@ Gate: every class equals LikeC4's linker observation.
 ### Phase US-5, US-6, US-7, US-8: views and rules
 
 **T015** — `src/mutator/view-ops.ts`, `src/mutator/mutator.ts`, README "Views › Writing", new `tests/mutator/views-add.test.ts`; rewrites `tests/integration/edge-cases.test.ts:219-224`, `:509-514` and `:634-639` (SC-006). Mechanism: `addView` + `description`, `extends`, `file`.
-- Placement and block creation through T011.
+- Placement and block creation through T011 (D27, D41).
 - Includes run through `checkViewRule` (D35).
 - `of` + `extends` rejected.
 - `extends` parent must be a named element view with a body, and must not create a cycle (D34, INV-9).
 - The snapshot with the `views` option (an unresolved `navigateTo` / `extends newId` becoming resolved is not a change).
-- Gate: every US-5 placement branch, including an explicit blockless file while other files have blocks, and LikeC4 document-order default. Every rejection class, with sources byte-identical. Outputs pass `expectValidLikeC4`; reads back as US-1; `expectComputedViewsSurvive`.
+- Gate: every US-5 placement branch, including:
+  - an explicit blockless file while other files have blocks;
+  - the D41 default where load order and LikeC4 document order differ.
+  
+  Every rejection class, with sources byte-identical. Outputs pass `expectValidLikeC4`; reads back as US-1; `expectComputedViewsSurvive`.
 
 **T016** — same source files + README, new `tests/mutator/views-update.test.ts`. Mechanism: `updateView` (US-6, D33).
 - Title / description REPLACE (`null` removes, `''` written); tags and links REPLACE through `buildReplaceTagsEdit` / `buildReplaceLinksEdit` with view-body anchors.
 - `autoLayout` replaces the last rule in place, appends one as the last rule, or `null` removes every `autoLayout` rule.
 - A missing body is created.
-- Syntax-error guard for tags and links.
-- Gate: read-back equals the patch. LikeC4's parsed and computed values agree (computed `autoLayout` direction). Untouched text is byte-identical (INV-5), CRLF included. Rejections as specified.
+- No syntax-error guard (D42).
+- Gate: read-back equals the patch. LikeC4's parsed and computed values agree (computed `autoLayout` direction). Untouched text is byte-identical (INV-5), CRLF included. Rejections as specified. D42 is shown both ways: a tag / link update succeeds while another loaded file has a syntax error (read-back, other file unchanged), and a write that would leave the edited file unparsable is rejected byte-identical.
 
 **T017** — same source files + README, new `tests/mutator/views-remove.test.ts`. Mechanism: `removeView` (US-8, D26).
 - Rejected on `id` while the reverse index lists any referrer (`navigateTo` in any role, `extends`), each with file and position.
@@ -283,6 +303,7 @@ Gate: every class equals LikeC4's linker observation.
 - Default path, `[i]`, `[i, j]`, `[i, n]`.
 - Endpoints resolved in document scope (D25).
 - Rejections: parent-child pair; undeclared kind; backward with kind (D38); `navigateTo` that is not a dynamic view; strings and style through `checkStyle('relationship')`; paths into chains or stage-6 blocks.
+- The step-spec check is exported inside the module for reuse by `addViewParallel` (T021).
 - Gate: the step reads back at the path with the same source, target and direction (D36 round trip). LikeC4's step sequence equals the previous one with the new step inserted, compared by content. Rejections byte-identical; `expectValidLikeC4`.
 
 **T020** — same files, new `tests/mutator/view-steps-update.test.ts`. Mechanism: `updateViewStep`.
@@ -293,37 +314,71 @@ Gate: every class equals LikeC4's linker observation.
 
 **T021** — same files, new `tests/mutator/view-steps-move-remove.test.ts`. Mechanism:
 - `moveViewStep` with pre-move source and destination boundary (D37); no-op at its own boundary.
-- `addViewParallel`, which writes `par { }`.
+- `addViewParallel` (D40) with `statements` and/or `steps`, placed at the pre-move top-level boundary `path`; moved statements first in the order given, then new steps in the order given.
 - `removeViewStep` for a single step, a whole chain, a `par` block or an opaque block.
-- Rejections: `par` into `par`; a destination inside the moved statement; a single chain segment; missing path; guard mismatch.
-- Gate: the D37 examples `[0]→[2]`, `[0]→[3]`, `[2]→[0]` and `[0]→[2,0]`. Moves in and out of `par`. A rule between steps is never moved. After each write LikeC4's sequence equals the expectation; `expectValidLikeC4`; `expectComputedViewsSurvive`.
+- After every move or removal, the `par` block that held the statement is evaluated:
+  - literally empty → removed in the same edit group and reported in `removedParallelBlocks`;
+  - not empty but failing `contributesSteps` → rejected (D40).
+- Rejections:
+  - `addViewParallel` with no statement and no step, or whose block would not satisfy `contributesSteps` (for example only an empty `opt { }` moved in) → `statements`;
+  - a move or removal that would leave a block holding only non-contributing statements → `from` / `address`, naming the block path;
+  - a `statements` path that is not top-level, or that addresses a `par` block (nested parallel);
+  - duplicate `statements` paths;
+  - `par` into `par`;
+  - a destination inside the moved statement;
+  - a single chain segment;
+  - a missing path;
+  - a guard mismatch.
+- Gate:
+  - the D37 examples `[0]→[2]`, `[0]→[3]`, `[2]→[0]` and `[0]→[2,0]`;
+  - moves in and out of `par`, including moving and removing the last statement of a block (the block disappears and is reported);
+  - the SC-005 D40 case: in `par { a -> b  opt { } }`, moving or removing `a -> b` is rejected naming the block, sources byte-identical;
+  - `addViewParallel` with moved statements only, new steps only, both, and the rejected non-contributing case;
+  - a rule between moved steps is never moved;
+  - after each accepted write, LikeC4's sequence equals the expectation; `expectValidLikeC4`; `expectComputedViewsSurvive`.
 
 ### Phase US-12: `apply`
 
 **T022** — `src/mutations-file.ts`, `src/cli.ts`, new `tests/cli/cli-apply-views.test.ts`, README "Batch mutations format". Mechanism: one commit, because widening the `Mutation` union breaks the `assertNever` at `cli.ts:700` without its dispatch.
-- 10 op interfaces with `MUTATION_FIELDS` entries under the `FieldsNotListed` check.
+- 10 op interfaces with `MUTATION_FIELDS` entries under the `FieldsNotListed` check:
+
+  | op | fields besides `op` |
+  |---|---|
+  | `updateView` | `id`, `title`, `description`, `tags`, `links`, `autoLayout` |
+  | `addViewRule` | `id`, `rule`, `before` |
+  | `replaceViewRule` | `id`, `address`, `rule` |
+  | `removeViewRule` | `id`, `address` |
+  | `removeView` | `id` |
+  | `addViewStep` | `id`, `step`, `path` |
+  | `updateViewStep` | `id`, `address`, `patch` |
+  | `moveViewStep` | `id`, `from`, `to` |
+  | `removeViewStep` | `id`, `address` |
+  | `addViewParallel` | `id`, `path`, `statements`, `steps` |
+
 - `addView` + `autoLayout`, `description`, `extends`, `file`.
-- Validators for addresses (`index` non-negative integer, `path` integer array), step objects and patch objects (`rejectUnknownFields`).
-- `formChecks` reusing the library form checks; dispatch cases.
+- Validators: addresses (`index` non-negative integer, `path` integer array), step objects and patch objects (`rejectUnknownFields`), `statements` (array of paths); `addViewParallel` needs at least one of `statements` / `steps`. The `contributesSteps` rejection runs in the library at apply time.
+- `formChecks` reusing the library form checks; dispatch cases. Result lines name removed `par` blocks.
 - Gate:
   - each op succeeds on a fixture copy and the output passes `expectValidLikeC4`;
-  - unknown fields, wrong types and a library rejection exit 1 with `mutations[i].<path>` and write nothing;
+  - unknown fields, wrong types and a library rejection exit 1 with `mutations[i].<path>` and write nothing, the D40 block rejection included;
   - `addView` `autoLayout` is validated as in the library.
 
 ### Phase Polish
 
 - **T023** — `README.md`. Mechanism: one consolidated "Views" section:
-  - read API and own values (D21 exceptions, unnamed and generated views);
+  - read API and own values (D21 exceptions, unnamed and generated views, a `par` block that contributes no step reads as not in the model);
   - rule and step addressing (D22, D24, D37);
   - write API and the reference rules for written text;
+  - `par` creation, auto-removal and rejection (D40);
   - removal rejection and the snapshot note;
+  - the D41 default file and the D42 syntax-error rule;
   - "Rejected writes" table rows.
   
   Gate: the README examples, run against the library in a smoke script, give the stated values.
 - **T024** — `docs/likec4-coverage.md`. Mechanism: every row named in the lc4m-15.29 Skein issue "Coverage rows to update" (blocks and views, properties, rules, navigation and references, predicate and expression rows, steps, `implicitViews` and manual-layout notes) set to non-`no` with notes, or `no` / `n/a` with the out-of-scope reason (stage 6, rename). Gate: `npm run lint` passes (SC-001).
 - **T025** — `CHANGELOG.md`. Mechanism: a `[0.10.0]` entry.
   - Added: read API, write API, `apply` ops.
-  - Breaking / behaviour changes: `addView` D34 / D35 / `of`+`extends` rejections, block creation, LikeC4 document-order default.
+  - Breaking / behaviour changes: `addView` D34 / D35 / `of`+`extends` rejections, block creation, and the default file in LikeC4 document order instead of load order (D41).
   
   Gate: the entry matches the README.
 - **T026** — `package.json`, `package-lock.json`, `docs/likec4-coverage.md` title. Mechanism: version 0.10.0 in one commit; not pushed, tagged or published. Gate: `npm run lint && npm test && npm run build` green (SC-007, SC-008).
@@ -333,45 +388,48 @@ Gate: every class equals LikeC4's linker observation.
 | Stream | Repository | Group | Tasks in order | Group rationale |
 |---|---|---|---|---|
 | S1 | likec4-mutator | G1 Oracle | T001, T002 | Small on purpose: fixtures and the parsed/computed/linked oracle must be reviewed before any code depends on them |
-| S1 | likec4-mutator | G2 Read foundation | T003, T004, T005, T006 | One layer: contract types, index, resolver and the resolver's per-class oracle tests |
+| S1 | likec4-mutator | G2 Read foundation | T003, T004, T005, T006 | One layer: contract types, index, resolver with the step-contribution predicate, and the resolver's per-class oracle tests |
 | S1 | likec4-mutator | G3 Read API | T007, T008, T009 | US-1 to US-4 builders with their tests; the MVP; they share `view-query.ts` |
 | S1 | likec4-mutator | G4 Write foundation | T010, T011, T012, T013, T014 | Shared write seams (rule check, placement, layout and codegen, addressing, snapshot), each guarded by the unchanged suite |
 | S1 | likec4-mutator | G5 Views and rules | T015, T016, T017, T018 | US-5 to US-8: whole-view writes and rule writes share `view-ops.ts`, addressing and `checkViewRule` |
-| S1 | likec4-mutator | G6 Steps | T019, T020, T021 | US-9 to US-11 share `step-ops.ts`, paths and the sequence comparison |
+| S1 | likec4-mutator | G6 Steps | T019, T020, T021 | US-9 to US-11 share `step-ops.ts`, paths, the step-spec check and the sequence comparison |
 | S1 | likec4-mutator | G7 Apply | T022 | Solo on purpose: the op union and the CLI dispatch must land in one commit (`assertNever` exhaustiveness), over the finished library surface |
 | S1 | likec4-mutator | G8 Docs and release | T023, T024, T025, T026 | Cross-cutting docs and release preparation |
 
 ## Dependencies and build order
 
 - T001 → T002 → every `[TEST]` task and every task with tests (oracles).
-- T003 → T007, T008, T009. T004 → T005 → T006. T004 and T005 → T007 → T008 → T009 (shared `view-query.ts`). **STOP: MVP.**
+- T003 → T007, T008, T009. T004 → T005 → T006. T004 and T005 → T007 → T008 → T009 (shared `view-query.ts`; T009 uses `contributesSteps`). **STOP: MVP.**
 - T005 → T010 and T014. T004 → T012 and T013. T011 depends only on existing code (scheduled after G3).
 - T015 ← T010, T011, T012, T013, T014. T016 ← T012, T013, T014. T017 ← T004 (reverse index), T013, T014. T018 ← T010, T012, T013, T014.
-- T019 ← T005, T012, T013, T014. T020 ← T019. T021 ← T019.
+- T019 ← T005, T012, T013, T014. T020 ← T019. T021 ← T019 (step-spec check, insertion inside `par`) and T005 (`contributesSteps`).
 - G5 and G6 → T022 → T023 → T024 → T025 → T026.
 - There are no cycles. The task order T001…T026 is a topological order. The stream is strictly sequential with one executor; a full `npm test` + `npm run lint` runs at the end of each group.
 
 ## Delivery strategy
 
 1. **MVP = G1 to G3** (read-only views). STOP & VALIDATE:
-   - SC-002 read part on both fixtures, with every INV-4 exception shown by an example;
+   - SC-002 read part on both fixtures, with every INV-4 exception shown by an example (both non-contributing `par` forms included);
    - every T006 reference class equal to the linker;
    - `npm run lint` green.
 2. **G4.** STOP: the pre-existing suite green unchanged (refactors are behaviour-neutral, INV-7); the snapshot direct tests.
-3. **G5.** STOP: SC-003, SC-004 (computed nodes and INV-9 survival), SC-005 rejection classes byte-identical, SC-006 (the three rewritten edge-case tests).
-4. **G6.** STOP: the step-sequence comparisons, including the D37 examples; the D38 / D31 rejections.
+3. **G5.** STOP: SC-003, SC-004 (computed nodes and INV-9 survival), SC-005 rejection classes byte-identical, SC-006 (the three rewritten edge-case tests), the D41 order example, and both directions of D42.
+4. **G6.** STOP: the step-sequence comparisons, including the D37 examples, the D40 creation / auto-removal cases and the D40 `opt { }` rejection; the D38 / D31 rejections.
 5. **G7.** STOP: `apply` exits 1 and writes nothing on every error path.
 6. **G8.** STOP: `npm run lint && npm test && npm run build`. The release is prepared, not pushed, tagged or published.
 
 ## Risks and rollback
 
 - Scope-mirror drift between `ViewReferenceResolver` and LS:7403-7431 / LS:7564-7640 (including whether `extends` chains inherit `of` transitively): T006 compares every class with LikeC4's linker before any writer uses it.
+- `contributesSteps` drift from LikeC4's step parse (LS:6596-6790), which also drops nodes with any error diagnostic (`isValid`, LS:5015): T009 compares `inModel` with LikeC4's parsed steps for every step form, invalid ones included. Writes only ever add contributing steps, because new steps are checked to resolve and to be valid.
 - Insertion anchors in single-line or interleaved bodies could produce parse errors. `applyEditsToFile` refuses them and rolls back (`mutator.ts:2230-2252`); T012 keeps existing layouts byte-identical; writer tests cover `{ }`, one-line and CRLF bodies.
-- Silent LikeC4 drops that `validate()` misses (cycles, dynamic relation predicates, deployment model references): tests compare computed views (INV-9), not just `validate()`.
-- Positional step ids make naive comparisons flaky; sequences are compared by content (FOR-PLAN 8).
+- Multi-edit `par` writes could produce overlapping edits in one file: moving statements into a new block, or a move that also removes an emptied block. Each such write is computed as one non-overlapping edit group against the pre-write document and applied atomically; T021 covers every combination.
+- Silent LikeC4 drops that `validate()` misses (cycles, dynamic relation predicates, deployment model references, non-contributing `par`): tests compare computed views and step sequences, not just `validate()`.
 - Rollback: each group is a contiguous series of atomic commits on the working branch. Nothing is pushed; a failing group is reverted with `git revert` without touching earlier groups.
 
 ## Known residuals
+
+- RES-plan-1 · MINOR · pre-existing gap, kept out of scope by INV-7 · `addElement` / `removeElement` do not protect element-view rule and step references (`workspace-index.ts:534-536`). A new element can still make an `include api` ambiguous, and a removal can still re-target it. The plan's view reference snapshot is opt-in for view writes only. → carrier: lc4m-15.30 (general reference policy).
 
 ## Spec traceability
 
@@ -380,29 +438,29 @@ Gate: every class equals LikeC4's linker observation.
 | US-1 | T003, T004, T007 |
 | US-2 | T004, T008 |
 | US-3 | T005, T008 |
-| US-4 | T004, T009 |
+| US-4 | T004, T005, T009 |
 | US-5 | T010, T011, T012, T015, T022 |
 | US-6 | T012, T013, T016 |
 | US-7 | T010, T012, T013, T018 |
 | US-8 | T004, T017 |
 | US-9 | T012, T013, T019 |
 | US-10 | T013, T020 |
-| US-11 | T012, T013, T021 |
+| US-11 | T005, T012, T013, T021 |
 | US-12 | T022 |
 | INV-1 | T002, T015, T016, T017, T018, T019, T020, T021, T022 |
 | INV-2 | T010, T013, T015, T016, T017, T018, T019, T020, T021, T022 |
 | INV-3 | T004, T013, T015, T016, T017, T018, T019, T020, T021 |
-| INV-4 | T002, T007, T008, T009 |
+| INV-4 | T002, T005, T007, T008, T009 |
 | INV-5 | T012, T016, T018, T020, T021 |
 | INV-6 | T001, T005, T010 |
-| INV-7 | T010, T011, T012, T014, T015 |
+| INV-7 | T010, T011, T012, T014, T015, T025 |
 | INV-8 | T014, T015, T017, T018, T019, T021 |
 | INV-9 | T002, T015, T017, T018, T021 |
 | SC-001 | T024 |
 | SC-002 | T001, T002, T007, T008, T009 |
 | SC-003 | T015, T016, T017, T018, T019, T020, T021, T022 |
 | SC-004 | T002, T017, T018, T019, T020, T021 |
-| SC-005 | T015, T016, T017, T018, T019, T020, T021, T022 |
+| SC-005 | T015, T016, T017, T018, T019, T020, T021 (incl. the D40 `opt { }` case), T022 |
 | SC-006 | T015 (rewritten edge-case tests), G4 STOP |
 | SC-007 | T023, T025, T026 |
 | SC-008 | T026 |
@@ -422,9 +480,12 @@ Gate: every class equals LikeC4's linker observation.
 | D34 | T008, T010, T015, T018 |
 | D35 | T010, T015, T022 |
 | D36 | T009, T012, T019, T020 |
-| D37 | T021 |
+| D37 | T021, T022 |
 | D38 | T012, T019, T020 |
 | D39 | T007 |
+| D40 | T001, T002, T003, T004, T005, T009, T012, T021, T022, T023 |
+| D41 | T011, T015, T023, T025 |
+| D42 | T016, T023 |
 | FOR-PLAN 1 (source order by offset) | T004 |
 | FOR-PLAN 2 (insertion anchors) | T012 |
 | FOR-PLAN 3 (`prev`-linked lists, trailing comma) | T004, T008, T018 |
