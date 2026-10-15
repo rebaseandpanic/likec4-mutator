@@ -6,7 +6,8 @@
  * `}` on its own line at the owner's indentation.
  *
  * The new text is collected first ({@link BodyInsertions.prepend},
- * {@link BodyInsertions.addProperty}, {@link BodyInsertions.append}) and
+ * {@link BodyInsertions.addProperty}, {@link BodyInsertions.before},
+ * {@link BodyInsertions.append}) and
  * turned into edits once, together with the other edits of the same
  * operation ({@link BodyInsertions.apply}), because how a line is inserted
  * depends on the block's layout:
@@ -42,6 +43,7 @@ export interface BraceBlock {
 export class BodyInsertions {
   private readonly start: string[] = [];
   private readonly properties: string[] = [];
+  private readonly positioned: Array<{ offset: number; snippet: string }> = [];
   private readonly end: string[] = [];
 
   constructor(
@@ -83,6 +85,38 @@ export class BodyInsertions {
     return new BodyInsertions(fullText, { open, close: findClosingBraceOffset(cst), indent });
   }
 
+  /**
+   * Insertions into the body of a view (FOR-PLAN 2): tags open the body
+   * ({@link prepend}); properties go after the tags and before the first
+   * rule or step statement ({@link addProperty}); a rule or step statement
+   * goes before an arbitrary body item ({@link before}) or at the end
+   * ({@link append}).  For the inside of a `par` block use
+   * {@link forBlock} on the block's CST.
+   *
+   * @param body   - The `ElementViewBody` / `DynamicViewBody` / `DeploymentViewBody` node
+   * @param indent - Leading whitespace of the view declaration's line
+   */
+  static forViewBody(
+    body: { $cstNode?: CstNodeLike; rules?: ReadonlyArray<{ $cstNode?: CstNodeLike }>; steps?: ReadonlyArray<{ $cstNode?: CstNodeLike }> },
+    fullText: string,
+    indent: string,
+  ): BodyInsertions {
+    const cst = body.$cstNode;
+    const open = cst && firstToken(cst, '{');
+    if (!cst || open === undefined) throw new Error('internal: view body insertion into a view without a `{ ... }` body');
+    let firstChild: number | undefined;
+    for (const item of [...(body.rules ?? []), ...(body.steps ?? [])]) {
+      const offset = item.$cstNode?.offset;
+      if (offset !== undefined && (firstChild === undefined || offset < firstChild)) firstChild = offset;
+    }
+    return new BodyInsertions(fullText, {
+      open,
+      close: findClosingBraceOffset(cst),
+      indent,
+      ...(firstChild !== undefined && { firstChild }),
+    });
+  }
+
   /** Indentation of the block's own lines (owner's indentation + one level). */
   get innerIndent(): string {
     return this.block.indent + '  ';
@@ -98,9 +132,40 @@ export class BodyInsertions {
     this.properties.push(snippet);
   }
 
+  /**
+   * Lines before the construct starting at `offset`, a nested item of the
+   * block (a rule, a step statement, a declaration).  Lines given for one
+   * offset keep their order, after any properties placed there.
+   */
+  before(offset: number, snippet: string): void {
+    this.positioned.push({ offset, snippet });
+  }
+
   /** Lines at the end of the block (new nested declarations). */
   append(snippet: string): void {
     this.end.push(snippet);
+  }
+
+  /**
+   * The lines placed before nested items, by offset in ascending order:
+   * properties before the first nested declaration (when there is one), then
+   * the {@link before} lines.
+   */
+  private anchored(): Array<[offset: number, lines: string]> {
+    const { close, firstChild } = this.block;
+    const byOffset = new Map<number, string>();
+    const add = (offset: number, lines: string): void => {
+      byOffset.set(offset, (byOffset.get(offset) ?? '') + lines);
+    };
+    if (this.properties.length > 0 && firstChild !== undefined && firstChild < close) add(firstChild, this.properties.join(''));
+    for (const { offset, snippet } of this.positioned) add(offset, snippet);
+    return [...byOffset].sort(([a], [b]) => a - b);
+  }
+
+  /** Whether the properties go at the end of the block (no nested declaration to precede). */
+  private propertiesAtEnd(): boolean {
+    const { close, firstChild } = this.block;
+    return !(firstChild !== undefined && firstChild < close);
   }
 
   /**
@@ -110,12 +175,12 @@ export class BodyInsertions {
    * lines, so they never overlap the insertion.
    */
   apply(edits: readonly TextEdit[]): TextEdit[] {
-    if (this.start.length + this.properties.length + this.end.length === 0) return [...edits];
+    if (this.start.length + this.properties.length + this.positioned.length + this.end.length === 0) return [...edits];
     const { fullText } = this;
     const { open, close } = this.block;
     const interior = fullText.substring(open + 1, close);
     if (/^\s*$/.test(interior)) {
-      const lines = [...this.start, ...this.properties, ...this.end].join('');
+      const lines = [...this.start, ...this.properties, ...this.positioned.map((p) => p.snippet), ...this.end].join('');
       return [...edits, { offset: open + 1, end: close, newText: '\n' + lines + this.block.indent }];
     }
     if (this.isLaidOutOverLines()) return [...edits, ...this.insertIntoLines(edits)];
@@ -135,7 +200,7 @@ export class BodyInsertions {
   /** Zero-width insertions into a block laid out over several lines. */
   private insertIntoLines(others: readonly TextEdit[]): TextEdit[] {
     const { fullText } = this;
-    const { open, close, firstChild } = this.block;
+    const { open, close } = this.block;
     const edits: TextEdit[] = [];
     if (this.start.length > 0) {
       // At the end of the `{` line (before a trailing comment's line break).
@@ -143,11 +208,8 @@ export class BodyInsertions {
       if (fullText[at - 1] === '\r') at--;
       edits.push({ offset: at, end: at, newText: '\n' + withoutFinalNewline(this.start.join('')) });
     }
-    let atEnd = this.properties.join('');
-    if (this.properties.length > 0 && firstChild !== undefined && firstChild < close) {
-      atEnd = '';
-      edits.push(insertBefore(fullText, firstChild, this.properties.join(''), others));
-    }
+    for (const [offset, lines] of this.anchored()) edits.push(insertBefore(fullText, offset, lines, others));
+    let atEnd = this.propertiesAtEnd() ? this.properties.join('') : '';
     atEnd += this.end.join('');
     if (atEnd !== '') {
       const at = lineStart(fullText, close);
@@ -160,11 +222,12 @@ export class BodyInsertions {
    * Rewrite a block that is not laid out over several lines as one edit:
    * `{`, the new first lines, its content (with the edits inside it applied)
    * and the other new lines each on their own lines, then `}` on a line of
-   * its own.  Properties go before the first nested declaration.
+   * its own.  Properties go before the first nested declaration, the
+   * {@link before} lines before their item.
    */
   private rewriteBlock(edits: readonly TextEdit[]): TextEdit[] {
     const { fullText } = this;
-    const { open, close, indent, firstChild } = this.block;
+    const { open, close, indent } = this.block;
     const from = open + 1;
     const inside: TextEdit[] = [];
     const outside: TextEdit[] = [];
@@ -173,30 +236,30 @@ export class BodyInsertions {
       else if (edit.end <= from || edit.offset >= close) outside.push(edit);
       else throw new Error('internal: an edit overlaps the boundary of the block it inserts into');
     }
-    const split = this.properties.length > 0 && firstChild !== undefined && firstChild < close ? firstChild : close;
+    const anchored = this.anchored();
+    const splits = anchored.map(([offset]) => offset);
+    for (const e of inside) {
+      if (e.offset !== e.end && splits.some((split) => e.offset < split && e.end > split)) {
+        throw new Error('internal: an edit overlaps the nested item it inserts before');
+      }
+    }
     const part = (start: number, stop: number): string => {
       const own = inside.filter((e) =>
         e.offset === e.end ? e.offset >= start && (e.offset < stop || stop === close) : e.offset >= start && e.end <= stop,
       );
-      for (const e of inside) {
-        if (e.offset !== e.end && e.offset < stop && e.end > stop && stop !== close) {
-          throw new Error('internal: an edit overlaps the first nested declaration it inserts before');
-        }
-      }
       const local = own.map((e) => ({ offset: e.offset - start, end: e.end - start, newText: e.newText }));
       return applyEdits(fullText.substring(start, stop), local).trim();
     };
     const asLines = (text: string): string => (text === '' ? '' : this.innerIndent + text + '\n');
-    const before = part(from, split);
-    const after = split === close ? '' : part(split, close);
-    const newText =
-      '\n' +
-      this.start.join('') +
-      asLines(before) +
-      this.properties.join('') +
-      asLines(after) +
-      this.end.join('') +
-      indent;
+    let content = '';
+    let start = from;
+    for (const [offset, lines] of anchored) {
+      content += asLines(part(start, offset)) + lines;
+      start = offset;
+    }
+    content += asLines(part(start, close));
+    const atEnd = this.propertiesAtEnd() ? this.properties.join('') : '';
+    const newText = '\n' + this.start.join('') + content + atEnd + this.end.join('') + indent;
     return [...outside, { offset: from, end: close, newText }];
   }
 }

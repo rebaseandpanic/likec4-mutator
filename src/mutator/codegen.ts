@@ -403,8 +403,12 @@ export interface GenerateViewOpts {
   type: 'element' | 'dynamic' | 'deployment';
   /** For element views: the FQN of the scoped element */
   target?: string;
+  /** For element views: the id of the element view this one extends (written `extends <id>`) */
+  extends?: string;
   /** Optional view title */
   title?: string;
+  /** Optional view description, written after the title */
+  description?: string;
   /**
    * Optional include rules, one `include` statement per item.  An item is the
    * part after the keyword: one or more comma-separated predicates (`'*'`,
@@ -445,10 +449,11 @@ export function viewIncludeExpression(item: string, type?: IncludeViewType): str
  * to suppress it.
  *
  * @throws {Error} when an `includes` item is empty, a bare `include` keyword,
- *   or not exactly one include rule of the view (see {@link viewIncludeExpression})
+ *   or not exactly one include rule of the view (see {@link viewIncludeExpression}),
+ *   and when both `target` and `extends` are given
  */
 export function generateView(opts: GenerateViewOpts): string {
-  const { indent, id, type, target, title, includes, autoLayout = 'TopBottom' } = opts;
+  const { indent, id, type, target, title, description, includes, autoLayout = 'TopBottom' } = opts;
   const innerIndent = indent + '  ';
 
   const expressions = includes?.map((item, i) => {
@@ -466,9 +471,14 @@ export function generateView(opts: GenerateViewOpts): string {
   const effectiveIncludes =
     expressions && expressions.length > 0 ? expressions : type === 'element' ? ['*'] : undefined;
 
+  if (target && opts.extends) {
+    throw new Error(`View '${id}': a view cannot have both 'of' and 'extends'`);
+  }
   let header: string;
   if (type === 'element' && target) {
     header = `${indent}view ${id} of ${target}`;
+  } else if (type === 'element' && opts.extends) {
+    header = `${indent}view ${id} extends ${opts.extends}`;
   } else if (type === 'dynamic') {
     header = `${indent}dynamic view ${id}`;
   } else if (type === 'deployment') {
@@ -480,6 +490,7 @@ export function generateView(opts: GenerateViewOpts): string {
   let result = header + ' {\n';
   // Title must be declared inside the body (not inline) per the LikeC4 grammar.
   if (title) result += `${innerIndent}title '${escapeTitle(title)}'\n`;
+  if (description) result += `${innerIndent}description '${escapeString(description)}'\n`;
   if (effectiveIncludes) {
     for (const inc of effectiveIncludes) {
       result += `${innerIndent}include ${inc}\n`;
@@ -489,6 +500,100 @@ export function generateView(opts: GenerateViewOpts): string {
   result += `${indent}}`;
 
   return result;
+}
+
+/**
+ * A view rule line: `<kind> <expression>` at `indent`, the expression written
+ * as given (checked by `checkViewRule` before it is written).
+ */
+export function generateViewRule(indent: string, rule: { kind: 'include' | 'exclude'; expression: string }): string {
+  return `${indent}${rule.kind} ${rule.expression}`;
+}
+
+export interface GenerateStepOpts {
+  /** Leading whitespace for the step line */
+  indent: string;
+  /** The element the interaction goes from, as written (LikeC4's sense, D36) */
+  source: string;
+  /** The element the interaction goes to, as written */
+  target: string;
+  /** `backward` is written `target <- source` (D36); default `forward` */
+  direction?: 'forward' | 'backward';
+  /** Relationship kind; a forward step only (D38) */
+  kind?: string;
+  /** How the kind is written: `-[kind]->` (`bracket`, default) or `.kind` (`dot`) */
+  kindForm?: 'bracket' | 'dot';
+  /** Title written after the target */
+  title?: string;
+  /** Body strings, written when non-empty */
+  description?: string;
+  technology?: string;
+  notes?: string;
+  /** Id of a dynamic view */
+  navigateTo?: string;
+  /** `color`, `line`, `head`, `tail`, written directly in the step body */
+  style?: RelationshipStyle;
+}
+
+/**
+ * Generate a single dynamic view step:
+ * ```
+ * source -> target 'title' {
+ *   description '…'
+ *   technology '…'
+ *   notes '…'
+ *   navigateTo other
+ *   color red
+ * }
+ * ```
+ * A forward step is `source -> target`, `source -[kind]-> target` or
+ * `source .kind target`; a backward step is `target <- source`.  The body
+ * is written only when a body field has a value.
+ *
+ * @throws {Error} for a backward step with a kind (D38): the grammar has no
+ *   connector for both
+ */
+export function generateStep(opts: GenerateStepOpts): string {
+  const { indent, source, target, direction = 'forward', kind, kindForm = 'bracket', title, style } = opts;
+  if (direction === 'backward' && kind) {
+    throw new Error(`A backward step cannot have a relationship kind (got '${kind}'): LikeC4 has no connector for both`);
+  }
+  let result: string;
+  if (direction === 'backward') result = `${indent}${target} <- ${source}`;
+  else if (!kind) result = `${indent}${source} -> ${target}`;
+  else if (kindForm === 'dot') result = `${indent}${source} .${kind} ${target}`;
+  else result = `${indent}${source} -[${kind}]-> ${target}`;
+  if (title !== undefined) result += ` '${escapeString(title)}'`;
+
+  const innerIndent = indent + '  ';
+  const lines: string[] = [];
+  for (const key of ['description', 'technology', 'notes'] as const) {
+    const value = opts[key];
+    if (value) lines.push(`${innerIndent}${key} '${escapeString(value)}'\n`);
+  }
+  if (opts.navigateTo) lines.push(`${innerIndent}navigateTo ${opts.navigateTo}\n`);
+  for (const [key, value] of style ? relationshipStyleEntries(style) : []) lines.push(`${innerIndent}${key} ${value}\n`);
+  if (lines.length > 0) result += ` {\n${lines.join('')}${indent}}`;
+  return result;
+}
+
+/**
+ * Generate a `par` block holding `statements` (D40: at least one).  Each
+ * statement text starts with its first token and has its further lines
+ * indented relative to that first line; every line is indented one level
+ * deeper than `indent` (empty lines stay empty).  Lines are joined with
+ * `\n`; the mutator writes the file's line ending.
+ *
+ * @throws {Error} when `statements` is empty: LikeC4 drops an empty block
+ */
+export function generateParallel(indent: string, statements: readonly string[]): string {
+  if (statements.length === 0) throw new Error('A par block needs at least one statement: LikeC4 drops an empty block');
+  const innerIndent = indent + '  ';
+  const body = statements
+    .flatMap((statement) => statement.split(LINE_BREAK))
+    .map((line) => (line === '' ? '' : innerIndent + line))
+    .join('\n');
+  return `${indent}par {\n${body}\n${indent}}`;
 }
 
 // ---------------------------------------------------------------------------
