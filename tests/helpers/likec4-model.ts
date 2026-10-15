@@ -1219,8 +1219,8 @@ export interface ReportedViewStep {
   /** The title written after the target */
   title?: string;
   body?: ReportedStepBody;
-  /** Position in LikeC4's step sequence: `step-NN[:par.MM]` */
-  sequence: { step: number; parallel?: number };
+  /** Position in LikeC4's step sequence: `step-NN[:par.MM]`; absent when LikeC4's parse drops the step */
+  sequence?: { step: number; parallel?: number };
 }
 
 /** A step statement of a dynamic view (US-4). */
@@ -1488,7 +1488,7 @@ type LikeC4StepNode = LikeC4ParsedStep & {
 };
 
 /** The content of one step as the comparisons see it. */
-function stepContent(step: LikeC4ParsedStep, sequence: { step: number; parallel?: number }): Record<string, unknown> {
+function stepContent(step: LikeC4ParsedStep, sequence: { step: number; parallel?: number } | undefined): Record<string, unknown> {
   const content: Record<string, unknown> = {
     source: step.source,
     target: step.target,
@@ -1577,10 +1577,15 @@ function reportedStepContent(step: ReportedViewStep): Record<string, unknown> {
 function reportedStatements(statements: ReportedStepStatement[]): unknown[] {
   return statements.flatMap((statement): unknown[] => {
     switch (statement.type) {
+      // A step or chain without a sequence position is one LikeC4's parse
+      // drops (an unresolved endpoint, a chain after a backward step):
+      // compared by its absence.
       case 'step':
-        return [{ type: 'step', step: reportedStepContent(statement.step) }];
+        return statement.step.sequence ? [{ type: 'step', step: reportedStepContent(statement.step) }] : [];
       case 'chain':
-        return [{ type: 'chain', segments: statement.segments.map(reportedStepContent) }];
+        return statement.segments.every((s) => s.sequence)
+          ? [{ type: 'chain', segments: statement.segments.map(reportedStepContent) }]
+          : [];
       case 'parallel':
         // INV-4 exception: a `par` statement that contributes no LikeC4 step
         // (`par { }`, `par { opt { } }`) is dropped by LikeC4 (D40); the

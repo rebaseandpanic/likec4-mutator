@@ -735,9 +735,11 @@ export interface ViewStepInfo {
   /**
    * Position in LikeC4's step sequence, as in its step ids
    * `step-NN[:par.MM]`: `step` is `NN` (1-based; a stage-6 block takes one
-   * number), `parallel` is `MM` inside a `par` block
+   * number), `parallel` is `MM` inside a `par` block.  Absent when LikeC4's
+   * parse drops the step (an endpoint that does not resolve, a chain after a
+   * backward step, a statement of a block LikeC4 drops)
    */
-  sequence: { step: number; parallel?: number };
+  sequence?: { step: number; parallel?: number };
   /** 0-based segment number inside a chain; absent for a single step */
   segment?: number;
   /** Source text of the step, or of the segment from its connector on */
