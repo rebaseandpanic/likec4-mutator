@@ -1,6 +1,6 @@
 # Spec: Read and edit LikeC4 views and dynamic view steps
 
-**Date** 2026-10-15 · **Status** DRAFT · **Task**: lc4m-15.29 (epic lc4m-15, stage 2) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
+**Date** 2026-10-15 · **Status** READY-FOR-PLANNING · **Task**: lc4m-15.29 (epic lc4m-15, stage 2) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
 **Type**: feature (+ behaviour changes of `addView`: new rejections, `views` block creation) · **Based on**: README sections "Views", "Rejected writes"; lc4m-15.28 spec (deployment, decisions D4/D11 file choice, D18 written-form reads); reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 00–06)
 
 Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein task lc4m-15.29 are referenced by number (`D21` to `D39`, all listed in "Load-bearing decisions"); earlier decisions of the epic as `D4`, `D11`, `D18`.
