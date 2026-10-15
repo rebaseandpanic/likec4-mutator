@@ -1,4 +1,5 @@
 import type { ElementStyle, RelationshipStyle } from '../mutator/codegen.js';
+import type { LinkedTarget } from './deployment-resolver.js';
 
 /** Position of a construct in the source text of its file. */
 export interface SourceRange {
@@ -528,4 +529,314 @@ export interface DeploymentRelationshipInfo {
   file?: string;
   /** Position of the relationship in its file */
   sourceRange: SourceRange;
+}
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+/** The three view types of LikeC4. */
+export type ViewType = 'element' | 'dynamic' | 'deployment';
+
+/**
+ * A reference written in a view, with what it resolves to as LikeC4 scopes
+ * it at that place: an element FQN (element and dynamic views), a
+ * deployment target or a logical element (deployment views, the
+ * `LinkedTarget` shape), or a view id (`navigateTo`, `extends`).
+ */
+export interface ViewReference<T = string> {
+  /** The reference as written, e.g. 'app.api' */
+  text: string;
+  /** The resolved target; `null` when the reference does not resolve (unknown or ambiguous name, wrong target type) */
+  target: T | null;
+}
+
+/**
+ * A Markdown-or-string value as LikeC4 parses it: `{ md }` for a Markdown
+ * string (`'''...'''`), `{ txt }` for a plain string; the text dedented and
+ * trimmed.
+ */
+export type ViewText = { md: string } | { txt: string };
+
+/** The direction keywords of `autoLayout`. */
+export type ViewLayoutDirection = 'TopBottom' | 'BottomTop' | 'LeftRight' | 'RightLeft';
+
+/** The values of an `autoLayout` rule. */
+export interface ViewAutoLayout {
+  /** Direction keyword as written */
+  direction: ViewLayoutDirection;
+  /** Rank spacing, when written */
+  rankSep?: number;
+  /** Node spacing, when written (only after a rank spacing) */
+  nodeSep?: number;
+}
+
+/**
+ * Stage-6 rule kinds, reported as opaque positions: their contents are not
+ * structured, but they have an address and can be removed.
+ */
+export type ViewOpaqueRuleKind = 'style' | 'group' | 'rank' | 'globalPredicate' | 'globalStyle' | 'includeAncestors';
+
+/** The kind of a view rule. */
+export type ViewRuleKind = 'include' | 'exclude' | 'autoLayout' | ViewOpaqueRuleKind;
+
+/** A relationship kind written in a predicate or a step, with the form it is written in: `-[kind]->` (`bracket`) or `.kind` (`dot`). */
+export interface ViewRelationKind {
+  /** Kind name as written */
+  name: string;
+  form: 'bracket' | 'dot';
+}
+
+/**
+ * An element expression of a view predicate.  Kind and tag names are
+ * reported without `#`.
+ * - `wildcard`: `*`
+ * - `element`: an element reference (a deployment reference in deployment
+ *   views) with its selector — `children` (`.*`), `descendants` (`.**`),
+ *   `expanded` (`._`) — or none
+ * - `elementKind` / `elementTag`: `element.kind = k`, `element.tag != #t`
+ */
+export type ViewElementExpression =
+  | { type: 'wildcard' }
+  | {
+      type: 'element';
+      ref: ViewReference | ViewReference<LinkedTarget>;
+      selector?: 'children' | 'descendants' | 'expanded';
+    }
+  | { type: 'elementKind'; operator: '=' | '!='; kind: string }
+  | { type: 'elementTag'; operator: '=' | '!='; tag: string };
+
+/**
+ * A relation expression of a view predicate; each endpoint is an element
+ * expression.
+ * - `direct`: `a -> b`, `a <-> b`, `a -[k]-> b`, `a .k b`
+ * - `incoming`: `-> b`
+ * - `outgoing`: `a ->`, `a <->`, `a -[k]->`, `a .k`
+ * - `inOut`: `-> a ->`
+ */
+export type ViewRelationExpression =
+  | {
+      type: 'direct';
+      source: ViewElementExpression;
+      target: ViewElementExpression;
+      kind?: ViewRelationKind;
+      bidirectional: boolean;
+    }
+  | { type: 'incoming'; target: ViewElementExpression }
+  | { type: 'outgoing'; source: ViewElementExpression; kind?: ViewRelationKind; bidirectional: boolean }
+  | { type: 'inOut'; element: ViewElementExpression };
+
+/**
+ * A leaf of a `where` condition: `tag`, `kind` or `metadata.<key>`, on a
+ * relation optionally of its `source` or `target` (`source.tag is #t`).
+ */
+export interface ViewWhereLeaf {
+  field: 'tag' | 'kind' | 'metadata';
+  /** The relation endpoint the leaf tests, for the participant variants */
+  participant?: 'source' | 'target';
+  /** Metadata key */
+  key?: string;
+  /** Operator as written; absent for a metadata key without a value */
+  operator?: '=' | '!=' | 'is' | 'is not';
+  /** Tag or kind name (without `#`), or the metadata value (a string, or a boolean when written as `true` / `false`) */
+  value?: string | boolean;
+}
+
+/** A `where` condition tree: `and` / `or` operands in source order, `not`, and leaves. */
+export type ViewWhereCondition =
+  | { and: ViewWhereCondition[] }
+  | { or: ViewWhereCondition[] }
+  | { not: ViewWhereCondition }
+  | ViewWhereLeaf;
+
+/**
+ * The properties written in a `with { ... }` block.  A repeated property
+ * reads as its last occurrence; an element block's `summary` is read as
+ * its `description`, as LikeC4 does.  Style values are reported as written
+ * (opacity as `'40%'`, size tokens and icon paths unchanged).
+ */
+export interface ViewWithProperties {
+  title?: string;
+  description?: ViewText;
+  technology?: string;
+  notation?: string;
+  notes?: ViewText;
+  /** Element `with`: any view; relation `with`: a dynamic view */
+  navigateTo?: ViewReference;
+  /** Element style fields for an element predicate, relationship style fields for a relation predicate */
+  style?: ElementStyle | RelationshipStyle;
+  /** Relation predicates only (an element predicate's `multiple` is a style field) */
+  multiple?: boolean;
+}
+
+/** One item of an include or exclude rule, in source order (a trailing comma adds no item). */
+export interface ViewPredicateItem {
+  /** The item's source text */
+  text: string;
+  sourceRange: SourceRange;
+  expression: ViewElementExpression | ViewRelationExpression;
+  /** The `where` condition, when written */
+  where?: ViewWhereCondition;
+  /** The `with { ... }` properties, when written */
+  with?: ViewWithProperties;
+}
+
+/**
+ * One rule of a view, in source order.  Its address is
+ * {@link ViewRuleAddress}: `index` plus, optionally, `text` as a guard.
+ */
+export interface ViewRuleInfo {
+  /** 0-based position in the view's rule list */
+  index: number;
+  kind: ViewRuleKind;
+  /** Exact source text of the rule */
+  text: string;
+  sourceRange: SourceRange;
+  /** `include` / `exclude`: the predicate items */
+  items?: ViewPredicateItem[];
+  /** `autoLayout`: its values */
+  autoLayout?: ViewAutoLayout;
+}
+
+/** The body of a dynamic step (`{ ... }` after it).  Style values as written. */
+export interface ViewStepBody {
+  /** Overrides the title written after the target */
+  title?: string;
+  description?: ViewText;
+  technology?: string;
+  notes?: ViewText;
+  notation?: string;
+  /** A dynamic view */
+  navigateTo?: ViewReference;
+  /** `color`, `line`, `head`, `tail` */
+  style?: RelationshipStyle;
+}
+
+/**
+ * One interaction of a dynamic view: a single step, or one segment of a
+ * chain.  `source` and `target` are meant as LikeC4 means them (the
+ * element the interaction goes from and the one it goes to): for
+ * `a <- b` the source is `b`.
+ */
+export interface ViewStepInfo {
+  source: ViewReference;
+  target: ViewReference;
+  /**
+   * As LikeC4 parses it: `backward` for `a <- b`, and for a chain segment
+   * that returns to the element it came from (its written arrow stays `->`)
+   */
+  direction: 'forward' | 'backward';
+  /** The connector as written: `->`, `<-`, `-[kind]->` or `.kind` */
+  arrow: string;
+  kind?: ViewRelationKind;
+  /** The title written after the target */
+  title?: string;
+  body?: ViewStepBody;
+  /**
+   * Position in LikeC4's step sequence, as in its step ids
+   * `step-NN[:par.MM]`: `step` is `NN` (1-based; a stage-6 block takes one
+   * number), `parallel` is `MM` inside a `par` block
+   */
+  sequence: { step: number; parallel?: number };
+  /** 0-based segment number inside a chain; absent for a single step */
+  segment?: number;
+  /** Source text of the step, or of the segment from its connector on */
+  text: string;
+  sourceRange: SourceRange;
+}
+
+/** Fields shared by every step statement. */
+export interface ViewStepStatementBase {
+  /** Address: `[i]` at the top level of the view, `[i, j]` inside the `par` block at `i` */
+  path: number[];
+  /** Exact source text of the statement */
+  text: string;
+  sourceRange: SourceRange;
+}
+
+/**
+ * A step statement of a dynamic view, in source order.  Its address is
+ * {@link ViewStepAddress}.
+ * - `step`: a single step
+ * - `chain`: `a -> b -> c`, its segments in order
+ * - `parallel`: a `par` / `parallel` block with its statements; `inModel`
+ *   is false when the block contributes no LikeC4 step (an empty block, or
+ *   one holding only blocks LikeC4 discards) — LikeC4 drops it
+ * - `opaque`: a stage-6 block (`opt`, `loop`, `alt`, `try` with its
+ *   `catch` / `finally`, `break`, or a stray `if` / `when` / `else`): its
+ *   inner steps are not addressable; `inModel` is false when LikeC4 drops
+ *   the block
+ */
+export type ViewStepStatementInfo =
+  | (ViewStepStatementBase & { type: 'step'; step: ViewStepInfo })
+  | (ViewStepStatementBase & { type: 'chain'; segments: ViewStepInfo[] })
+  | (ViewStepStatementBase & {
+      type: 'parallel';
+      /** Keyword as written; new blocks are written as `par` */
+      keyword: 'par' | 'parallel';
+      title?: string;
+      inModel: boolean;
+      statements: ViewStepStatementInfo[];
+    })
+  | (ViewStepStatementBase & { type: 'opaque'; keyword: string; inModel: boolean });
+
+/**
+ * A view declaration.  Values are the view's own (not inherited through
+ * `extends`), as LikeC4 parses them; absent fields mean the view declares
+ * none.
+ */
+export interface ViewInfo {
+  /** Declared id; `null` for an unnamed element view (read-only) */
+  id: string | null;
+  type: ViewType;
+  /** `view ... of X`: X as written and resolved */
+  of?: ViewReference;
+  /** `view ... extends P`: P as written and resolved to an element view */
+  extends?: ViewReference;
+  /** Own title, single line, without the folder prefix LikeC4 adds */
+  title?: string;
+  description?: ViewText;
+  /** Own tags, unique, in the order LikeC4's parse returns them */
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  /** Folder string of the enclosing `views` block */
+  folder?: string;
+  /** File the view is declared in */
+  file: string;
+  sourceRange: SourceRange;
+  /** False for a declaration without a body: LikeC4 builds no view from it */
+  inModel: boolean;
+  /** Rules in source order (for dynamic views, without the steps) */
+  rules: ViewRuleInfo[];
+  /** Dynamic views only: step statements in source order */
+  steps?: ViewStepStatementInfo[];
+}
+
+/** Address of a rule: its index in the view's rule list, and optionally its source text, which must match. */
+export interface ViewRuleAddress {
+  index: number;
+  text?: string;
+}
+
+/**
+ * Address of a step statement: its path, a segment number inside a chain,
+ * and optionally the source text of the statement (or segment), which must
+ * match.
+ */
+export interface ViewStepAddress {
+  path: number[];
+  segment?: number;
+  text?: string;
+}
+
+/** Result of a view write. */
+export interface ViewWriteResult {
+  /** Files whose text changed, without duplicates.  Describes the in-memory state: nothing is written to disk. */
+  changedFiles: string[];
+}
+
+/** Result of a step move or removal. */
+export interface ViewStepWriteResult extends ViewWriteResult {
+  /** Pre-write paths of the `par` blocks removed because the write left them empty */
+  removedParallelBlocks: number[][];
 }

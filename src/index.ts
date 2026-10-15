@@ -29,7 +29,32 @@ export type {
   RelationshipInfo,
   SourceRange,
   SpecificationInfo,
+  ViewAutoLayout,
+  ViewElementExpression,
+  ViewInfo,
+  ViewLayoutDirection,
+  ViewOpaqueRuleKind,
+  ViewPredicateItem,
+  ViewReference,
+  ViewRelationExpression,
+  ViewRelationKind,
+  ViewRuleAddress,
+  ViewRuleInfo,
+  ViewRuleKind,
+  ViewStepAddress,
+  ViewStepBody,
+  ViewStepInfo,
+  ViewStepStatementBase,
+  ViewStepStatementInfo,
+  ViewStepWriteResult,
+  ViewText,
+  ViewType,
+  ViewWhereCondition,
+  ViewWhereLeaf,
+  ViewWithProperties,
+  ViewWriteResult,
 } from './query/types.js';
+export type { DeploymentTarget, LinkedTarget } from './query/deployment-resolver.js';
 
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';

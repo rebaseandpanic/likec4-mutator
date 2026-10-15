@@ -1173,8 +1173,8 @@ export interface ReportedWithProperties {
   notation?: string;
   notes?: ReportedText;
   navigateTo?: ReportedReference;
-  /** Element style fields (element `with`, `multiple` included) or relationship style fields (relation `with`) */
-  style?: Record<string, string | boolean | undefined>;
+  /** Element style fields (element `with`, `multiple` included) or relationship style fields (relation `with`): the library's `ElementStyle` / `RelationshipStyle` (interfaces, so typed as an object) */
+  style?: object;
   /** Relation `with` only */
   multiple?: boolean;
 }
@@ -1206,7 +1206,8 @@ export interface ReportedStepBody {
   notes?: ReportedText;
   notation?: string;
   navigateTo?: ReportedReference;
-  style?: Record<string, string | undefined>;
+  /** `color`, `line`, `head`, `tail`: the library's `RelationshipStyle` (an interface, so typed as an object) */
+  style?: object;
 }
 
 /** One step or chain segment (US-4); source and target in LikeC4's sense (D36). */
@@ -1370,7 +1371,7 @@ function lc4WithProps(props: ReportedWithProperties): Record<string, unknown> {
   if (props.notation !== undefined) result.notation = props.notation;
   if (props.notes !== undefined) result.notes = props.notes;
   if (props.navigateTo !== undefined) result.navigateTo = resolved(props.navigateTo);
-  for (const [key, value] of Object.entries(props.style ?? {})) {
+  for (const [key, value] of Object.entries((props.style ?? {}) as Record<string, string | boolean | undefined>)) {
     if (value !== undefined) result[key] = writtenStyleValue(key, value);
   }
   if (props.multiple !== undefined) result.multiple = props.multiple;
@@ -1562,7 +1563,7 @@ function reportedStepContent(step: ReportedViewStep): Record<string, unknown> {
     ...(body.navigateTo !== undefined && { navigateTo: String(resolved(body.navigateTo)) }),
   };
   const content = stepContent(parsed, step.sequence);
-  for (const [key, value] of Object.entries(body.style ?? {})) {
+  for (const [key, value] of Object.entries((body.style ?? {}) as Record<string, string | undefined>)) {
     if (value !== undefined) content[key] = writtenStyleValue(key, value);
   }
   return content;

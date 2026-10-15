@@ -21,7 +21,7 @@
     "build": "tsdown",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit && tsc -p scripts && tsx scripts/grammar-rules.ts --check docs/likec4-coverage.md"
+    "lint": "tsc --noEmit && tsc -p scripts && tsc -p tests/types && tsx scripts/grammar-rules.ts --check docs/likec4-coverage.md"
   },
   "dependencies": {
     "@likec4/core": "^1.59.4",
