@@ -9,6 +9,7 @@
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
 import { DeploymentIndex, type DeploymentExtendRef, type DeploymentRelationRef } from '../query/deployment-index.js';
+import { ViewIndex } from '../query/view-index.js';
 import {
   DeploymentQuery,
   type DeploymentElementSource,
@@ -267,6 +268,8 @@ export class LikeC4Mutator {
   private workspace: WorkspaceIndex;
   /** Deployment model index over all documents */
   private deployments: DeploymentIndex;
+  /** View index over all documents */
+  private views: ViewIndex;
   /** Reads of the deployment model */
   private deploymentQuery: DeploymentQuery;
 
@@ -277,6 +280,7 @@ export class LikeC4Mutator {
     this.queries = new Map();
     this.workspace = new WorkspaceIndex([]);
     this.deployments = new DeploymentIndex([]);
+    this.views = new ViewIndex([]);
     this.deploymentQuery = this.createDeploymentQuery();
     this.parseAll();
   }
@@ -1654,7 +1658,7 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Rebuild the workspace and deployment indices and every per-file query.
+   * Rebuild the workspace, deployment and view indices and every per-file query.
    * A change in one file can change how references in other files resolve,
    * so all of them are rebuilt together.
    */
@@ -1662,6 +1666,7 @@ export class LikeC4Mutator {
     const documents = [...this.documents].map(([file, doc]) => ({ file, ast: doc.ast }));
     this.workspace = new WorkspaceIndex(documents);
     this.deployments = new DeploymentIndex(documents);
+    this.views = new ViewIndex(documents);
     this.queries = new Map();
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));
