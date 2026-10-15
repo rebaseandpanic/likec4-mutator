@@ -1397,7 +1397,11 @@ function lc4PredicateItem(item: ReportedPredicateItem, viewType: ReportedView['t
         base = { incoming: lc4ElementExpr(expr.target) };
         break;
       case 'outgoing':
-        // LikeC4 keeps no bidirectional flag on an outgoing expression (LS `parseRelationExpr`).
+        // INV-4 exception: source-only field.  The bidirectional flag of an
+        // outgoing expression (`a ->` / `a <->`) is not kept by LikeC4's
+        // parse (LS `parseRelationExpr` writes `{ outgoing }` only), so it
+        // cannot be compared here; the tests that read outgoing expressions
+        // assert it against the written connector.
         base = { outgoing: lc4ElementExpr(expr.source) };
         kind = expr.kind;
         break;

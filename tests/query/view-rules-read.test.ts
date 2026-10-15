@@ -10,6 +10,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
 import { DeploymentIndex } from '../../src/query/deployment-index.js';
 import { toSourceRange } from '../../src/query/source-range.js';
@@ -241,6 +242,34 @@ const MODEL = `model {
   app.api -[async]-> ext 'notifies'
 }
 `;
+
+describe('outgoing bidirectional flag (INV-4 source-only field)', () => {
+  // LikeC4's parse keeps no bidirectional flag on an outgoing expression, so
+  // the oracle comparison cannot check it: the expected flag comes from the
+  // connector written in the input.
+  it('`a ->` reads false and `a <->` reads true, through the public reader', () => {
+    const files = readWorkspace('views-catalog');
+    const items = LikeC4Mutator.fromFiles(files)
+      .getView('shopView')!
+      .rules.flatMap((r) => r.items ?? [])
+      .filter((i) => i.expression.type === 'outgoing');
+    const written = items.map((i) => i.text);
+    expect(written).toEqual(expect.arrayContaining(['shop.orders ->', 'partner <->']));
+    for (const item of items) {
+      expect((item.expression as { bidirectional: boolean }).bidirectional, item.text).toBe(/<->\s*$/.test(item.text));
+    }
+  });
+
+  it.each([
+    { written: 'app.web ->', bidirectional: false },
+    { written: 'app.web <->', bidirectional: true },
+    { written: 'app.web -[async]->', bidirectional: false },
+  ])('`$written`', ({ written, bidirectional }) => {
+    const source = `${SPEC}${MODEL}views {\n  view v {\n    include ${written}\n  }\n}\n`;
+    const [rule] = LikeC4Mutator.fromFiles({ 'a.c4': source }).getView('v')!.rules;
+    expect(rule!.items![0]!.expression).toMatchObject({ type: 'outgoing', bidirectional });
+  });
+});
 
 describe('trailing comma (row 13)', () => {
   it('`include a, b,` reads two items, the rule text keeps the comma', async () => {
