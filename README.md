@@ -48,6 +48,7 @@ const all = mutator.listElements({ kind: 'service' });
 const rels = mutator.getRelationships({ sourceFqn: 'app' });
 const source = mutator.getElementSource('app');
 const spec = mutator.getSpecification();
+const views = mutator.listViews();
 
 // Add element (all properties)
 mutator.addElement('app', {
@@ -1291,6 +1292,64 @@ mutator.removeDeploymentExtend({ node: 'prod.eu', file: 'ext/eu.c4' });
 ```
 
 Rejected, with nothing changed: a malformed node or a file without such a block — `node`; an unloaded file — `file`; several blocks without `occurrence`, or an `occurrence` that is not a whole number from 1 or exceeds the blocks — `occurrence` (the error lists the blocks); a deployment view rule that refers to something declared in the block, or a removal that would change what a surviving reference links to — `node`.
+
+## Views
+
+### Reading
+
+`listViews(opts?)` lists every view declaration of every file — element, dynamic and deployment views — in LikeC4 document order, then source order; `opts.type` keeps one view type, `opts.file` the views of one file (exact file name).  `getView(id)` returns the view declared with that id, or `null`.
+
+```typescript
+const views = mutator.listViews({ type: 'dynamic' });
+const view = mutator.getView('index');
+// { id: 'index', type: 'element', title: 'Landscape', tags: ['next'], folder: 'Overview',
+//   file: 'views.c4', sourceRange: { ... }, inModel: true, rules: [ ... ] }
+```
+
+A view reports its own values, as LikeC4 parses the declaration:
+
+- `id` — the declared id; `null` for an unnamed element view (`view of app { … }`), which can be read but not addressed by writes;
+- `type` — `element`, `dynamic` or `deployment`;
+- `of`, `extends` — the reference as written (`text`) and what it resolves to (`target`: an element FQN, an element view id; `null` when it does not resolve, including `extends` of a view that is not an element view);
+- `title` — single line, an escaped slash `\/` kept, without the folder prefix LikeC4 adds (`views 'Ops' { view x { title 'T' } }` reads `title: 'T'`, `folder: 'Ops'`);
+- `description` — `{ md }` for a Markdown string, `{ txt }` for a plain string;
+- `tags` — without duplicates, in the order LikeC4's parse returns them: comma-separated groups last group first (`#next, #deprecated` reads `['deprecated', 'next']`);
+- `links` — `{ url, label? }`;
+- `folder` — the folder string of the enclosing `views` block;
+- `file`, `sourceRange` — where the declaration is written;
+- `inModel` — `false` for a declaration without a body (`view v`): LikeC4 builds no view from it;
+- `rules` — see below; `steps` — dynamic views only, see below.
+
+Absent fields mean the view declares none.  Values a view gets through `extends` from its parent, the element title LikeC4 shows for an untitled `view of X`, and the default title of `index` are not applied.  Views LikeC4 generates — an `index` when none is declared, implicit views — are not listed.  An id declared more than once (a LikeC4 error) is listed once per declaration; `getView` reports its first declaration in LikeC4 document order.
+
+Reads are best effort on files with syntax errors: views the parser recovers are listed.
+
+#### Rules
+
+`rules` lists the rules of the view body in source order — for a dynamic view its rules only, its steps are reported separately.  Each rule has:
+
+- `index` — its 0-based position in this list, and `text` — its exact source text, with `sourceRange`.  A rule is addressed by `{ index, text? }`: when `text` is given it must equal the rule's text as read, otherwise a write is rejected;
+- `kind` — `include`, `exclude`, `autoLayout`, or the stage-6 rules reported by kind only: `style`, `group`, `rank`, `globalPredicate`, `globalStyle`, `includeAncestors`;
+- `autoLayout` — `{ direction, rankSep?, nodeSep? }` (direction as written, e.g. `LeftRight`); a view may have several `autoLayout` rules, LikeC4 uses the last;
+- `items` — the items of an `include` / `exclude` in source order (a trailing comma adds none), each with its `text`, `sourceRange` and structure:
+  - `expression` — an element expression (`wildcard`; `element` with its reference and selector `children` `.*`, `descendants` `.**` or `expanded` `._`; `elementKind` / `elementTag` with `=` or `!=`) or a relation expression (`direct`, `incoming`, `outgoing`, `inOut`, with the relationship kind and the form it is written in — `bracket` `-[k]->` or `dot` `.k` — and the bidirectional flag);
+  - `where` — the condition tree: `{ and: [...] }`, `{ or: [...] }`, `{ not }`, and leaves `{ field: 'tag' | 'kind' | 'metadata', participant?, key?, operator?, value? }` with the operator as written (`=`, `!=`, `is`, `is not`);
+  - `with` — the properties of the `with { … }` block: `title`, `description`, `technology`, `notation`, `notes`, `navigateTo` (resolved to a view id), style fields as written, `multiple` of a relation.
+
+References in rules resolve as LikeC4 scopes them inside the view: a name unique in the same document, the element of `view … of X` (and of an `extends` parent's `of`), qualified names; deployment views resolve deployment nodes and instances first (the `target` is then `{ deployment }`, or `{ model }` for an element).  Rules of a `views { style … }` block are not rules of its views.  Items LikeC4 ignores — a relation predicate or a `with` on a wildcard, kind or tag in a dynamic view's `include` — are reported as written.
+
+#### Steps
+
+`steps` lists the step statements of a dynamic view in source order, each with `path`, `text` and `sourceRange`:
+
+- `step` — a single step;
+- `chain` — `a -> b -> c`, its `segments` in order, each with its `segment` number and the text from its connector on;
+- `parallel` — a `par` / `parallel` block (`keyword` as written) with its `statements`, addressed `[i, j]`; `inModel` is `false` when the block contributes no step to LikeC4 (`par { }`, or a block holding only blocks LikeC4 discards, such as `par { opt { } }`), which LikeC4 drops;
+- `opaque` — a stage-6 block (`opt`, `loop`, `alt`, `try` with its `catch` / `finally`, `break`) with its `keyword`; its inner steps are not addressable.
+
+A step statement is addressed by `{ path, segment?, text? }`: `[i]` at the top level, `[i, j]` inside the `par` block at `i`, and a segment number inside a chain; `text`, when given, must match.
+
+Each step (or chain segment) reports `source` and `target` as LikeC4 means them — the element the interaction goes from and the one it goes to, so `a <- b` has source `b` and target `a` — each as written and resolved in the document scope; `direction` (`forward` or `backward`, as LikeC4 parses it: a chain segment that returns to the element it came from is backward, its arrow stays `->`); the written `arrow`; `kind` with its form; the inline `title`; the `body` (`title`, `description`, `technology`, `notes`, `notation`, `navigateTo`, `style`); and `sequence`, its position in LikeC4's step sequence (`step-NN[:par.MM]`: a `par` or stage-6 block takes one number), absent when LikeC4 drops the step.
 
 ## Slashes in titles
 

@@ -10,6 +10,8 @@ import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
 import { DeploymentIndex, type DeploymentExtendRef, type DeploymentRelationRef } from '../query/deployment-index.js';
 import { ViewIndex } from '../query/view-index.js';
+import { buildViewInfo } from '../query/view-query.js';
+import { ViewReferenceResolver } from '../query/view-resolver.js';
 import {
   DeploymentQuery,
   type DeploymentElementSource,
@@ -47,6 +49,8 @@ import type {
   ElementInfo,
   RelationshipInfo,
   SpecificationInfo,
+  ViewInfo,
+  ViewType,
 } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, lineEndingOf, withLineEnding, type TextEdit } from './text-edit.js';
@@ -464,6 +468,35 @@ export class LikeC4Mutator {
    */
   listDeploymentRelationships(opts?: DeploymentRelationshipFilter): DeploymentRelationshipInfo[] {
     return this.deploymentQuery.listRelationships(opts);
+  }
+
+  /**
+   * List every view declaration of every file, in LikeC4 document order,
+   * then source order, optionally filtered by type and by file (an exact
+   * file name).  Values are the view's own (see {@link ViewInfo}): no
+   * `extends` inheritance, no folder prefix in the title.  An unnamed
+   * element view is listed with `id: null`; a declaration without a body
+   * with `inModel: false`; an id declared more than once (a LikeC4 error)
+   * once per declaration.  Views LikeC4 generates (an `index` that is not
+   * declared, implicit views) are not listed.
+   */
+  listViews(opts?: { type?: ViewType; file?: string }): ViewInfo[] {
+    const resolver = this.viewResolver();
+    return this.views
+      .declarations()
+      .filter((view) => (opts?.type === undefined || view.type === opts.type) && (opts?.file === undefined || view.file === opts.file))
+      .map((view) => buildViewInfo(view, resolver));
+  }
+
+  /**
+   * Return the view declared with id `id` (see {@link listViews} for its
+   * values); null for an unknown id and for the id LikeC4 generates for an
+   * unnamed view.  An id declared more than once is reported from its first
+   * declaration in LikeC4 document order.
+   */
+  getView(id: string): ViewInfo | null {
+    const view = this.views.declarationsOf(id)[0];
+    return view ? buildViewInfo(view, this.viewResolver()) : null;
   }
 
   // ---------------------------------------------------------------------------
@@ -2110,6 +2143,11 @@ export class LikeC4Mutator {
     if (file === undefined || !cst) throw new Error('Internal error: a deployment construct without file or position');
     const { offset, end, newText } = buildRemovalEdit(this.document(file).fullText, cst.offset, cst.end);
     this.applyEdit(file, { offset, end, newText });
+  }
+
+  /** Resolves the references written in views, over the current indices. */
+  private viewResolver(): ViewReferenceResolver {
+    return new ViewReferenceResolver(this.workspace, this.deployments, this.views);
   }
 
   /** Ids of the views declared in every loaded file. */

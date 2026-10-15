@@ -1,7 +1,8 @@
 /**
- * Reads of views: the rule list of a view with its structured predicates
- * (US-2, US-3) and the step statements of a dynamic view (US-4), built from
- * the `ViewIndex` and resolved with the `ViewReferenceResolver`.
+ * Reads of views: a view declaration with its own values (US-1), its rule
+ * list with structured predicates (US-2, US-3) and the step statements of a
+ * dynamic view (US-4), built from the `ViewIndex` and resolved with the
+ * `ViewReferenceResolver`.
  *
  * Structure and values follow LikeC4 1.59.4's parse of the same text
  * (language-server `ViewsParser`, `parseFqnExprWith`,
@@ -14,11 +15,12 @@
  */
 import type { LinkedTarget } from './deployment-resolver.js';
 import { resolveFqnRef } from './fqn.js';
-import { markdownAsString, removeIndent } from './likec4-text.js';
+import { markdownAsString, removeIndent, toSingleLine, unescapeKeepingSlash } from './likec4-text.js';
 import { toSourceRange } from './source-range.js';
 import { readElementStyleProps, readKindRelationshipStyle } from './style-read.js';
 import type {
   ViewElementExpression,
+  ViewInfo,
   ViewPredicateItem,
   ViewReference,
   ViewRelationExpression,
@@ -34,6 +36,68 @@ import type {
 } from './types.js';
 import type { ViewAstNode, ViewDeclaration, ViewStepSegment, ViewStepStatementEntry } from './view-index.js';
 import { contributesSteps, type ViewReferenceResolver, type ViewTargetRole } from './view-resolver.js';
+
+/**
+ * A view declaration with its own values as LikeC4 parses them (D21, LS
+ * `parseElementView` / `parseDynamicElementView` / `parseDeploymentView`):
+ * the last `title` (single line, an escaped slash kept, without the folder
+ * prefix LikeC4 adds), the last `description`, the tags in LikeC4's order
+ * (D39: the last comma-separated group first, duplicates dropped), the
+ * links, the folder of the enclosing `views` block; the `of` and `extends`
+ * targets as written and resolved; its rules and, for a dynamic view, its
+ * steps.  Values inherited through `extends` are not applied.
+ */
+export function buildViewInfo(view: ViewDeclaration, resolver: ViewReferenceResolver): ViewInfo {
+  const props = ((view.body?.props ?? []) as ViewAstNode[]);
+  const strings = new Map<string, ViewAstNode>();
+  for (const prop of props) if (prop.$type === 'ViewStringProperty') strings.set(String(prop.key), prop);
+  const title = viewTitle(strings.get('title')?.value);
+  const description = strings.has('description') ? viewText(strings.get('description')!.value) : undefined;
+  const tags = [...new Set([...view.tagGroups].reverse().flat())];
+  const links = props
+    .filter((p) => p.$type === 'LinkProperty' && typeof p.value === 'string' && p.value.trim() !== '')
+    .map((p) => {
+      const label = typeof p.title === 'string' && p.title !== '' ? toSingleLine(p.title) : undefined;
+      return label === undefined ? { url: p.value as string } : { url: p.value as string, label };
+    });
+  const folder = view.block.folder && view.block.folder.trim() !== '' ? toSingleLine(view.block.folder) : undefined;
+  const ofRef = view.node.viewOf as ViewAstNode | undefined;
+  const extendsText = resolver.extendsText(view);
+  return {
+    id: view.id ?? null,
+    type: view.type,
+    ...(ofRef && { of: { text: ofRef.$cstNode?.text ?? '', target: resolver.viewOf(view) ?? null } }),
+    ...(extendsText !== undefined && { extends: { text: extendsText, target: resolver.resolveViewText(extendsText, 'element') ?? null } }),
+    ...(title !== undefined && { title }),
+    ...(description && { description }),
+    ...(tags.length > 0 && { tags }),
+    ...(links.length > 0 && { links }),
+    ...(folder !== undefined && { folder }),
+    file: view.file ?? '',
+    sourceRange: toSourceRange(view.node.$cstNode),
+    inModel: view.body !== undefined,
+    rules: buildViewRules(view, resolver),
+    ...(view.type === 'dynamic' && { steps: buildViewSteps(view, resolver) }),
+  };
+}
+
+/**
+ * A view title as LikeC4 parses it (LS `parseTitleKeepingEscapedSlash`,
+ * `parseBaseProps`): a plain string from its source text with `\/` kept, a
+ * Markdown string as its content; dedented, trimmed, on one line.
+ */
+function viewTitle(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const node = value as ViewAstNode & MarkdownOrStringNode;
+  let title: string | undefined;
+  if (typeof node.text === 'string') {
+    const raw = node.$cstNode?.text;
+    title = raw ? unescapeKeepingSlash(raw) : node.text;
+  } else {
+    title = node.markdown || node.text;
+  }
+  return title === undefined ? undefined : toSingleLine(title);
+}
 
 /**
  * The rules of `view` in source order: for a dynamic view only its rules

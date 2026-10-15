@@ -56,3 +56,23 @@ export function markdownOrString(value: MarkdownOrString | undefined): string | 
   if (value === undefined) return undefined;
   return removeIndent(value.markdown ?? value.text ?? '');
 }
+
+/** LikeC4's `BASIC_ESCAPES` of string literals. */
+const BASIC_ESCAPES: Readonly<Record<string, string>> = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '0': '\0' };
+
+/**
+ * LikeC4 `unescapeKeepingSlash`: the value of a quoted string literal as
+ * written (`quoted` with its quotes), unescaped as langium does except that
+ * an escaped slash `\/` is kept as is (a title's literal slash).
+ */
+export function unescapeKeepingSlash(quoted: string): string {
+  let result = '';
+  for (let i = 1; i < quoted.length - 1; i++) {
+    const c = quoted[i]!;
+    if (c === '\\') {
+      const next = quoted[++i] ?? '';
+      result += next === '/' ? '\\/' : (BASIC_ESCAPES[next] ?? next);
+    } else result += c;
+  }
+  return result;
+}

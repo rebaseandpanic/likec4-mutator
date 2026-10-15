@@ -1737,10 +1737,11 @@ export async function expectViewsAgreeWithLikeC4(views: ReportedView[], files: R
     expect(title, `${name} title`).toBe(lc4.title);
     expect(actual.description ?? null, `${name} description`).toEqual(lc4.description);
     expect(actual.tags ?? null, `${name} tags`).toEqual(lc4.tags);
+    // A link is its URL and title (US-1); LikeC4's `relative` is derived from the document path.
     expect(
       actual.links?.map((l) => (l.label === undefined ? { url: l.url } : { url: l.url, title: l.label })) ?? null,
       `${name} links`,
-    ).toEqual(lc4.links);
+    ).toEqual(lc4.links?.map((l) => (l.title === undefined ? { url: l.url } : { url: l.url, title: l.title })) ?? null);
   }
   await expectRulesAgreeWithLikeC4(views, files);
   await expectStepsAgreeWithLikeC4(views, files);
