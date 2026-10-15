@@ -3,7 +3,7 @@
 **Date** 2026-10-15 · **Status** READY-FOR-PLANNING · **Task**: lc4m-15.29 (epic lc4m-15, stage 2) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
 **Type**: feature (+ behaviour changes of `addView`: new rejections, `views` block creation) · **Based on**: README sections "Views", "Rejected writes"; lc4m-15.28 spec (deployment, decisions D4/D11 file choice, D18 written-form reads); reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 00–06)
 
-Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein task lc4m-15.29 are referenced by number (`D21` to `D39`, all listed in "Load-bearing decisions"); earlier decisions of the epic as `D4`, `D11`, `D18`.
+Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein task lc4m-15.29 are referenced by number (`D21` to `D42`, all listed in "Load-bearing decisions"); earlier decisions of the epic as `D4`, `D11`, `D18`.
 
 ## Problem / Goal
 
@@ -89,7 +89,8 @@ Goal: read every declared view of the three types with its properties, its rules
 - On a segment of a multi-segment chain only title, kind, body strings, `navigateTo` and style fields can change; changing its endpoints or direction is rejected naming the chain (D31). The same rejections as US-9 apply to the patched values; in particular a single step that would end up both backward and with a kind is rejected (D38) unless the same patch removes the kind or makes the step forward. A returning chain segment keeps the kind it has (LikeC4 infers its backward flag, D31).
 
 ### US-11 — Move and remove steps; `par` blocks (P1)
-- **Acceptance**: Given a dynamic view, when the caller (a) creates an empty `par` block at a top-level path, (b) moves a step statement (single step or whole chain) from one path to another — into a `par` block, out of it, or between top-level positions —, (c) removes a step statement (a single step, a whole chain, a `par` block with its contents, or an opaque stage-6 block), then the text is edited at exactly those places and LikeC4's step sequence after the write equals the expected sequence.
+- **Acceptance**: Given a dynamic view, when the caller (a) creates a `par` block at a top-level path holding at least one statement — existing top-level step statements given by their pre-move paths (D37 addressing) and / or new steps (D40) —, (b) moves a step statement (single step or whole chain) from one path to another — into a `par` block, out of it, or between top-level positions —, (c) removes a step statement (a single step, a whole chain, a `par` block with its contents, or an opaque stage-6 block), then the text is edited at exactly those places and LikeC4's step sequence after the write equals the expected sequence.
+- **No empty `par` (D40).** LikeC4 silently drops an empty `par { }` (no diagnostic), so the library never leaves one: creating a block without statements is rejected, and moving or removing the last statement of a block removes the emptied block in the same write (reported in the result and documented). An empty `par { }` already present in the text is read as a statement marked as not part of LikeC4's model.
 - **Move addressing (D37).** Source and destination are both paths in the view as it is before the move; the destination is an insertion boundary — "before the statement at this path" — and a path equal to the length of its level appends there (`[n]` at the top level, `[i, n]` at the end of the `par` block at `i`). Examples for top-level statements `[A, B, C]`: `[0] → [2]` gives `[B, A, C]`; `[0] → [3]` gives `[B, C, A]`; `[2] → [0]` gives `[C, A, B]`. A move to the statement's own boundary (destination equal to the source path or to the next path at the same level) changes nothing and writes nothing. Moving into a `par` block that comes later at the top level uses that block's pre-move path (`[0] → [2, 0]` with `C` a `par` block moves `A` into it). A destination inside the moved statement is rejected.
 - Rejected: a `par` block inside a `par` block (moving a `par` statement into a `par`, LikeC4 `Nested parallel blocks are not allowed`); removing a single segment of a multi-segment chain (D31); a path that does not exist; an address `text` guard that does not match.
 
@@ -120,6 +121,9 @@ Goal: read every declared view of the three types with its properties, its rules
 | D37 | Move: source and destination address the pre-move state; destination = insertion boundary | both come from the same read; same rule as step insertion | post-removal index; before/after references |
 | D38 | A single step cannot be both backward and kind-bearing: such adds and updates are rejected | the grammar has no connector for it; silent loss of either is worse | writing forward with swapped endpoints; dropping the kind |
 | D39 | View tags in the order LikeC4's parse returns them | one source of truth (D21) | written order with an oracle exception |
+| D40 | A `par` block is never written empty: creation needs at least one statement; emptying a block removes it | LikeC4 drops empty blocks silently (same rule as D34) | empty blocks as placeholders; rejecting the last move-out |
+| D41 | `addView`'s default file follows LikeC4 document order | one file-choice rule across the library (D4) | keeping load order for views |
+| D42 | View tag / link updates are allowed while other files have syntax errors | the element restriction exists because of `extend` blocks, which views lack | copying the element restriction |
 
 ### Component boundaries
 - **View index** (new, read side): per workspace, all declared views in LikeC4 document order with their bodies, the views-block folder, and per view the ordered rule list and step-statement tree recovered from source offsets.
@@ -137,10 +141,10 @@ Read: documents → view index (with the logical and deployment indexes for refe
 - **INV-1** An accepted write of this feature introduces no LikeC4 error (introduced-only rule, as for existing writes): a file set that passed `likec4 validate` before passes after (`expectValidLikeC4` in tests); errors already present may remain.
 - **INV-2** A rejected write changes no file and no in-memory state; the error names the offending field (`InvalidWriteError`), `apply` reports `mutations[i].<field>`.
 - **INV-3** Every write addresses exactly one named view, and within it exactly one rule or step statement; a missing, unnamed or ambiguous view, a missing address or a failing text guard is an explicit error.
-- **INV-4** Read values equal LikeC4 1.59.4's per-document parsed views (before `extends` resolution) for every field of US-1, US-2, US-3, US-4, except: the folder prefix of titles (reported as `folder`); D18 written forms of style values; D34 constructs LikeC4 drops (reported as written); the rules LikeC4 prepends from the enclosing `views { style … }` block (not reported as the view's rules — compared after removing them from LikeC4's list); a view without a body (`view v`, `dynamic view d`), which LikeC4 does not turn into a view at all (absent from its parsed and computed views, no diagnostic — verified on 1.59.4) and the library reports as a declaration with no rules and `inModel: false` — compared by that absence; source-level fields LikeC4 does not keep (written arrow, written kind form, addresses, source text).
+- **INV-4** Read values equal LikeC4 1.59.4's per-document parsed views (before `extends` resolution) for every field of US-1, US-2, US-3, US-4, except: the folder prefix of titles (reported as `folder`); D18 written forms of style values; D34 constructs LikeC4 drops (reported as written); the rules LikeC4 prepends from the enclosing `views { style … }` block (not reported as the view's rules — compared after removing them from LikeC4's list); a view without a body (`view v`, `dynamic view d`), which LikeC4 does not turn into a view at all (absent from its parsed and computed views, no diagnostic — verified on 1.59.4) and the library reports as a declaration with no rules and `inModel: false` — compared by that absence; source-level fields LikeC4 does not keep (written arrow, written kind form, addresses, source text); an empty `par { }` statement already in the text, which LikeC4 drops (D40) — compared by its absence.
 - **INV-5** Text outside the edited ranges is unchanged byte for byte, including other rules, steps, chains and comments; edits keep the file's indentation and line endings.
 - **INV-6** Generic: no element kinds, tags, relationship kinds, view ids or nesting depths are assumed.
-- **INV-7** Existing reads and writes keep their behaviour, except `addView`'s (library and `apply`) new rejections (D34, D35, `of` + `extends`) and its new placement when no `views` block exists (it used to throw).
+- **INV-7** Existing reads and writes keep their behaviour, except `addView`'s (library and `apply`) new rejections (D34, D35, `of` + `extends`) its new placement when no `views` block exists (it used to throw), and its default file chosen in LikeC4 document order instead of load order (D41; differs only when the two orders differ).
 - **INV-8** No accepted write of this feature changes the target a surviving existing reference resolves to (view rules, steps, `navigateTo`, `extends`, `of`); references inside text a write removes on purpose are not surviving.
 - **INV-9** Every named view that LikeC4 computed before an accepted write and that survives it (that is, every one except the view `removeView` removes on purpose) is still in LikeC4's computed model after it: no write silently drops a view (`extends` cycles and non-element `extends` parents are rejected, D34). Generated views (D29) and unnamed views (D28, whose LikeC4 ids depend on their position) are outside this invariant.
 
@@ -190,7 +194,7 @@ No persistent data; `.c4` text only. No migration. Reads gain view, rule, predic
 - Stage-6 blocks containing steps: reported opaque; their inner steps are not addressable; the statement can be removed whole.
 - Same view id declared twice (LikeC4 error): reads report both; writes addressing the id are rejected as ambiguous.
 - An `of` / `extends` / `navigateTo` target that does not resolve in existing text: reported unresolved; not an obstacle for writes elsewhere.
-- Syntax errors: reads best effort; tag / link updates rejected while any loaded file has syntax errors (as for elements); other writes allowed.
+- Syntax errors: reads best effort; view writes, tag and link updates included, are allowed while other loaded files have syntax errors (views have no `extend` blocks, the reason elements reject them, D42); a write that would leave the edited file unparsable is rejected as for every write.
 - Concurrency: n/a (single in-memory instance).
 
 ## Success criteria
@@ -222,6 +226,9 @@ No persistent data; `.c4` text only. No migration. Reads gain view, rule, predic
 - Q: How are move destinations counted? → A: pre-move paths, insertion boundary (D37).
 - Q: Backward step with a kind? → A: rejected for single steps (D38).
 - Q: Tag order? → A: LikeC4's parse order (D39).
+- Q: Empty `par` blocks? → A: never written; emptied blocks are removed (D40).
+- Q: Default file order for `addView`? → A: LikeC4 document order (D41).
+- Q: View tag / link updates with syntax errors elsewhere? → A: allowed (D42).
 - **Testing**: unit level only (vitest; `npm test`; integration / e2e / smoke / mutation not provided by the project). Oracles: `expectValidLikeC4` (likec4 validate 1.59.4 in-process) and LikeC4's parsed and computed views, exposed by the extended test helper.
 
 ## Open questions / [NEEDS CLARIFICATION]
@@ -246,6 +253,9 @@ None.
 - A reverse index over view references (`navigateTo`, `extends`) for removal (RECON note 8).
 - Computed step ids are positional; compare step sequences by content, not by id (RECON note 9).
 - Per-document parsed views before `extends` resolution: find the language-server entry point for the test helper (spike 02 used `parseModel()`, which already applies `extends`).
+
+## Changelog
+- 2026-10-15 · D40, D41, D42 added; US-11 (a) creates a `par` block with at least one statement and emptied blocks are removed; INV-4 exception for an empty `par` already in the text; INV-7 lists the document-order default of `addView`; the syntax-error edge case no longer restricts view tag / link updates · found by the plan author (LikeC4 drops empty `par` blocks, LS module.mjs:6726 inside tryMap; `addView` uses load order today, src/mutator/mutator.ts:2219-2224; the element restriction exists because of `extend` blocks) · redo: plan T002 (oracle exception), T012 / T021 (`par` creation and auto-removal), T011 / T015 / T025 (document order, CHANGELOG), T016 (no syntax-error guard); targeted re-critique critics/repair-r1-codex.md.
 
 ## Known residuals
 None yet.
