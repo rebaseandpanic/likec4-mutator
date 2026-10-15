@@ -274,6 +274,8 @@ export class LikeC4Mutator {
   private deployments: DeploymentIndex;
   /** View index over all documents */
   private views: ViewIndex;
+  /** Resolver of view references over the current indices; dropped when they are rebuilt */
+  private viewReferenceResolver: ViewReferenceResolver | undefined;
   /** Reads of the deployment model */
   private deploymentQuery: DeploymentQuery;
 
@@ -1700,6 +1702,7 @@ export class LikeC4Mutator {
     this.workspace = new WorkspaceIndex(documents);
     this.deployments = new DeploymentIndex(documents);
     this.views = new ViewIndex(documents);
+    this.viewReferenceResolver = undefined;
     this.queries = new Map();
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));
@@ -2145,9 +2148,10 @@ export class LikeC4Mutator {
     this.applyEdit(file, { offset, end, newText });
   }
 
-  /** Resolves the references written in views, over the current indices. */
+  /** Resolves the references written in views, over the current indices (built once per rebuild). */
   private viewResolver(): ViewReferenceResolver {
-    return new ViewReferenceResolver(this.workspace, this.deployments, this.views);
+    this.viewReferenceResolver ??= new ViewReferenceResolver(this.workspace, this.deployments, this.views);
+    return this.viewReferenceResolver;
   }
 
   /** Ids of the views declared in every loaded file. */

@@ -499,31 +499,62 @@ export function resolveReferenceText(
   reference: string,
   position: ReferencePosition,
 ): string | undefined {
-  let ref: RefLike | undefined;
-  for (const segment of reference.split('.')) {
-    ref = ref === undefined ? { value: { $refText: segment } } : { parent: ref, value: { $refText: segment } };
+  return new DocumentReferenceResolver(ast, workspace).resolve(reference, position);
+}
+
+/**
+ * {@link resolveReferenceText} for many references of one document: the
+ * document's model scopes and the frame scopes of view bodies are prepared
+ * once and reused, so each reference costs a lookup.  Resolves exactly as
+ * {@link resolveReferenceText}.  Valid as long as `ast` and `workspace` do
+ * not change.
+ */
+export class DocumentReferenceResolver {
+  private readonly modelScopes: LocalScope[];
+  private readonly resolver: EndpointResolver;
+  private readonly frameScopes = new Map<string, LocalScope>();
+
+  constructor(
+    ast: WorkspaceDocumentAst,
+    private readonly workspace: WorkspaceIndex,
+  ) {
+    this.modelScopes = (ast.models ?? []).map((m) => computeLocalScope(m.elements ?? [], null).scope);
+    this.resolver = new EndpointResolver(workspace, uniqueAcross(this.modelScopes));
   }
-  const models = ast.models ?? [];
-  const modelScopes = models.map((m) => computeLocalScope(m.elements ?? [], null).scope);
-  const resolver = new EndpointResolver(workspace, uniqueAcross(modelScopes));
-  const chain: ScopeFrame[] = [];
-  if (position === 'views') {
-    // No container scope: the document scope and the root elements only.
-  } else if ('view' in position) {
-    const frame = position.view.frame;
-    if (frame !== undefined) {
-      // The frame element itself by its name, then its unique descendants;
-      // LikeC4 offers the element first, so it wins over a descendant of the
-      // same name.
-      const scope: LocalScope = new Map(workspace.uniqueDescendants(frame));
-      scope.set(lastSegment(frame), frame);
-      chain.push({ scope });
+
+  /** The absolute FQN `reference` written at `position` links to; undefined when it does not resolve. */
+  resolve(reference: string, position: ReferencePosition): string | undefined {
+    let ref: RefLike | undefined;
+    for (const segment of reference.split('.')) {
+      ref = ref === undefined ? { value: { $refText: segment } } : { parent: ref, value: { $refText: segment } };
     }
-  } else {
-    const scope = modelScopes[position.model];
-    if (scope) chain.push({ scope });
+    const chain: ScopeFrame[] = [];
+    if (position === 'views') {
+      // No container scope: the document scope and the root elements only.
+    } else if ('view' in position) {
+      const frame = position.view.frame;
+      if (frame !== undefined) chain.push({ scope: this.frameScope(frame) });
+    } else {
+      const scope = this.modelScopes[position.model];
+      if (scope) chain.push({ scope });
+    }
+    return this.resolver.resolveEndpoint(ref, chain);
   }
-  return resolver.resolveEndpoint(ref, chain);
+
+  /**
+   * The scope a view body adds for its frame element: the element itself by
+   * its name, then its unique descendants; LikeC4 offers the element first,
+   * so it wins over a descendant of the same name.
+   */
+  private frameScope(frame: string): LocalScope {
+    let scope = this.frameScopes.get(frame);
+    if (!scope) {
+      scope = new Map(this.workspace.uniqueDescendants(frame));
+      scope.set(lastSegment(frame), frame);
+      this.frameScopes.set(frame, scope);
+    }
+    return scope;
+  }
 }
 
 /** One element reference written in a document, with the FQN LikeC4 links it to. */

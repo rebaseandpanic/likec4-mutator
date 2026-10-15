@@ -9,7 +9,9 @@
  *    `view … of X`, else the `of` element of the `extends` parent chain;
  *    dynamic views: none), then among the names unique across the
  *    document's model blocks, then among the root elements of the project
- *    (see `resolveReferenceText`).
+ *    (see `resolveReferenceText`).  The scopes of each document are
+ *    prepared once per resolver: a resolver is bound to one generation of
+ *    the indices and is replaced when they are rebuilt.
  *  - References in deployment views resolve to deployment nodes and
  *    instances first, then to elements (`DeploymentResolver`).
  *  - View references are typed by role: `navigateTo` of an element `with`
@@ -22,7 +24,7 @@ import { DeploymentResolver, type LinkedTarget } from './deployment-resolver.js'
 import type { DeploymentIndex } from './deployment-index.js';
 import { resolveFqnRef } from './fqn.js';
 import type { ViewAstNode, ViewDeclaration, ViewIndex, ViewStepStatementEntry } from './view-index.js';
-import { resolveReferenceText, type WorkspaceIndex } from './workspace-index.js';
+import { DocumentReferenceResolver, type WorkspaceIndex } from './workspace-index.js';
 
 /** The view types a view reference accepts, by where it is written. */
 export type ViewTargetRole =
@@ -43,6 +45,8 @@ const TARGET_TYPES: Readonly<Record<ViewTargetRole, ReadonlySet<string>>> = {
 export class ViewReferenceResolver {
   private readonly deploymentResolver: DeploymentResolver;
   private readonly frames = new Map<ViewDeclaration, string | undefined>();
+  /** Prepared scopes of each document, by position in document order */
+  private readonly documentResolvers = new Map<number, DocumentReferenceResolver>();
   private readonly elementCache = new Map<string, string | undefined>();
 
   /**
@@ -66,7 +70,7 @@ export class ViewReferenceResolver {
   viewOf(view: ViewDeclaration): string | undefined {
     const ref = (view.node.viewOf as { modelElement?: unknown } | undefined)?.modelElement;
     if (!ref) return undefined;
-    return resolveReferenceText(this.astOf(view), this.workspace, resolveFqnRef(ref), 'views');
+    return this.documentResolver(view).resolve(resolveFqnRef(ref), 'views');
   }
 
   /** The view id written after `extends`; undefined when none. */
@@ -113,7 +117,7 @@ export class ViewReferenceResolver {
     const frame = this.frame(view);
     const key = `${view.document}\u0000${frame ?? ''}\u0000${text}`;
     if (this.elementCache.has(key)) return this.elementCache.get(key);
-    const fqn = resolveReferenceText(this.astOf(view), this.workspace, text, { view: frame === undefined ? {} : { frame } });
+    const fqn = this.documentResolver(view).resolve(text, { view: frame === undefined ? {} : { frame } });
     this.elementCache.set(key, fqn);
     return fqn;
   }
@@ -167,8 +171,14 @@ export class ViewReferenceResolver {
     return this.workspace.relationshipKind(name) !== undefined;
   }
 
-  private astOf(view: ViewDeclaration) {
-    return this.views.documents[view.document]!.ast;
+  /** The prepared scopes of the document `view` is declared in, built on first use. */
+  private documentResolver(view: ViewDeclaration): DocumentReferenceResolver {
+    let resolver = this.documentResolvers.get(view.document);
+    if (!resolver) {
+      resolver = new DocumentReferenceResolver(this.views.documents[view.document]!.ast, this.workspace);
+      this.documentResolvers.set(view.document, resolver);
+    }
+    return resolver;
   }
 }
 
