@@ -1,0 +1,28 @@
+model {
+  visitor = actor 'Visitor'
+
+  portal = backend 'Portal' {
+    web = ui 'Web app' {
+      #critical
+    }
+    gateway = backend 'Gateway' {
+      #critical, #draft
+      metadata {
+        zone 'dmz'
+      }
+    }
+    worker = backend 'Worker'
+    jobs = queue 'Jobs'
+  }
+
+  mailer = backend 'Mailer'
+
+  visitor -> portal.web 'uses'
+  portal.web -[call]-> portal.gateway 'calls' {
+    navigateTo checkout
+  }
+  portal.gateway .publish portal.jobs 'enqueues'
+  portal.jobs -> portal.worker 'delivers'
+  portal.worker -[call]-> mailer 'sends'
+  portal.worker -> portal.gateway 'reports'
+}

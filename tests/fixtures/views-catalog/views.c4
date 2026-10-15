@@ -1,0 +1,112 @@
+views {
+
+  view landscape {
+    #beta, #internal
+    title 'Landscape'
+    description '''
+      **Everything** the shop talks to.
+    '''
+    link https://example.com/landscape 'Landscape notes'
+    link https://example.com/runbook
+    include *
+    exclude partner
+    autoLayout LeftRight
+    autoLayout TopBottom 120 60
+  }
+
+  view shopView of shop {
+    title 'Shop'
+    include *, customer,
+    include shop.*, shop.orders.**, shop.storefront._
+    exclude element.kind != service
+    include element.kind = store, element.tag = #beta, element.tag != #legacy
+    include customer -> shop.storefront, shop.orders <-> partner
+    include shop.storefront -[sync]-> shop.orders, shop.orders .event partner
+    include -> shop.ledger, shop.orders ->, shop.orders -[event]->, shop.orders .event, partner <->, -> shop.orders ->
+    include shop.* -> shop.ledger
+    include shop.storefront with {
+      title 'Front'
+      description 'Web front'
+      technology 'web'
+      summary 'Entry point'
+      notation 'Service'
+      notes 'Shown first'
+      navigateTo landscape
+      color brand
+      shape browser
+      border dashed
+      opacity 80%
+      icon tech:react
+      iconColor amber
+      iconSize sm
+      iconPosition left
+      multiple true
+      size lg
+      padding md
+      textSize xs
+    }
+    include shop.orders -> shop.ledger with {
+      title 'Writes'
+      technology 'sql'
+      description 'Ledger writes'
+      notation 'Write'
+      notes 'Batched'
+      navigateTo orderFlow
+      color red
+      line dotted
+      head diamond
+      tail odot
+      multiple false
+    }
+    exclude * where tag is #legacy and not (kind is store or tag is not #beta)
+    exclude * where metadata.tier and metadata.owner = 'team-a' or metadata.tier != 'edge'
+    exclude * where kind = service and tag != #internal
+    exclude * -> * where kind is sync or tag is #legacy
+    exclude * -> * where metadata.critical = 'true' or metadata.critical
+    exclude * -> * where source.tag is #beta and target.kind is not store
+    exclude * -> * where source.metadata.tier = 'edge' or target.metadata.owner
+    style shop.orders {
+      color brand
+    }
+    group 'Core' {
+      color green
+      include shop.orders
+    }
+    rank same {
+      shop.orders, shop.ledger
+    }
+    global predicate coreServices
+    global style faded
+  }
+
+  view shopDetail extends shopView {
+    title 'Shop detail'
+    include orders
+  }
+
+  view of shop.orders {
+    include *
+  }
+
+  view draft
+
+  deployment view runtime {
+    title 'Runtime'
+    include eu.**
+    exclude eu.edge
+    exclude shop.storefront -> shop.orders
+    style eu.core {
+      color brand
+    }
+    includeAncestors true
+    autoLayout BottomTop
+  }
+
+  dynamic view orderFlow {
+    title 'Order flow'
+    customer -> shop.storefront 'opens'
+    shop.storefront -[sync]-> shop.orders
+    include partner
+    autoLayout LeftRight
+  }
+}

@@ -1,0 +1,38 @@
+specification {
+  element person {
+    style {
+      shape person
+    }
+  }
+  element domain
+  element service
+  element store {
+    style {
+      shape cylinder
+    }
+  }
+
+  relationship sync
+  relationship event {
+    line dashed
+  }
+
+  tag beta
+  tag legacy
+  tag internal
+
+  color brand #2f6fde
+
+  deploymentNode region
+  deploymentNode host
+}
+
+global {
+  predicateGroup coreServices {
+    include element.kind = service
+  }
+
+  style faded * {
+    opacity 40%
+  }
+}

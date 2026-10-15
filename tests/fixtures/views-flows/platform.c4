@@ -1,0 +1,32 @@
+views 'Platform' {
+  style element.kind = queue {
+    color accent
+  }
+
+  view landing {
+    #critical
+    title 'Landing'
+    include *
+    include portal.web -> portal.gateway with {
+      navigateTo checkout
+    }
+  }
+
+  view platform of portal {
+    include *, mailer
+    exclude jobs
+  }
+
+  view platformWide extends platform {
+    include visitor
+  }
+
+  view of portal.gateway {
+    include *
+  }
+
+  deployment view cluster {
+    include main.**
+    autoLayout RightLeft
+  }
+}

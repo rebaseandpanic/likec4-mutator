@@ -65,3 +65,10 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+###############################################################################
+# Test fixtures whose CRLF line endings are part of what they test: stored
+# byte for byte, never normalized.
+###############################################################################
+tests/fixtures/views-catalog/operations.c4 -text
+tests/fixtures/views-flows/platform.c4 -text

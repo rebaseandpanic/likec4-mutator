@@ -1,0 +1,14 @@
+deployment {
+  region eu {
+    host edge {
+      instanceOf shop.storefront
+    }
+    host core {
+      instanceOf shop.orders
+      instanceOf shop.ledger
+    }
+  }
+  eu.edge -> eu.core 'routes' {
+    navigateTo orderFlow
+  }
+}

@@ -1,0 +1,13 @@
+views 'Operations' {
+  style * {
+    color muted
+  }
+
+  view operations {
+    include shop.**
+  }
+
+  dynamic view settlement {
+    shop.orders -> shop.ledger
+  }
+}

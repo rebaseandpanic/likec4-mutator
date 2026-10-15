@@ -1,0 +1,91 @@
+views {
+
+  dynamic view checkout {
+    #draft, #critical
+    title 'Checkout'
+    description 'How a visitor checks out'
+    link https://example.com/checkout 'Spec'
+    variant sequence
+    include visitor
+    visitor -> portal.web 'opens'
+    portal.web <- portal.gateway 'renders'
+    include portal.gateway with {
+      title 'Gateway'
+      color accent
+      navigateTo landing
+    }
+    portal.web -[call]-> portal.gateway
+    portal.gateway .publish portal.jobs
+    autoLayout LeftRight
+    portal.web -> portal.gateway -> portal.worker
+    portal.gateway -> portal.worker -> portal.gateway 'answers'
+    portal.worker -[call]-> mailer 'notify' {
+      title 'Send notification'
+      description 'Asks the mailer to send'
+      technology 'smtp'
+      notes 'Retried on failure'
+      notation 'Mail'
+      navigateTo delivery
+      color accent
+      line dotted
+      head vee
+      tail crow
+    }
+    par {
+      portal.gateway -> portal.jobs
+      portal.gateway -> mailer
+    }
+    parallel 'Fan-out' {
+      portal.jobs -> portal.worker
+      portal.worker -> mailer -> portal.worker
+    }
+    par { }
+    par {
+      opt { }
+    }
+    style portal.web {
+      color accent
+    }
+    global predicate frontDoor
+    global style highlight
+    opt 'Optional' {
+      portal.worker -> mailer
+    }
+    loop {
+      portal.jobs -> portal.worker
+    }
+    alt 'Outcome' {
+      if 'ok' {
+        portal.worker -> portal.gateway
+      }
+      when 'retry' {
+        portal.worker -> portal.jobs
+      }
+      else {
+        portal.worker -> mailer
+      }
+    }
+    try {
+      portal.gateway -> portal.worker
+    } catch 'error' {
+      portal.gateway -> mailer
+    } finally {
+      portal.gateway -> portal.web
+    }
+    break 'Stop' {
+      portal.gateway -> visitor
+    }
+    include portal.worker with {
+      navigateTo delivery
+    },
+    autoLayout TopBottom
+  }
+
+  dynamic view delivery {
+    title 'Delivery'
+    portal.jobs -> portal.worker
+    portal.worker -> mailer
+  }
+
+  dynamic view later
+}

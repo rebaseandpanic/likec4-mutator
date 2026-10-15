@@ -1,0 +1,42 @@
+model {
+  customer = person 'Customer' {
+    description 'Places orders'
+  }
+  partner = domain 'Partner' {
+    #internal
+  }
+
+  shop = domain 'Shop' {
+    #beta
+    description 'The shop domain'
+
+    storefront = service 'Storefront' {
+      #beta
+      metadata {
+        tier 'edge'
+      }
+    }
+    orders = service 'Orders' {
+      #legacy, #internal
+      metadata {
+        tier 'core'
+        owner 'team-a'
+      }
+      intake = service 'Order intake'
+    }
+    ledger = store 'Ledger'
+  }
+
+  customer -> shop.storefront 'browses'
+  shop.storefront -[sync]-> shop.orders 'submits' {
+    navigateTo orderFlow
+    metadata {
+      critical 'true'
+    }
+  }
+  shop.orders -> shop.ledger 'records' {
+    #legacy
+  }
+  shop.orders .event partner 'notifies'
+  partner -> shop.orders 'confirms'
+}

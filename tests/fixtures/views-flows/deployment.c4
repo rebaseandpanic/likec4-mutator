@@ -1,0 +1,15 @@
+deployment {
+  cluster main {
+    pod front {
+      instanceOf portal.web
+      instanceOf portal.gateway
+    }
+    pod back {
+      instanceOf portal.worker
+      instanceOf portal.jobs
+    }
+  }
+  main.front -> main.back 'forwards' {
+    navigateTo checkout
+  }
+}

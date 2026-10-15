@@ -1,0 +1,33 @@
+specification {
+  element actor
+  element ui
+  element backend
+  element queue {
+    style {
+      shape queue
+    }
+  }
+
+  relationship call
+  relationship publish {
+    color amber
+  }
+
+  tag critical
+  tag draft
+
+  color accent #c2185b
+
+  deploymentNode cluster
+  deploymentNode pod
+}
+
+global {
+  dynamicPredicateGroup frontDoor {
+    include element.kind = ui
+  }
+
+  style highlight element.tag = #critical {
+    border solid
+  }
+}
