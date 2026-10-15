@@ -2,7 +2,7 @@
  * Text-edit operations and checks that target views.
  */
 import type { ParsedDocument } from '../parser/types.js';
-import type { ViewAstNode, ViewDeclaration, ViewIndex } from '../query/view-index.js';
+import type { ViewAstNode, ViewDeclaration, ViewIndex, ViewReferrer } from '../query/view-index.js';
 import type { TextEdit } from './text-edit.js';
 import type { GenerateViewOpts } from './codegen.js';
 import { escapeString, escapeTitle, formatLinkUrl, formatTag, generateView } from './codegen.js';
@@ -182,4 +182,51 @@ export function updateViewEdits(doc: ParsedDocument, view: ViewDeclaration, patc
   }
 
   return inserts.apply(edits);
+}
+
+/** The view types a reference written in each referrer role links to (LikeC4 reference types). */
+const REFERRER_TARGET_TYPES: Readonly<Record<ViewReferrer['role'], ReadonlySet<ViewDeclaration['type']>>> = {
+  extends: new Set(['element']),
+  elementWithNavigateTo: new Set(['element', 'dynamic', 'deployment']),
+  relationWithNavigateTo: new Set(['dynamic']),
+  stepNavigateTo: new Set(['dynamic']),
+  relationshipNavigateTo: new Set(['dynamic']),
+  deploymentRelationshipNavigateTo: new Set(['dynamic']),
+};
+
+/** What each referrer role is, for the error message. */
+const REFERRER_DESCRIPTIONS: Readonly<Record<ViewReferrer['role'], string>> = {
+  extends: 'extends',
+  elementWithNavigateTo: "navigateTo in an element predicate's with",
+  relationWithNavigateTo: "navigateTo in a relation predicate's with",
+  stepNavigateTo: 'navigateTo of a dynamic step',
+  relationshipNavigateTo: 'navigateTo of a relationship',
+  deploymentRelationshipNavigateTo: 'navigateTo of a deployment relationship',
+};
+
+/**
+ * The references LikeC4 links to the view `view` from outside its own
+ * declaration (D26, D43): every `navigateTo` and `extends` naming its id in
+ * a role that accepts its type.  References inside the declaration go with
+ * it.
+ */
+export function outsideReferrers(views: ViewIndex, view: ViewDeclaration): ViewReferrer[] {
+  return views
+    .referrersOf(view.id ?? '')
+    .filter((referrer) => referrer.view !== view && REFERRER_TARGET_TYPES[referrer.role].has(view.type));
+}
+
+/** `<file>:<line> (<role>)` of a referrer, for an error. */
+export function describeReferrer(referrer: ViewReferrer): string {
+  const line = (referrer.node.$cstNode?.range?.start?.line ?? 0) + 1;
+  const where = referrer.view?.id ? ` in view '${referrer.view.id}'` : '';
+  return `${referrer.file ?? `document ${referrer.document}`}:${line} (${REFERRER_DESCRIPTIONS[referrer.role]}${where})`;
+}
+
+/** The edit that removes the declaration of `view` with the lines it fills. */
+export function removeViewEdit(doc: ParsedDocument, view: ViewDeclaration): TextEdit {
+  const cst = view.node.$cstNode;
+  if (!cst) throw new Error(`internal: view '${view.id}' has no CST node`);
+  const { offset, end, newText } = buildRemovalEdit(doc.fullText, cst.offset, cst.end);
+  return { offset, end, newText };
 }

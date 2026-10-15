@@ -1399,6 +1399,12 @@ mutator.updateView('appView', { title: 'App', tags: ['next'], autoLayout: 'LeftR
 
 Properties go where the grammar puts them: tags first in the body, then the other properties, before any rule or step; a view declared without a body (`view v`) gets one, and LikeC4 then makes it a view. Other text and comments of the body are kept. The update is allowed while another loaded file has syntax errors; an edit that would leave the view's own file unparsable is refused. Rejected, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an undeclared tag (`tags[i]`); an invalid link URL (`links[i].url`); an invalid `autoLayout`, `''` included (`autoLayout`).
 
+#### Removing views
+
+`removeView(id)` removes the declaration of the named view `id` and nothing else, and returns `{ changedFiles }`. A manual layout snapshot of the view (a file kept by LikeC4's layout tooling) is not touched.
+
+A view that something else refers to is not removed: the call is rejected on `id`, with nothing changed, while LikeC4 links a reference outside the declaration to the view — `extends` of an element view; a `navigateTo` in an element predicate's `with` (any view); a `navigateTo` in a relation predicate's `with`, in a dynamic step, or in the body of a relationship or a deployment relationship (a dynamic view). The error lists each reference with its file and line. References inside the removed declaration itself (a view that navigates to itself) go with it and do not block. A view declared more than once, or not at all, is rejected on `id` too.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

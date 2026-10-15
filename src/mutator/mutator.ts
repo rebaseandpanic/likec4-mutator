@@ -119,7 +119,16 @@ import {
   type UpdateRelationshipMatcher,
   type UpdateRelationshipPatch,
 } from './relationship-ops.js';
-import { addViewEdit, extendsParent, updateViewEdits, type GenerateViewOpts, type UpdateViewPatch } from './view-ops.js';
+import {
+  addViewEdit,
+  describeReferrer,
+  extendsParent,
+  outsideReferrers,
+  removeViewEdit,
+  updateViewEdits,
+  type GenerateViewOpts,
+  type UpdateViewPatch,
+} from './view-ops.js';
 import { namedView } from './view-address.js';
 import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
@@ -1119,6 +1128,45 @@ export class LikeC4Mutator {
     const edits = updateViewEdits(this.document(file), view, patch);
     if (edits.length > 0) this.applyEditsToFile(file, edits);
     return { changedFiles: this.sources.get(file) === before ? [] : [file] };
+  }
+
+  /**
+   * Remove the declaration of the named view `id` and nothing else (US-8).
+   * A manual layout snapshot of the view, if one exists, is not touched.
+   *
+   * Rejected on `id`, with nothing changed, when `id` is not exactly one
+   * named view, or while LikeC4 links a reference outside the declaration to
+   * the view (D26): `extends` of an element view, a `navigateTo` in an
+   * element predicate's `with` (any view), or in a relation predicate's
+   * `with`, a dynamic step, a relationship or deployment relationship body
+   * (a dynamic view).  The error lists every such reference with its file
+   * and line.  References inside the declaration itself — a view navigating
+   * to itself — are removed with it and do not block (D43).
+   *
+   * @returns `{ changedFiles }`: the view's file
+   */
+  removeView(id: string): ViewWriteResult {
+    const view = namedView(this.views, id);
+    const referrers = outsideReferrers(this.views, view);
+    if (referrers.length > 0) {
+      throw new InvalidWriteError(
+        'id',
+        `view '${id}' is referenced, and LikeC4 would no longer resolve these references: ${referrers.map(describeReferrer).join(', ')}`,
+      );
+    }
+    const file = view.file;
+    if (file === undefined) throw new Error(`Internal error: view '${id}' has no file`);
+    const edit = removeViewEdit(this.document(file), view);
+    const before = this.referenceSnapshot(new Set([view.node]), { views: true });
+    const snapshot = this.snapshot();
+    try {
+      this.applyEdit(file, edit);
+      this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing the view' }, { views: true });
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
+    return { changedFiles: [file] };
   }
 
   // ---------------------------------------------------------------------------
