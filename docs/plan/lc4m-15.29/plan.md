@@ -115,7 +115,7 @@ N/A: one repository, one stream. No cross-repository contracts.
 | **Files.** View writers in `src/mutator/view-ops.ts`, step writers in a new `src/mutator/step-ops.ts`. `LikeC4Mutator` keeps thin public methods around its private snapshot / `applyEditGroups` / `rebuildQueries`. | One atomic-apply path; `mutator.ts` is already 2303 lines | A second mutator class |
 | **Release 0.10.0** (minor; the `addView` behaviour changes, D41 included, are listed in CHANGELOG). | SC-008 | 1.0.0 |
 
-Spec decisions D21 to D42 are implemented as mapped in the traceability table. No `[DECISION-NEEDED]`.
+Spec decisions D21 to D43 are implemented as mapped in the traceability table. No `[DECISION-NEEDED]`.
 
 ## Complexity Tracking
 
@@ -154,7 +154,7 @@ No new dependency. Step (5) of `checkViewRule` adds no new check logic: it feeds
 
 **T002** — `tests/helpers/likec4-model.ts`. Mechanism: the view oracle.
 - `parsedViews(files)`: per file, LikeC4's `c4Views` from `services.likec4.ModelParser.parse(doc)` (LS:6850-6855) after the existing `buildWorkspace`. These views come before `extends` resolution and title defaulting (LS:3590-3632). FOR-PLAN 9.
-- `buildLikeC4Model(...).views` gains: `_type`, node ids, edges (source, target), and the step sequence (`step-NN[:par.MM]`, source, target, title, kind, backward flag) taken from computed edges.
+- A separate accessor for LikeC4's computed views (`_type`, node ids, edges (source, target), and the step sequence (`step-NN[:par.MM]`, source, target, title, kind, backward flag) taken from computed edges). The existing `buildLikeC4Model(...).views[id]` record keeps its `{ title, folder }` shape, which `tests/mutator/title-slash.test.ts` asserts.
 - `linkedViewReferences(files)` reports the linked target of every view-body element / deployment reference and every `navigateTo` / `extends` / `of` target, or `null` when unlinked. It reuses the existing `FqnIndex` approach of `linkedReferences` (`likec4-model.ts:442`).
 - Comparison helpers that encode every INV-4 exception:
   - `expectViewsAgreeWithLikeC4(views, files)` compares the whole view;
@@ -294,7 +294,7 @@ Gate: every class equals LikeC4's linker observation.
 - Gate: read-back equals the patch. LikeC4's parsed and computed values agree (computed `autoLayout` direction). Untouched text is byte-identical (INV-5), CRLF included. Rejections as specified. D42 is shown both ways: a tag / link update succeeds while another loaded file has a syntax error (read-back, other file unchanged), and a write that would leave the edited file unparsable is rejected byte-identical.
 
 **T017** — same source files + README, new `tests/mutator/views-remove.test.ts`. Mechanism: `removeView` (US-8, D26).
-- Rejected on `id` while the reverse index lists any referrer (`navigateTo` in any role, `extends`), each with file and position.
+- Rejected on `id` while the reverse index lists any referrer outside the removed declaration (`navigateTo` in any role, `extends`), each with file and position; references inside the declaration itself do not block (D43).
 - Otherwise the declaration is removed through `buildRemovalEdit`.
 - The snapshot is taken with the declaration as the removal set.
 - Gate: every referrer class rejected byte-identical. Accepted removals pass `expectValidLikeC4` and `expectComputedViewsSurvive(removedId)`, including a declared `index` (the synthesized one may appear). README snapshot note.
@@ -510,6 +510,7 @@ Gate: every class equals LikeC4's linker observation.
 | D40 | T001, T002, T003, T004, T005, T008, T012, T021, T022, T023 |
 | D41 | T011, T015, T023, T025 |
 | D42 | T016, T023 |
+| D43 | T017 |
 | FOR-PLAN 1 (source order by offset) | T004 |
 | FOR-PLAN 2 (insertion anchors) | T012 |
 | FOR-PLAN 3 (`prev`-linked lists, trailing comma) | T004, T007, T018 |

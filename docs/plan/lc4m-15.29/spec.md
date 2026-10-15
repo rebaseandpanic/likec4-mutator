@@ -3,7 +3,7 @@
 **Date** 2026-10-15 · **Status** READY-FOR-PLANNING · **Task**: lc4m-15.29 (epic lc4m-15, stage 2) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
 **Type**: feature (+ behaviour changes of `addView`: new rejections, `views` block creation) · **Based on**: README sections "Views", "Rejected writes"; lc4m-15.28 spec (deployment, decisions D4/D11 file choice, D18 written-form reads); reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 00–06)
 
-Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein task lc4m-15.29 are referenced by number (`D21` to `D42`, all listed in "Load-bearing decisions"); earlier decisions of the epic as `D4`, `D11`, `D18`.
+Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein task lc4m-15.29 are referenced by number (`D21` to `D43`, all listed in "Load-bearing decisions"); earlier decisions of the epic as `D4`, `D11`, `D18`.
 
 ## Problem / Goal
 
@@ -78,7 +78,7 @@ Goal: read every declared view of the three types with its properties, its rules
 
 ### US-8 — Remove a view (P1)
 - **Acceptance**: Given a named view, when the caller removes it, then its declaration is removed and nothing else; the result `{ changedFiles }`.
-- Rejected before writing, listing each reference with file and position (D26): a `navigateTo` targeting the view from any `with` block, dynamic step, model relationship body or deployment relationship body; an `extends` of the view. Its manual layout snapshot, if any, is not touched (documented).
+- Rejected before writing, listing each reference with file and position (D26): a `navigateTo` targeting the view from any `with` block, dynamic step, model relationship body or deployment relationship body; an `extends` of the view. References inside the removed declaration itself (a self-`navigateTo`) are removed with it and do not block (D43). Its manual layout snapshot, if any, is not touched (documented).
 
 ### US-9 — Add steps (P1)
 - **Acceptance**: Given a named dynamic view, when the caller adds a step with source, target (LikeC4's sense, D36), direction (default forward; `backward` is written as `target <- source`), optional relationship kind and form, optional title, description, technology, notes, `navigateTo`, color, line, head, tail, at an optional path (default: after the last step statement; a path `[i]` inserts before top-level statement `i`; `[i, j]` inserts before statement `j` inside the `par` block at `i`, `[i, n]` appends to it), then the step is written as a single step statement and reads back as US-4 at that path with the same source, target and direction (a read step's fields written back produce the same interaction, D36); LikeC4's step sequence equals the previous one with the new step at the expected position.
@@ -123,6 +123,7 @@ Goal: read every declared view of the three types with its properties, its rules
 | D39 | View tags in the order LikeC4's parse returns them | one source of truth (D21) | written order with an oracle exception |
 | D40 | A `par` block is never left contributing no LikeC4 step: such creations and moves / removals are rejected, except that a literally emptied block is removed | LikeC4 drops empty blocks silently (same rule as D34) | empty blocks as placeholders; rejecting the last move-out |
 | D41 | `addView`'s default file follows LikeC4 document order | one file-choice rule across the library (D4) | keeping load order for views |
+| D43 | References inside the removed view itself do not block its removal | they do not survive the write (INV-8) | blocking self-references |
 | D42 | View tag / link updates are allowed while other files have syntax errors | the element restriction exists because of `extend` blocks, which views lack | copying the element restriction |
 
 ### Component boundaries
@@ -229,6 +230,7 @@ No persistent data; `.c4` text only. No migration. Reads gain view, rule, predic
 - Q: Empty `par` blocks? → A: a block contributing no LikeC4 step is never written; a literally emptied block is removed, other cases rejected (D40).
 - Q: Default file order for `addView`? → A: LikeC4 document order (D41).
 - Q: View tag / link updates with syntax errors elsewhere? → A: allowed (D42).
+- Q: A view that only references itself? → A: removable; self-references go with it (D43).
 - **Testing**: unit level only (vitest; `npm test`; integration / e2e / smoke / mutation not provided by the project). Oracles: `expectValidLikeC4` (likec4 validate 1.59.4 in-process) and LikeC4's parsed and computed views, exposed by the extended test helper.
 
 ## Open questions / [NEEDS CLARIFICATION]
@@ -255,6 +257,7 @@ None.
 - Per-document parsed views before `extends` resolution: find the language-server entry point for the test helper (spike 02 used `parseModel()`, which already applies `extends`).
 
 ## Changelog
+- 2026-10-15 · D43 added: US-8 — references inside the removed declaration do not block its removal · found by the test-plan author (D26 vs INV-8 undecided for self-references) · redo: plan T017 (gate), tests.md (row for the self-reference case).
 - 2026-10-15 · D40 refined: "empty" means contributing no parsed LikeC4 step (`par { opt { } }` is dropped too); such creations and moves / removals are rejected, a literally emptied block is still removed · found by the targeted re-critique critics/repair-r1-codex.md · redo: plan T021, T002 (same tasks as below).
 - 2026-10-15 · D40, D41, D42 added; US-11 (a) creates a `par` block with at least one statement and emptied blocks are removed; INV-4 exception for an empty `par` already in the text; INV-7 lists the document-order default of `addView`; the syntax-error edge case no longer restricts view tag / link updates · found by the plan author (LikeC4 drops empty `par` blocks, LS module.mjs:6726 inside tryMap; `addView` uses load order today, src/mutator/mutator.ts:2219-2224; the element restriction exists because of `extend` blocks) · redo: plan T002 (oracle exception), T012 / T021 (`par` creation and auto-removal), T011 / T015 / T025 (document order, CHANGELOG), T016 (no syntax-error guard); targeted re-critique critics/repair-r1-codex.md.
 
