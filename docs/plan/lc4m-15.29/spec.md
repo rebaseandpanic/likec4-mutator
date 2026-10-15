@@ -1,9 +1,9 @@
 # Spec: Read and edit LikeC4 views and dynamic view steps
 
 **Date** 2026-10-15 · **Status** DRAFT · **Task**: lc4m-15.29 (epic lc4m-15, stage 2) · **Affects**: likec4-mutator (library, `apply` CLI command, docs)
-**Type**: feature (+ one behaviour change of `addView`) · **Based on**: README sections "Views", "Rejected writes"; lc4m-15.28 spec (deployment, decisions D4/D11 file choice, D18 written-form reads); reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 00–06)
+**Type**: feature (+ behaviour changes of `addView`: new rejections, `views` block creation) · **Based on**: README sections "Views", "Rejected writes"; lc4m-15.28 spec (deployment, decisions D4/D11 file choice, D18 written-form reads); reconnaissance `spikes/RECON.md` (LikeC4 1.59.4, spikes 00–06)
 
-Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein task lc4m-15.29 are referenced by number (`D21` to `D34`, all listed in "Load-bearing decisions"); earlier decisions of the epic as `D4`, `D11`, `D18`.
+Identifiers: scenarios `US-N`, invariants `INV-N`, other requirements `FR-NNN`, success criteria `SC-NNN`. Decisions recorded as decision comments on Skein task lc4m-15.29 are referenced by number (`D21` to `D37`, all listed in "Load-bearing decisions"); earlier decisions of the epic as `D4`, `D11`, `D18`.
 
 ## Problem / Goal
 
@@ -39,6 +39,7 @@ Goal: read every declared view of the three types with its properties, its rules
 ### US-1 — List and get views (P1)
 - **Acceptance**: Given views of all three types in several files and several `views` blocks (with and without a folder string, with and without a body), when the caller lists views (optionally filtered by type and by file) or gets a view by id, then each declared view is reported with: id (`null` for an unnamed element view, D28), type (`element` | `dynamic` | `deployment`), `of` target (as written, plus the resolved element FQN or an unresolved marker), `extends` parent (as written, plus the resolved view id or an unresolved marker), own title, own description, own tags, own links, folder string of its `views` block (or none), file and source range, its rules (US-2) and, for dynamic views, its steps (US-4).
 - Own values (D21) equal LikeC4's per-document parsed view: title as LikeC4 normalizes it (single line, escaped slash kept) but without the folder prefix LikeC4 adds (the folder is reported separately); description as markdown or text; tags unique in written order; links with URL and title. Views without the property report it absent. Values inherited through `extends`, the element title LikeC4 shows for an untitled `view of X`, and the default title of `index` are not applied (documented).
+- A declaration without a body (`view v`) is reported with no rules and marked as not part of LikeC4's model (LikeC4 builds no view from it); a write that gives it a body makes it a view.
 - Generated views (`index` when none is declared, `implicitViews`) are not reported (D29). Getting an unknown id returns nothing; an id declared more than once (a LikeC4 error) is reported for each declaration in lists and is ambiguous for writes (INV-3).
 
 ### US-2 — Rules in source order with addresses (P1)
@@ -55,15 +56,15 @@ Goal: read every declared view of the three types with its properties, its rules
 
 ### US-4 — Read dynamic view steps (P1)
 - **Acceptance**: Given a dynamic view with single steps (`->`, `<-`, `-[kind]->`, `.kind`), chains `a -> b -> c` (including a chain that returns to an earlier element), steps with bodies (`title`, `description`, `technology`, `notes`, `notation`, `navigateTo`, `color`, `line`, `head`, `tail`), `par` and `parallel` blocks, and stage-6 blocks (`opt`, `loop`, `alt`, `try` / `catch` / `finally`, `break`) containing steps, when the caller reads the view, then `steps` lists the step statements in source order (D24), each with its address (path), source text and source range:
-  - single step: source and target (as written and resolved element FQN or unresolved marker), direction (`forward` | `backward`), relationship kind with its written form (`bracket` | `dot`) or none, inline title, body properties;
-  - chain: its segments in order, each with the step fields above and its segment number; a segment LikeC4 treats as backward (returning to the previous source) reports `backward`, as LikeC4 parses it;
+  - single step: source and target in LikeC4's sense (D36: the element the interaction goes from and the one it goes to — for `a <- b` source `b`, target `a`), each as written and resolved element FQN or unresolved marker; direction (`forward` | `backward`, as LikeC4 parses it); the written arrow (`->`, `<-`, `-[kind]->`, `.kind`); relationship kind with its written form (`bracket` | `dot`) or none; inline title; body properties;
+  - chain: its segments in order, each with the step fields above and its segment number; a segment LikeC4 treats as backward (returning to the previous source) reports `backward` with LikeC4's source and target, while its written arrow stays `->` (D36);
   - `par` / `parallel` block: keyword as written, its contained statements (steps and chains, and opaque blocks) with paths `[i, j]`;
   - stage-6 block: opaque position with its keyword and source text (its inner steps are not addressable).
 - Each step also reports its position in LikeC4's step sequence, so that steps compare one-to-one with LikeC4's parsed steps (INV-4). Steps and rules are reported in separate lists even when they interleave in the text.
 
 ### US-5 — Create views anywhere (P1)
 - **Acceptance**: Given any loaded workspace, when the caller adds a view with id, type, optional `of` target (element views), optional `extends` parent (element views), optional title, description, includes and `autoLayout`, and an optional `file`, then the view is appended to the first `views` block of the chosen file — or, without `file`, of the first file (LikeC4 document order) that has a `views` block; without any `views` block a block is created at the end of the chosen file, or of the first file with a `model` block, or of the first file (D27). The view reads back as US-1 with the requested values.
-- Rejected before writing: `of` together with `extends`; `extends` on a dynamic or deployment view; an `extends` parent that is not a declared, named element view; an unknown `file` (loaded files only, no file is created); everything `addView` rejects today; an include that LikeC4 would drop (D34: relation predicate in a dynamic view, `with` on a wildcard / kind / tag in a dynamic view).
+- Rejected before writing: `of` together with `extends`; `extends` on a dynamic or deployment view; an `extends` parent that is not a declared, named element view with a body (a bodyless parent is not a view for LikeC4, and the child would be dropped); an unknown `file` (loaded files only, no file is created); everything `addView` rejects today; every include that US-7 rejects for the new view's type, scope and file (D35) — unresolved references, undeclared kinds or tags, `navigateTo` targets of a disallowed type, model references in a deployment include, and the constructs LikeC4 would drop (D34: relation predicate in a dynamic view, `with` on a wildcard / kind / tag in a dynamic view). The same checks apply to `apply` `addView`.
 
 ### US-6 — Update view properties (P1)
 - **Acceptance**: Given a named view, when the caller patches title, description, tags, links or `autoLayout` (D33), then: title and description REPLACE (`null` removes the property, `''` is written as an empty string), tags REPLACE (declared tags only), links REPLACE, `autoLayout` replaces the view's effective (last) `autoLayout` rule in place or appends one as the last rule, and `null` removes every `autoLayout` rule. Properties are placed where the grammar requires them (tags first in the body, then other properties, before any rule or step), a missing body is created, untouched text and comments are kept. Result `{ changedFiles }`.
@@ -72,7 +73,7 @@ Goal: read every declared view of the three types with its properties, its rules
 ### US-7 — Add, replace and remove rules (P1)
 - **Acceptance (add)**: Given a named view, when the caller adds a rule given as kind (`include` | `exclude`) and expression text (D23) at an optional position (`before` a rule address; default: after the last rule, but before the last rule when that rule is an `autoLayout`; in a dynamic view the new rule goes after the last body item, before a trailing `autoLayout`), then the rule is written there and the view reads back with the rule at the expected index, other rules in their order.
 - **Replace** a rule at an address with a new kind and expression; **remove** a rule at an address (any rule kind, including opaque stage-6 rules and `autoLayout`, D30).
-- The expression must form exactly one rule of a kind the view type allows: element views — include / exclude; dynamic views — include only; deployment views — include / exclude without `with` (the existing library rule). Every reference inside the text must resolve as LikeC4 resolves it at that place (INV-8 scope rules, D25): element references (document-unique names, the `of` scope, the scope inherited through `extends`), deployment references in deployment views (model references only where LikeC4 allows them, i.e. in `exclude`), relationship kinds, tags, element kinds, `navigateTo` targets (any view from an element `with`, only a dynamic view from a relation `with`). Also rejected: `with` inside `exclude`; `with` on `element.kind` / `element.tag`; D34 constructs.
+- The expression must form exactly one rule of a kind the view type allows: element views — include / exclude; dynamic views — include only; deployment views — include / exclude without `with` (the existing library rule). Every reference inside the text must resolve as LikeC4 resolves it at that place (scope rules in "Integration points and contracts", D25): element references (document-unique names, the `of` scope, the scope inherited through `extends`), deployment references in deployment views (model references only where LikeC4 allows them, i.e. in `exclude`), relationship kinds, tags, element kinds, `navigateTo` targets (any view from an element `with`, only a dynamic view from a relation `with`). Also rejected: `with` inside `exclude`; `with` on `element.kind` / `element.tag`; D34 constructs.
 - The view contents LikeC4 computes after the write match the expectation for the rule (for example, an added include makes the element appear among the computed nodes; a removed exclude makes it reappear).
 
 ### US-8 — Remove a view (P1)
@@ -80,15 +81,16 @@ Goal: read every declared view of the three types with its properties, its rules
 - Rejected before writing, listing each reference with file and position (D26): a `navigateTo` targeting the view from any `with` block, dynamic step, model relationship body or deployment relationship body; an `extends` of the view. Its manual layout snapshot, if any, is not touched (documented).
 
 ### US-9 — Add steps (P1)
-- **Acceptance**: Given a named dynamic view, when the caller adds a step with source, target, direction (default forward), optional relationship kind and form, optional title, description, technology, notes, `navigateTo`, color, line, head, tail, at an optional path (default: after the last step statement; a path `[i]` inserts before top-level statement `i`; `[i, j]` inserts before statement `j` inside the `par` block at `i`, `[i, n]` appends to it), then the step is written as a single step statement and reads back as US-4 at that path; LikeC4's step sequence equals the previous one with the new step at the expected position.
+- **Acceptance**: Given a named dynamic view, when the caller adds a step with source, target (LikeC4's sense, D36), direction (default forward; `backward` is written as `target <- source`), optional relationship kind and form, optional title, description, technology, notes, `navigateTo`, color, line, head, tail, at an optional path (default: after the last step statement; a path `[i]` inserts before top-level statement `i`; `[i, j]` inserts before statement `j` inside the `par` block at `i`, `[i, n]` appends to it), then the step is written as a single step statement and reads back as US-4 at that path with the same source, target and direction (a read step's fields written back produce the same interaction, D36); LikeC4's step sequence equals the previous one with the new step at the expected position.
 - Rejected: an endpoint that does not resolve to a model element as LikeC4 resolves step references (document scope only, D25); a parent–child pair; an undeclared relationship kind; a `navigateTo` that is not a declared dynamic view; a path that does not exist or points into a chain or a stage-6 block.
 
 ### US-10 — Update steps (P1)
-- **Acceptance**: Given a step at a path (a single step, or a segment of a chain addressed by path plus segment number), when the caller patches endpoints, direction, kind, title, description, technology, notes, `navigateTo` or style fields, then the single step is rewritten in place with only the patched parts changed (title / strings REPLACE, `null` removes; style fields per field), and untouched steps, chains and comments are unchanged byte for byte.
+- **Acceptance**: Given a step at a path (a single step, or a segment of a chain addressed by path plus segment number), when the caller patches endpoints (LikeC4's sense, D36), direction, kind, title, description, technology, notes, `navigateTo` or style fields, then the single step is rewritten in place with only the patched parts changed (title / strings REPLACE, `null` removes; style fields per field), and untouched steps, chains and comments are unchanged byte for byte.
 - On a segment of a multi-segment chain only title, kind, body strings, `navigateTo` and style fields can change; changing its endpoints or direction is rejected naming the chain (D31). The same rejections as US-9 apply to the patched values.
 
 ### US-11 — Move and remove steps; `par` blocks (P1)
 - **Acceptance**: Given a dynamic view, when the caller (a) creates an empty `par` block at a top-level path, (b) moves a step statement (single step or whole chain) from one path to another — into a `par` block, out of it, or between top-level positions —, (c) removes a step statement (a single step, a whole chain, a `par` block with its contents, or an opaque stage-6 block), then the text is edited at exactly those places and LikeC4's step sequence after the write equals the expected sequence.
+- **Move addressing (D37).** Source and destination are both paths in the view as it is before the move; the destination is an insertion boundary — "before the statement at this path" — and a path equal to the length of its level appends there (`[n]` at the top level, `[i, n]` at the end of the `par` block at `i`). Examples for top-level statements `[A, B, C]`: `[0] → [2]` gives `[B, A, C]`; `[0] → [3]` gives `[B, C, A]`; `[2] → [0]` gives `[C, A, B]`. A move to the statement's own boundary (destination equal to the source path or to the next path at the same level) changes nothing and writes nothing. Moving into a `par` block that comes later at the top level uses that block's pre-move path (`[0] → [2, 0]` with `C` a `par` block moves `A` into it). A destination inside the moved statement is rejected.
 - Rejected: a `par` block inside a `par` block (moving a `par` statement into a `par`, LikeC4 `Nested parallel blocks are not allowed`); removing a single segment of a multi-segment chain (D31); a path that does not exist; an address `text` guard that does not match.
 
 ### US-12 — Batch operations through `apply` (P1)
@@ -113,6 +115,9 @@ Goal: read every declared view of the three types with its properties, its rules
 | D32 | Separate operations (view properties, rules, steps, `par`, removal) instead of one patch | each has its own address, rejections and error path | one big `updateView` patch |
 | D33 | Strings REPLACE (`null` removes), tags / links REPLACE, one effective `autoLayout` | same semantics as other updates; LikeC4 uses the last `autoLayout` (spike 02) | MERGE tags |
 | D34 | Writes LikeC4 silently ignores or that make it drop views are rejected | `validate` does not catch them; a no-op write is a defect for the caller | accepting them |
+| D35 | `addView` includes (library and `apply`) get every rule check of US-7 | one write path must not bypass INV-1 | parse-only checks |
+| D36 | Step source / target in LikeC4's sense (who interacts with whom), direction as LikeC4 parses it, written arrow reported separately | equals LikeC4's parsed steps; a read step written back keeps its meaning | written left / right positions |
+| D37 | Move: source and destination address the pre-move state; destination = insertion boundary | both come from the same read; same rule as step insertion | post-removal index; before/after references |
 
 ### Component boundaries
 - **View index** (new, read side): per workspace, all declared views in LikeC4 document order with their bodies, the views-block folder, and per view the ordered rule list and step-statement tree recovered from source offsets.
@@ -130,19 +135,19 @@ Read: documents → view index (with the logical and deployment indexes for refe
 - **INV-1** An accepted write of this feature introduces no LikeC4 error (introduced-only rule, as for existing writes): a file set that passed `likec4 validate` before passes after (`expectValidLikeC4` in tests); errors already present may remain.
 - **INV-2** A rejected write changes no file and no in-memory state; the error names the offending field (`InvalidWriteError`), `apply` reports `mutations[i].<field>`.
 - **INV-3** Every write addresses exactly one named view, and within it exactly one rule or step statement; a missing, unnamed or ambiguous view, a missing address or a failing text guard is an explicit error.
-- **INV-4** Read values equal LikeC4 1.59.4's per-document parsed views (before `extends` resolution) for every field of US-1, US-2, US-3, US-4, except: the folder prefix of titles (reported as `folder`), D18 written forms of style values, and D34 constructs LikeC4 drops (reported as written).
+- **INV-4** Read values equal LikeC4 1.59.4's per-document parsed views (before `extends` resolution) for every field of US-1, US-2, US-3, US-4, except: the folder prefix of titles (reported as `folder`); D18 written forms of style values; D34 constructs LikeC4 drops (reported as written); the rules LikeC4 prepends from the enclosing `views { style … }` block (not reported as the view's rules — compared after removing them from LikeC4's list); a view without a body (`view v`, `dynamic view d`), which LikeC4 does not turn into a view at all (absent from its parsed and computed views, no diagnostic — verified on 1.59.4) and the library reports as a declaration with no rules and `inModel: false` — compared by that absence; source-level fields LikeC4 does not keep (written arrow, written kind form, addresses, source text).
 - **INV-5** Text outside the edited ranges is unchanged byte for byte, including other rules, steps, chains and comments; edits keep the file's indentation and line endings.
 - **INV-6** Generic: no element kinds, tags, relationship kinds, view ids or nesting depths are assumed.
-- **INV-7** Existing reads and writes keep their behaviour, except `addView`'s new rejections (D34, `of` + `extends`) and its new placement when no `views` block exists (it used to throw).
+- **INV-7** Existing reads and writes keep their behaviour, except `addView`'s (library and `apply`) new rejections (D34, D35, `of` + `extends`) and its new placement when no `views` block exists (it used to throw).
 - **INV-8** No accepted write of this feature changes the target a surviving existing reference resolves to (view rules, steps, `navigateTo`, `extends`, `of`); references inside text a write removes on purpose are not surviving.
-- **INV-9** A view LikeC4 computed before an accepted write is still computed after it (no silent drop: `extends` cycles and non-element `extends` parents are rejected, D34).
+- **INV-9** Every named view that LikeC4 computed before an accepted write and that survives it (that is, every one except the view `removeView` removes on purpose) is still in LikeC4's computed model after it: no write silently drops a view (`extends` cycles and non-element `extends` parents are rejected, D34). Generated views (D29) and unnamed views (D28, whose LikeC4 ids depend on their position) are outside this invariant.
 
 ### Integration points and contracts
 | Surface | Contract |
 |---|---|
 | New read methods | list / get views (names fixed in the plan, documented in README) |
 | New write methods | update view, add / replace / remove rule, add / update / move / remove step statement, add `par` block, remove view; each returns `{ changedFiles }` |
-| `addView` | + `description`, `extends`, `file`; creates a missing `views` block; new rejections (D34, `of` + `extends`) |
+| `addView` | + `description`, `extends`, `file`; creates a missing `views` block; new rejections (D34, D35, `of` + `extends`) |
 | `apply` | one operation per write method, same field names, same strict validation; `addView` + `autoLayout`, `description`, `extends`, `file` |
 | LikeC4 view scoping (mirrored, spike 03) | a bare name resolves when it is unique among the descendants declared in the same document (or is a top-level element); an element view `of X` adds X's scope; a view `extends P` uses P's `of` scope; dynamic views use the document scope only; deployment views resolve deployment names (model references only in `exclude` and in relation predicates of `exclude`); element `with { navigateTo }` targets any view, relation `with` and step `navigateTo` only dynamic views, `extends` only element views |
 
@@ -158,7 +163,7 @@ Read: documents → view index (with the logical and deployment indexes for refe
 | Today | Change |
 |---|---|
 | no view read API (`src/index.ts`) | + list / get views with rules and steps |
-| `addView(opts)` — element, dynamic, deployment; `of`, `title`, `includes`, `autoLayout`; first `views` block of the first file that has one, else throws | + `description`, `extends`, `file`; `views` block creation; D34 rejections |
+| `addView(opts)` — element, dynamic, deployment; `of`, `title`, `includes`, `autoLayout`; first `views` block of the first file that has one, else throws | + `description`, `extends`, `file`; `views` block creation; D34 and D35 rejections |
 | `apply` op `addView` (`op, id, type, target, title, includes`) | + `autoLayout`, `description`, `extends`, `file`; + view, rule, step and removal ops |
 | other operations | unchanged |
 
@@ -176,7 +181,9 @@ No persistent data; `.c4` text only. No migration. Reads gain view, rule, predic
 - Two `autoLayout` rules: both reported; `updateView({ autoLayout })` replaces the last one (the effective one, spike 02).
 - Dynamic view where rules and steps interleave: rules and steps keep their text positions; a new rule goes after the last body item (before a trailing `autoLayout`).
 - `include` between two steps that are moved into a `par` block: moves are per statement, so a rule is never moved into a block.
-- A chain that returns to an earlier element (`a -> b -> a`): the returning segment is reported backward, as LikeC4 parses it.
+- A chain that returns to an earlier element (`a -> b -> a`): the returning segment is reported backward with LikeC4's source and target, its written arrow `->` (D36).
+- A backward step `a <- b`: source `b`, target `a`, direction `backward`; writing those fields back produces `a <- b` (D36).
+- A view declared without a body: reported, not in LikeC4's model; an `extends` to it is rejected; writes that need a body create one.
 - `parallel` keyword: read as written; new blocks are written as `par`.
 - Stage-6 blocks containing steps: reported opaque; their inner steps are not addressable; the statement can be removed whole.
 - Same view id declared twice (LikeC4 error): reads report both; writes addressing the id are rejected as ambiguous.
@@ -186,10 +193,10 @@ No persistent data; `.c4` text only. No migration. Reads gain view, rule, predic
 
 ## Success criteria
 - **SC-001** Every row named in lc4m-15.29 "Coverage rows to update" has a non-`no` status in docs/likec4-coverage.md, or a documented `no` / `n/a` for the parts out of scope (stage 6, rename), and the coverage check passes.
-- **SC-002** For each read scenario (US-1, US-2, US-3, US-4), in at least two unrelated fixtures, the library's values equal LikeC4's per-document parsed views field by field, with the INV-4 exceptions accounted for; every predicate form of the grammar and every step form appears in at least one compared example.
+- **SC-002** For each read scenario (US-1, US-2, US-3, US-4), in at least two unrelated fixtures, the library's values equal LikeC4's per-document parsed views field by field, with every INV-4 exception accounted for by a dedicated example (folder prefix, block-level style rules, bodyless view, backward step and returning chain segment); every predicate form of the grammar and every step form appears in at least one compared example.
 - **SC-003** Every successful write in the test suite on a valid input produces files that pass `expectValidLikeC4`; a successful write on an input that already has LikeC4 errors introduces no new error (INV-1).
-- **SC-004** After each rule write (add, replace, remove) and each step write (add, update, move, remove, `par` create / remove), the view LikeC4 computes is compared with the expectation derived from LikeC4: the nodes for element and deployment views, the step sequence for dynamic views; every view computed before the write is still computed after it (INV-9).
-- **SC-005** Each rejection class of US-5, US-6, US-7, US-8, US-9, US-10, US-11 and D34 has a test showing rejection with the field named and sources byte-identical; the `apply` path exits 1 and writes nothing.
+- **SC-004** After each rule write (add, replace, remove) and each step write (add, update, move — including the D37 examples —, remove, `par` create / remove), the view LikeC4 computes is compared with the expectation derived from LikeC4: the nodes for element and deployment views, the step sequence for dynamic views; every named view computed before the write and surviving it is still computed after the write, and after `removeView` exactly the removed view is gone (INV-9).
+- **SC-005** Each rejection class of US-5, US-6, US-7, US-8, US-9, US-10, US-11, D34 and D35 (through `addView` and `apply` `addView`) has a test showing rejection with the field named and sources byte-identical; the `apply` path exits 1 and writes nothing.
 - **SC-006** All pre-existing tests pass unchanged, except tests that pinned behaviour this spec changes (INV-7), which are rewritten to assert the new behaviour.
 - **SC-007** `npm run lint` and `npm test` pass; README documents the view read API (own values, D21 exceptions, unnamed and generated views), the rule and step addressing (D22, D24), the write API and `apply` format, the reference rules for written text, the removal rejection and the snapshot note; CHANGELOG lists additions and the `addView` behaviour changes.
 - **SC-008** One minor release is prepared (version in package.json and docs/likec4-coverage.md, CHANGELOG entry) and is not pushed, tagged or published without the owner's explicit command.
@@ -208,6 +215,9 @@ No persistent data; `.c4` text only. No migration. Reads gain view, rule, predic
 - Q: Operation granularity? → A: separate operations (D32).
 - Q: Update semantics? → A: D33.
 - Q: Writes LikeC4 ignores? → A: rejected (D34).
+- Q: Does `addView` check references in its includes? → A: yes, all US-7 checks, library and `apply` (D35).
+- Q: What do a step's source and target mean for `<-`? → A: LikeC4's sense; the written arrow is reported separately (D36).
+- Q: How are move destinations counted? → A: pre-move paths, insertion boundary (D37).
 - **Testing**: unit level only (vitest; `npm test`; integration / e2e / smoke / mutation not provided by the project). Oracles: `expectValidLikeC4` (likec4 validate 1.59.4 in-process) and LikeC4's parsed and computed views, exposed by the extended test helper.
 
 ## Open questions / [NEEDS CLARIFICATION]
