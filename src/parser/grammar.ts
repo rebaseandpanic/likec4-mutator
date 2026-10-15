@@ -86,45 +86,89 @@ const VIEW_KEYWORD: Record<IncludeViewType, string> = {
   deployment: 'deployment view',
 };
 
-/** AST type of the `include` rule in the body of each view kind. */
-const INCLUDE_RULE_TYPE: Record<IncludeViewType, string> = {
+/** AST type of the `include` / `exclude` rule in the body of each view kind. */
+const PREDICATE_RULE_TYPE: Record<IncludeViewType, string> = {
   element: 'ViewRulePredicate',
   dynamic: 'DynamicViewIncludePredicate',
   deployment: 'DeploymentViewRulePredicate',
 };
 
+/** Kinds of a predicate rule of a view body. */
+export type ViewRuleKeyword = 'include' | 'exclude';
+
 /**
- * Whether `expression` — the text written after the `include` keyword — forms
- * exactly one `include` rule in the body of a view of `type`: it parses without
- * errors and adds no further rule, property, step, view or top-level block.
- * Comma-separated predicates (`a, b`) form one rule.  This guards against an
- * expression such as `* exclude x` or `*\n autoLayout LeftRight`, which is
- * valid LikeC4 but would write more than the one include rule asked for.  A
- * comment after the predicates (`* // every element`) is accepted: the rule is
- * written on a line of its own, so the comment ends with it.
+ * An `include` / `exclude` rule as the LikeC4 parser builds it, before
+ * linking: its expressions are a `prev`-linked `Expressions` list (`exprs`,
+ * or `expr` in a deployment view), and every cross-reference carries only
+ * its `$refText`.
  */
-export function isSingleIncludeRule(expression: string, type: IncludeViewType): boolean {
-  const source = `views {\n${VIEW_KEYWORD[type]} probe {\ninclude ${expression}\n}\n}\n`;
+export interface ParsedViewRule {
+  readonly $type: string;
+  readonly isInclude?: boolean;
+  /** The expressions of an element or dynamic view rule */
+  readonly exprs?: ParsedAstNode;
+  /** The expressions of a deployment view rule */
+  readonly expr?: ParsedAstNode;
+  readonly [k: string]: unknown;
+}
+
+/** A node of a parsed (unlinked) LikeC4 AST. */
+export interface ParsedAstNode {
+  readonly $type: string;
+  readonly $cstNode?: { readonly text: string };
+  readonly [k: string]: unknown;
+}
+
+/**
+ * The single `kind` rule (`include` or `exclude`) that `expression` — the
+ * text written after the keyword — forms in the body of a view of `type`:
+ * the text parses without errors and adds no further rule, property, step,
+ * view or top-level block.  Comma-separated predicates (`a, b`) form one
+ * rule.  Undefined otherwise, and for a kind the view type does not have
+ * (`exclude` in a dynamic view).  This guards against an expression such as
+ * `* exclude x` or `*\n autoLayout LeftRight`, which is valid LikeC4 but
+ * would write more than the one rule asked for.  A comment after the
+ * predicates (`* // every element`) is accepted: the rule is written on a
+ * line of its own, so the comment ends with it.
+ */
+export function parseViewRule(
+  kind: ViewRuleKeyword,
+  expression: string,
+  type: IncludeViewType,
+): ParsedViewRule | undefined {
+  const source = `views {\n${VIEW_KEYWORD[type]} probe {\n${kind} ${expression}\n}\n}\n`;
   const result = getServices().likec4.parser.LangiumParser.parse(source);
-  if (result.parserErrors.length > 0 || result.lexerErrors.length > 0) return false;
+  if (result.parserErrors.length > 0 || result.lexerErrors.length > 0) return undefined;
 
   const document = result.value as unknown as Record<string, unknown>;
   for (const [key, value] of Object.entries(document)) {
     if (key.startsWith('$') || key === 'views') continue;
-    if (Array.isArray(value) && value.length > 0) return false;
+    if (Array.isArray(value) && value.length > 0) return undefined;
   }
   const blocks = document.views as ReadonlyArray<{ views?: ReadonlyArray<unknown> }> | undefined;
-  if (blocks?.length !== 1 || blocks[0]!.views?.length !== 1) return false;
+  if (blocks?.length !== 1 || blocks[0]!.views?.length !== 1) return undefined;
 
   const view = blocks[0]!.views[0] as {
-    body?: { rules?: ReadonlyArray<{ $type: string; isInclude?: boolean }>; props?: unknown[]; steps?: unknown[] };
+    body?: { rules?: ReadonlyArray<ParsedViewRule>; props?: unknown[]; steps?: unknown[] };
   };
   const body = view.body;
-  if (!body || (body.props?.length ?? 0) > 0 || (body.steps?.length ?? 0) > 0) return false;
+  if (!body || (body.props?.length ?? 0) > 0 || (body.steps?.length ?? 0) > 0) return undefined;
   const rules = body.rules ?? [];
-  if (rules.length !== 1) return false;
+  if (rules.length !== 1) return undefined;
   const [rule] = rules;
-  return rule!.$type === INCLUDE_RULE_TYPE[type] && rule!.isInclude !== false;
+  if (rule!.$type !== PREDICATE_RULE_TYPE[type]) return undefined;
+  // A dynamic view has no `exclude` rule; its include rule has no `isInclude`.
+  const include = type === 'dynamic' || rule!.isInclude !== false;
+  return include === (kind === 'include') ? rule : undefined;
+}
+
+/**
+ * Whether `expression` — the text written after the `include` keyword — forms
+ * exactly one `include` rule in the body of a view of `type` (see
+ * {@link parseViewRule}).
+ */
+export function isSingleIncludeRule(expression: string, type: IncludeViewType): boolean {
+  return parseViewRule('include', expression, type) !== undefined;
 }
 
 // ---------------------------------------------------------------------------

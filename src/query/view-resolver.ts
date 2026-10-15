@@ -24,6 +24,7 @@ import { DeploymentResolver, type LinkedTarget } from './deployment-resolver.js'
 import type { DeploymentIndex } from './deployment-index.js';
 import { resolveFqnRef } from './fqn.js';
 import type { ViewAstNode, ViewDeclaration, ViewIndex, ViewStepStatementEntry } from './view-index.js';
+import type { ViewType } from './types.js';
 import { DocumentReferenceResolver, type WorkspaceIndex } from './workspace-index.js';
 
 /** The view types a view reference accepts, by where it is written. */
@@ -40,6 +41,26 @@ const TARGET_TYPES: Readonly<Record<ViewTargetRole, ReadonlySet<string>>> = {
   dynamic: new Set(['dynamic']),
   element: new Set(['element']),
 };
+
+/**
+ * The body of a view that is about to be added: the references of its
+ * rules resolve as in the body of a declared view of `type` in the
+ * document at position `document` of LikeC4's document order, with the
+ * element `frame` (the `of` element, or that of the `extends` parent).
+ */
+export interface NewViewBody {
+  readonly type: ViewType;
+  readonly document: number;
+  readonly frame?: string;
+}
+
+/** Where the references of a view rule are written: a declared view's body, or a new view's. */
+export type ViewBodyPlace = ViewDeclaration | NewViewBody;
+
+/** Whether `place` is a declared view (not a new one). */
+function isDeclaration(place: ViewBodyPlace): place is ViewDeclaration {
+  return 'node' in place;
+}
 
 /** Resolves the references written in the views of a workspace. */
 export class ViewReferenceResolver {
@@ -70,7 +91,7 @@ export class ViewReferenceResolver {
   viewOf(view: ViewDeclaration): string | undefined {
     const ref = (view.node.viewOf as { modelElement?: unknown } | undefined)?.modelElement;
     if (!ref) return undefined;
-    return this.documentResolver(view).resolve(resolveFqnRef(ref), 'views');
+    return this.documentResolver(view.document).resolve(resolveFqnRef(ref), 'views');
   }
 
   /** The view id written after `extends`; undefined when none. */
@@ -113,11 +134,11 @@ export class ViewReferenceResolver {
    * the element or dynamic view `view` links to; undefined when it does not
    * resolve (unknown or ambiguous name).
    */
-  resolveElementText(view: ViewDeclaration, text: string): string | undefined {
-    const frame = this.frame(view);
+  resolveElementText(view: ViewBodyPlace, text: string): string | undefined {
+    const frame = isDeclaration(view) ? this.frame(view) : view.frame;
     const key = `${view.document}\u0000${frame ?? ''}\u0000${text}`;
     if (this.elementCache.has(key)) return this.elementCache.get(key);
-    const fqn = this.documentResolver(view).resolve(text, { view: frame === undefined ? {} : { frame } });
+    const fqn = this.documentResolver(view.document).resolve(text, { view: frame === undefined ? {} : { frame } });
     this.elementCache.set(key, fqn);
     return fqn;
   }
@@ -133,8 +154,8 @@ export class ViewReferenceResolver {
    * `view` links to: a node or instance, or an element (a model
    * reference); undefined when it does not resolve.
    */
-  resolveDeploymentText(view: ViewDeclaration, text: string): LinkedTarget | undefined {
-    return view.body ? this.deploymentResolver.resolveText(text, view.body) : undefined;
+  resolveDeploymentText(view: ViewBodyPlace, text: string): LinkedTarget | undefined {
+    return this.deploymentResolver.resolveText(text, this.deploymentBody(view));
   }
 
   /** What a parsed `FqnRef` in the body of a deployment view links to. */
@@ -171,12 +192,24 @@ export class ViewReferenceResolver {
     return this.workspace.relationshipKind(name) !== undefined;
   }
 
-  /** The prepared scopes of the document `view` is declared in, built on first use. */
-  private documentResolver(view: ViewDeclaration): DocumentReferenceResolver {
-    let resolver = this.documentResolvers.get(view.document);
+  /**
+   * The body node references of the deployment view `view` are resolved
+   * from: the body as parsed, else — for a declaration without a body, or a
+   * new view — a body node standing where the written body will be (under
+   * the declaration, or under the document root), so that the lookup walks
+   * the same containers as LikeC4's.
+   */
+  private deploymentBody(view: ViewBodyPlace): ViewAstNode {
+    if (isDeclaration(view)) return view.body ?? { $type: 'DeploymentViewBody', $container: view.node };
+    return { $type: 'DeploymentViewBody', $container: this.views.documents[view.document]!.ast as ViewAstNode };
+  }
+
+  /** The prepared scopes of the document at position `document`, built on first use. */
+  private documentResolver(document: number): DocumentReferenceResolver {
+    let resolver = this.documentResolvers.get(document);
     if (!resolver) {
-      resolver = new DocumentReferenceResolver(this.views.documents[view.document]!.ast, this.workspace);
-      this.documentResolvers.set(view.document, resolver);
+      resolver = new DocumentReferenceResolver(this.views.documents[document]!.ast, this.workspace);
+      this.documentResolvers.set(document, resolver);
     }
     return resolver;
   }

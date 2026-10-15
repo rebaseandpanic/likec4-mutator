@@ -596,6 +596,15 @@ const LINK_URI_TERMINALS = [
 ];
 
 /**
+ * Whether `url` can be written as an unquoted `link` token: one of the LikeC4
+ * URI forms (`scheme://…`, `/…`, `./…`, `../…`, `@alias/…`) without
+ * whitespace.
+ */
+export function isLinkUrl(url: string): boolean {
+  return !/\s/.test(url) && LINK_URI_TERMINALS.some((re) => re.test(url));
+}
+
+/**
  * Validate a link URL for emission as an unquoted `link` token and return it
  * unchanged.
  *
@@ -605,7 +614,7 @@ const LINK_URI_TERMINALS = [
  *   of the model
  */
 export function formatLinkUrl(url: string): string {
-  if (/\s/.test(url) || !LINK_URI_TERMINALS.some((re) => re.test(url))) {
+  if (!isLinkUrl(url)) {
     throw new Error(
       `Invalid link URL ${JSON.stringify(url)}: expected 'scheme://…', a relative path ('/…', './…', '../…') or '@alias/…' without whitespace`,
     );

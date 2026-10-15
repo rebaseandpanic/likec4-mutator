@@ -23,11 +23,16 @@ import {
   libraryIconNames,
   parseAutoLayout,
   parseStyleProperty,
+  parseViewRule,
   type IncludeViewType,
+  type ParsedAstNode,
   type ParsedStyleProperty,
+  type ViewRuleKeyword,
 } from '../parser/grammar.js';
+import { resolveFqnRef } from '../query/fqn.js';
+import type { ViewBodyPlace, ViewReferenceResolver } from '../query/view-resolver.js';
 import type { WorkspaceIndex } from '../query/workspace-index.js';
-import { viewIncludeExpression, type ElementStyle, type RelationshipStyle } from './codegen.js';
+import { isLinkUrl, viewIncludeExpression, type ElementStyle, type RelationshipStyle } from './codegen.js';
 
 /**
  * A write was rejected before anything changed because a value it would
@@ -324,5 +329,284 @@ export function checkStyle(
     const property = parseStyleProperty(target, key, value);
     if (!property) throw new InvalidWriteError(path, `${quote(value)} is not ${expectedStyleValue(key)}`);
     checkParsedStyleValue(property, key, value, workspace, path);
+  }
+}
+
+/**
+ * Links of a view write: each URL one of the LikeC4 URI forms (`scheme://…`,
+ * `/…`, `./…`, `../…`, `@alias/…`) without whitespace, each label — when
+ * given — a string.  The links of existing operations keep the plain
+ * `Error` of `formatLinkUrl`.
+ *
+ * @throws {InvalidWriteError} on `<field>[i].url` / `<field>[i].label`
+ */
+export function checkLinks(
+  links: ReadonlyArray<{ url: string; label?: string }> | undefined,
+  field = 'links',
+): void {
+  links?.forEach((link, i) => {
+    const url: unknown = link?.url;
+    if (typeof url !== 'string' || !isLinkUrl(url)) {
+      throw new InvalidWriteError(
+        `${field}[${i}].url`,
+        `${quote(url)} is not a link URL: expected 'scheme://…', a relative path ('/…', './…', '../…') or '@alias/…' without whitespace`,
+      );
+    }
+    const label: unknown = link.label;
+    if (label !== undefined && typeof label !== 'string') {
+      throw new InvalidWriteError(`${field}[${i}].label`, `${quote(label)} is not a string`);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// View rules
+// ---------------------------------------------------------------------------
+
+/** An `include` / `exclude` rule of a view as a write gives it: kind and expression text (D23). */
+export interface ViewRuleText {
+  kind: ViewRuleKeyword;
+  /** The predicates written after the keyword, e.g. `app.api, app.db` or `* where tag is #next` */
+  expression: string;
+}
+
+/** Rule kinds each view type has (a dynamic view has no `exclude`). */
+const RULE_KINDS: Readonly<Record<IncludeViewType, readonly ViewRuleKeyword[]>> = {
+  element: ['include', 'exclude'],
+  dynamic: ['include'],
+  deployment: ['include', 'exclude'],
+};
+
+const RELATION_EXPRESSIONS: ReadonlySet<string> = new Set([
+  'DirectedRelationExpr',
+  'OutgoingRelationExpr',
+  'IncomingRelationExpr',
+  'InOutRelationExpr',
+]);
+
+/** What a cross-reference of a predicate links to, by `<container type>:<property>` (LikeC4 `getReferenceType`). */
+type ReferenceRole =
+  | 'relationshipKind'
+  | 'elementKind'
+  /** `where kind is …`: an element kind or a deployment node kind */
+  | 'kind'
+  | 'tag'
+  | 'anyView'
+  | 'dynamicView'
+  | 'elementView'
+  /** custom colors and library icons: checked with the `with` properties */
+  | 'style';
+
+const REFERENCE_ROLES: Readonly<Record<string, ReferenceRole>> = {
+  'OutgoingRelationExpr:kind': 'relationshipKind',
+  'RelationKindDotRef:kind': 'relationshipKind',
+  'WhereRelationKind:value': 'relationshipKind',
+  'ElementKindExpression:kind': 'elementKind',
+  'WhereElementKind:value': 'kind',
+  'WhereRelationParticipantKind:value': 'kind',
+  'TagRef:tag': 'tag',
+  'ViewRef:view': 'anyView',
+  'DynamicViewRef:view': 'dynamicView',
+  'ElementViewRef:view': 'elementView',
+  'ColorProperty:customColor': 'style',
+  'IconColorProperty:customColor': 'style',
+  'IconProperty:libicon': 'style',
+};
+
+/** The references and `with` properties of a parsed rule, in source order. */
+interface RuleContents {
+  /** Element (or deployment) references: the outermost `FqnRef` of each */
+  refs: Array<{ text: string; inRelation: boolean }>;
+  /** Kind, tag and view references */
+  named: Array<{ role: Exclude<ReferenceRole, 'style'>; text: string }>;
+  /** Style properties of `with { … }` bodies, with the style class of their subject */
+  styles: Array<{ property: ParsedAstNode; target: 'element' | 'relationship' }>;
+}
+
+/**
+ * The admissibility check of an `include` / `exclude` rule written into the
+ * body of a view (D23, D34, D35): an existing view's body, or that of a view
+ * about to be added (`addView` includes).  In order:
+ *
+ *  1. form — `rule.expression` parses to exactly one rule of `rule.kind`,
+ *     a kind the view type has (element and deployment views: include /
+ *     exclude; dynamic views: include), and does not end with a trailing
+ *     comma (the next line of the body would join the rule);
+ *  2. structure — rejected are what LikeC4 reports or silently drops:
+ *     `with` in an `exclude` rule, `with` on `element.kind` /
+ *     `element.tag`, a relation predicate in a dynamic view, `with` on a
+ *     wildcard, kind or tag in a dynamic view, and `with` in a deployment
+ *     view;
+ *  3. references — every element reference resolves at the place as LikeC4
+ *     scopes it (see {@link ViewReferenceResolver}); in a deployment view
+ *     a model reference only inside a relation predicate of an `exclude`
+ *     rule, and a reference into an instance's internals only inside a
+ *     relation predicate (LikeC4 1.59.4 `checkFqnRefExpr`,
+ *     `checkRelationExpr`); every
+ *     `navigateTo` names a view of a type its place accepts (any view from
+ *     an element `with`, a dynamic view from a relation `with`);
+ *  4. declarations — element kinds, tags and relationship kinds are
+ *     declared by a specification (`where kind is …` accepts an element or
+ *     a deployment node kind);
+ *  5. `with` properties — each style property passes the checks of
+ *     {@link checkStyle} for the subject's class (declared custom colors,
+ *     library icons, no `file://` icon URI, opacity within 0%..100%).
+ *
+ * The expression is written as given; nothing is regenerated.
+ *
+ * @param place     - The view body the rule is written into
+ * @param fields    - Error fields: `kind` for the rule kind, `expression` for every other failure
+ * @throws {InvalidWriteError} on `fields.kind` or `fields.expression`
+ */
+export function checkViewRule(
+  rule: ViewRuleText,
+  place: ViewBodyPlace,
+  resolver: ViewReferenceResolver,
+  workspace: WorkspaceIndex,
+  fields: { kind: string; expression: string },
+): void {
+  const { kind, expression } = rule;
+  const allowed = RULE_KINDS[place.type];
+  if (!allowed.includes(kind)) {
+    throw new InvalidWriteError(fields.kind, `${quote(kind)} is not a rule kind of a ${place.type} view: expected ${allowed.join(' or ')}`);
+  }
+  const field = fields.expression;
+  const fail = (detail: string): never => {
+    throw new InvalidWriteError(field, `${quote(expression)}: ${detail}`);
+  };
+
+  // (1) Form
+  const parsed = typeof expression === 'string' ? parseViewRule(kind, expression, place.type) : undefined;
+  const list = parsed?.exprs ?? parsed?.expr;
+  if (!list) {
+    throw new InvalidWriteError(
+      field,
+      `${quote(expression)} is not exactly one ${kind} rule of a ${place.type} view: expected its predicates, such as '*' or 'app.api, app.db'`,
+    );
+  }
+  const items: ParsedAstNode[] = [];
+  for (let node: ParsedAstNode | undefined = list; node; node = node.prev as ParsedAstNode | undefined) {
+    const value = node.value as ParsedAstNode | undefined;
+    if (!value) fail('ends with a trailing comma, which would join the next line of the view body to the rule');
+    items.unshift(value!);
+  }
+
+  // (2) Structure
+  for (const item of items) checkRuleItemStructure(item, kind, place.type, fail);
+
+  const contents: RuleContents = { refs: [], named: [], styles: [] };
+  for (const item of items) collectRuleContents(item, false, contents, fail);
+
+  // (3) References
+  for (const { text, inRelation } of contents.refs) {
+    if (place.type === 'deployment') {
+      const target = resolver.resolveDeploymentText(place, text);
+      if (!target) fail(`'${text}' does not resolve to a deployment node, instance or element in this view`);
+      else if ('model' in target) {
+        if (kind === 'include' || !inRelation) {
+          fail(`'${text}' is a model reference, which LikeC4 allows in a deployment view only inside a relation predicate of an exclude rule`);
+        }
+      } else if (target.element !== undefined && !inRelation) {
+        fail(`'${text}' refers into the internals of instance '${target.deployment}': expected a deployment node or instance`);
+      }
+    } else if (resolver.resolveElementText(place, text) === undefined) {
+      fail(`'${text}' does not resolve to an element in this view (unknown, or not unique where it is written)`);
+    }
+  }
+  for (const { role, text } of contents.named) {
+    if (role !== 'anyView' && role !== 'dynamicView' && role !== 'elementView') continue;
+    const viewRole = role === 'anyView' ? 'any' : role === 'dynamicView' ? 'dynamic' : 'element';
+    if (resolver.resolveViewText(text, viewRole) === undefined) {
+      fail(
+        viewRole === 'any'
+          ? `navigateTo '${text}' is not a declared view`
+          : `navigateTo '${text}' is not a declared ${viewRole} view, which is what LikeC4 accepts here`,
+      );
+    }
+  }
+
+  // (4) Declarations
+  for (const { role, text } of contents.named) {
+    switch (role) {
+      case 'relationshipKind':
+        if (!resolver.isRelationshipKind(text)) fail(`relationship kind '${text}' is not declared by a specification of the loaded files`);
+        break;
+      case 'elementKind':
+        if (!resolver.isElementKind(text)) fail(`element kind '${text}' is not declared by a specification of the loaded files`);
+        break;
+      case 'kind':
+        if (!resolver.isElementOrDeploymentNodeKind(text)) {
+          fail(`'${text}' is neither an element kind nor a deployment node kind declared by a specification of the loaded files`);
+        }
+        break;
+      case 'tag': {
+        const name = text.replace(/^#/, '');
+        if (!resolver.isTag(name)) fail(`tag '${name}' is not declared by a specification of the loaded files`);
+        break;
+      }
+    }
+  }
+
+  // (5) `with` properties
+  for (const { property, target } of contents.styles) {
+    const key = String(property.key);
+    if (!STYLE_FIELDS[target].has(key)) continue;
+    const value = (property.$cstNode?.text ?? '').slice(key.length).trim();
+    checkParsedStyleValue(property as unknown as ParsedStyleProperty, key, value, workspace, field);
+  }
+}
+
+/** Step (2) of {@link checkViewRule} for one predicate item. */
+function checkRuleItemStructure(
+  item: ParsedAstNode,
+  kind: ViewRuleKeyword,
+  type: IncludeViewType,
+  fail: (detail: string) => never,
+): void {
+  const custom = item.$type === 'FqnExprWith' || item.$type === 'RelationExprWith' ? item : undefined;
+  let subject = custom ? (custom.subject as ParsedAstNode) : item;
+  if (subject.$type === 'FqnExprWhere' || subject.$type === 'RelationExprWhere') subject = subject.subject as ParsedAstNode;
+  if (type === 'dynamic' && RELATION_EXPRESSIONS.has(subject.$type)) {
+    fail('a relation predicate, which LikeC4 drops from the include rules of a dynamic view');
+  }
+  if (!custom) return;
+  if (type === 'deployment') fail("uses 'with', which LikeC4 does not apply in deployment views");
+  if (kind === 'exclude') fail("uses 'with' in an exclude rule, which LikeC4 reports as invalid");
+  const untargeted = subject.$type === 'ElementKindExpression' || subject.$type === 'ElementTagExpression';
+  if (type === 'dynamic' && (untargeted || subject.$type === 'WildcardExpression')) {
+    fail("uses 'with' on a wildcard, element.kind or element.tag, which LikeC4 ignores in dynamic views");
+  }
+  if (untargeted) fail("uses 'with' on element.kind or element.tag; LikeC4 expects a reference to a specific element");
+}
+
+/** Collect the references and `with` properties below `node` (steps 3 to 5 of {@link checkViewRule}). */
+function collectRuleContents(
+  node: ParsedAstNode,
+  inRelation: boolean,
+  contents: RuleContents,
+  fail: (detail: string) => never,
+): void {
+  if (node.$type === 'FqnRef') {
+    contents.refs.push({ text: resolveFqnRef(node), inRelation });
+    return;
+  }
+  if (node.$type === 'CustomElementProperties' || node.$type === 'CustomRelationProperties') {
+    const target = node.$type === 'CustomElementProperties' ? 'element' : 'relationship';
+    for (const property of (node.props ?? []) as ParsedAstNode[]) contents.styles.push({ property, target });
+  }
+  const relation = inRelation || RELATION_EXPRESSIONS.has(node.$type);
+  for (const [key, value] of Object.entries(node)) {
+    if (key.startsWith('$')) continue;
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (typeof child !== 'object' || child === null) continue;
+      if ('$refText' in child) {
+        const id = `${node.$type}:${key}`;
+        const role = REFERENCE_ROLES[id];
+        if (role === undefined) fail(`holds a reference (${id}) that cannot be checked`);
+        if (role !== 'style') contents.named.push({ role: role!, text: String((child as { $refText: unknown }).$refText) });
+      } else if (typeof (child as { $type?: unknown }).$type === 'string') {
+        collectRuleContents(child as ParsedAstNode, relation, contents, fail);
+      }
+    }
   }
 }
