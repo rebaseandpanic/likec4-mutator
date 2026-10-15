@@ -448,44 +448,19 @@ function readWorkspace(name: string): Record<string, string> {
 }
 
 describe('reverse index of view references (row 9)', () => {
-  const roles: string[] = [];
-
-  it.each(['views-catalog', 'views-flows'])('%s', async (fixture) => {
-    const files = readWorkspace(fixture);
-    // P: the fixture is valid, declares views and references them in every role.
-    await expectValidLikeC4(files);
-    expect((await parsedViews(files)).length).toBeGreaterThan(0);
-    const linked = (await linkedViewReferences(files)).filter((r) => r.role === 'extends' || r.role.endsWith('NavigateTo'));
-    expect(linked.length).toBeGreaterThan(0);
-    roles.push(...linked.map((r) => r.role));
-    expect(linked.every((r) => r.target !== null)).toBe(true);
-
-    const { views } = library(files);
-    const ids = [...new Set(views.declarations().map((d) => d.id).filter((id): id is string => id !== undefined))];
-    expect(ids.length).toBeGreaterThan(0);
-    for (const id of ids) {
-      const expected = linked
-        .filter((r) => (r.target as { view?: string }).view === id)
-        .map((r) => `${r.at} ${r.role} ${r.text} @${r.view ?? '-'}`)
-        .sort();
-      const actual = views
-        .referrersOf(id)
-        .map((r) => {
-          const written = (r.role === 'extends' ? r.node : (r.node.value as ViewAstNode)).$cstNode as unknown as Cst;
-          return `${r.file}:${written.range.start.line + 1} ${r.role} ${written.text} @${r.view?.id ?? '-'}`;
-        })
-        .sort();
-      expect(actual, `referrers of ${id}`).toEqual(expected);
-      for (const referrer of views.referrersOf(id)) {
-        // The entry points at the reference itself, not at its view.
-        const written = (referrer.role === 'extends' ? referrer.node : (referrer.node.value as ViewAstNode)).$cstNode as unknown as Cst;
-        expect(files[referrer.file!]!.slice(written.offset, written.offset + written.text.length)).toBe(referrer.target);
-      }
+  it('on both fixtures, the referrers of every view equal LikeC4\'s linked references', async () => {
+    const fixtures = ['views-catalog', 'views-flows'].map((name) => ({ name, files: readWorkspace(name) }));
+    // P: both fixtures are valid, declare views, and together reference views in every role.
+    const linkedOf = new Map<string, LinkedViewReference[]>();
+    for (const { name, files } of fixtures) {
+      await expectValidLikeC4(files);
+      expect((await parsedViews(files)).length, name).toBeGreaterThan(0);
+      const linked = (await linkedViewReferences(files)).filter((r) => r.role === 'extends' || r.role.endsWith('NavigateTo'));
+      expect(linked.length, name).toBeGreaterThan(0);
+      expect(linked.every((r) => r.target !== null), name).toBe(true);
+      linkedOf.set(name, linked);
     }
-  });
-
-  it('the two fixtures together cover every referrer role', () => {
-    expect([...new Set(roles)].sort()).toEqual([
+    expect([...new Set([...linkedOf.values()].flat().map((r) => r.role))].sort()).toEqual([
       'deploymentRelationshipNavigateTo',
       'elementWithNavigateTo',
       'extends',
@@ -493,5 +468,31 @@ describe('reverse index of view references (row 9)', () => {
       'relationshipNavigateTo',
       'stepNavigateTo',
     ]);
+
+    for (const { name, files } of fixtures) {
+      const linked = linkedOf.get(name)!;
+      const { views } = library(files);
+      const ids = [...new Set(views.declarations().map((d) => d.id).filter((id): id is string => id !== undefined))];
+      expect(ids.length, name).toBeGreaterThan(0);
+      for (const id of ids) {
+        const expected = linked
+          .filter((r) => (r.target as { view?: string }).view === id)
+          .map((r) => `${r.at} ${r.role} ${r.text} @${r.view ?? '-'}`)
+          .sort();
+        const actual = views
+          .referrersOf(id)
+          .map((r) => {
+            const written = (r.role === 'extends' ? r.node : (r.node.value as ViewAstNode)).$cstNode as unknown as Cst;
+            return `${r.file}:${written.range.start.line + 1} ${r.role} ${written.text} @${r.view?.id ?? '-'}`;
+          })
+          .sort();
+        expect(actual, `${name}: referrers of ${id}`).toEqual(expected);
+        for (const referrer of views.referrersOf(id)) {
+          // The entry points at the reference itself, not at its view.
+          const written = (referrer.role === 'extends' ? referrer.node : (referrer.node.value as ViewAstNode)).$cstNode as unknown as Cst;
+          expect(files[referrer.file!]!.slice(written.offset, written.offset + written.text.length)).toBe(referrer.target);
+        }
+      }
+    }
   });
 });

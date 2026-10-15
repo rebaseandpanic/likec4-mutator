@@ -99,34 +99,38 @@ const dynamic = (body: string, extraViews = '') => ({
 });
 
 describe('steps equal LikeC4 parsed steps (row 16)', () => {
-  it.each(['views-catalog', 'views-flows'])('%s', async (fixture) => {
-    const files = readWorkspace(fixture);
-    // P: valid, and the dynamic views LikeC4 parses have steps.
-    await expectValidLikeC4(files);
-    const parsed = (await parsedViews(files)).filter((p) => p.view._type === 'dynamic');
-    expect(parsed.some((p) => (p.view.steps ?? []).length > 0)).toBe(true);
-    const views = libraryViews(files);
-    await expectStepsAgreeWithLikeC4(views, files);
-  });
-
-  it('P: the flows fixture holds every step form', async () => {
-    const files = readWorkspace('views-flows');
-    const checkout = (await parsedViews(files)).find((p) => p.view.id === 'checkout')!.view;
-    const json = JSON.stringify(checkout.steps);
-    const source = files['flows.c4']!;
+  it('on both fixtures, every step equals LikeC4\'s parsed steps and sequence', async () => {
+    const fixtures = ['views-catalog', 'views-flows'].map((name) => ({ name, files: readWorkspace(name) }));
+    // P: both fixtures are valid and parse dynamic views with steps; together
+    // they hold every step form (the flows fixture's checkout view).
+    const json: string[] = [];
+    const sources: string[] = [];
+    for (const { name, files } of fixtures) {
+      await expectValidLikeC4(files);
+      const parsed = (await parsedViews(files)).filter((p) => p.view._type === 'dynamic');
+      expect(parsed.some((p) => (p.view.steps ?? []).length > 0), name).toBe(true);
+      json.push(...parsed.map((p) => JSON.stringify(p.view.steps)));
+      sources.push(...Object.values(files));
+    }
+    const steps = json.join('\n');
+    const source = sources.join('\n');
     const forms: Array<[string, boolean]> = [
       ['->', / -> /.test(source)],
-      ['<-', json.includes('"isBackward":true') && / <- /.test(source)],
+      ['<-', steps.includes('"isBackward":true') && / <- /.test(source)],
       ['-[k]->', /-\[\w+\]->/.test(source)],
       ['.k', /\w \.\w+ \w/.test(source)],
-      ['chain', json.includes('"_type":"series"')],
-      ['returning chain', /"_type":"series","steps":\[[^\]]*"isBackward":true/.test(json)],
-      ['body with every property', ['title', 'description', 'technology', 'notes', 'notation', 'navigateTo', 'color', 'line', 'head', 'tail'].every((k) => json.includes(`"${k}":`))],
-      ['par', json.includes('"_type":"par"')],
+      ['chain', steps.includes('"_type":"series"')],
+      ['returning chain', /"_type":"series","steps":\[[^\]]*"isBackward":true/.test(steps)],
+      ['body with every property', ['title', 'description', 'technology', 'notes', 'notation', 'navigateTo', 'color', 'line', 'head', 'tail'].every((k) => steps.includes(`"${k}":`))],
+      ['par', steps.includes('"_type":"par"')],
       ['parallel', /parallel '/.test(source)],
-      ['stage-6 blocks with steps', ['opt', 'loop', 'alt', 'try', 'break'].every((k) => json.includes(`"_type":"${k}"`))],
+      ['stage-6 blocks with steps', ['opt', 'loop', 'alt', 'try', 'break'].every((k) => steps.includes(`"_type":"${k}"`))],
     ];
     expect(forms.filter(([, present]) => !present).map(([form]) => form)).toEqual([]);
+
+    for (const { files } of fixtures) {
+      await expectStepsAgreeWithLikeC4(libraryViews(files), files);
+    }
   });
 });
 

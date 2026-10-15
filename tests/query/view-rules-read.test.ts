@@ -83,7 +83,8 @@ async function diagnosticsAt(files: Record<string, string>, at: string): Promise
 }
 
 describe('rules equal LikeC4 parsed rules (row 10)', () => {
-  it('P: the two fixtures are valid and together hold every predicate form and rule kind', async () => {
+  it('on both fixtures, every rule equals LikeC4\'s parsed rules', async () => {
+    // P: both fixtures are valid and together hold every predicate form and rule kind.
     const parsed: string[] = [];
     const written: string[] = [];
     for (const fixture of FIXTURES) {
@@ -137,13 +138,13 @@ describe('rules equal LikeC4 parsed rules (row 10)', () => {
       ['includeAncestors', lc4.includes('"includeAncestors"')],
     ];
     expect(forms.filter(([, present]) => !present).map(([form]) => form)).toEqual([]);
-  });
 
-  it.each(FIXTURES)('%s', async (fixture) => {
-    const files = readWorkspace(fixture);
-    const views = libraryRules(files);
-    expect(views.some((v) => v.rules.length > 0)).toBe(true);
-    await expectRulesAgreeWithLikeC4(views, files);
+    for (const fixture of FIXTURES) {
+      const files = readWorkspace(fixture);
+      const views = libraryRules(files);
+      expect(views.some((v) => v.rules.length > 0), fixture).toBe(true);
+      await expectRulesAgreeWithLikeC4(views, files);
+    }
   });
 });
 
