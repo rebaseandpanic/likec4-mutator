@@ -117,8 +117,23 @@ function readElementStyleBlock(props: readonly unknown[] | undefined): ElementSt
   const block = (props ?? []).find((p) => (p as StylePropNode).$type === 'ElementStyleProperty') as
     | StylePropNode
     | undefined;
+  return elementStyleOf(block?.props);
+}
+
+/**
+ * Element style fields written directly in a property list, as in a view
+ * predicate's `with { ... }` block: later properties override earlier ones.
+ * Undefined when no field is set.
+ *
+ * @param props - The properties (`custom.props`); non-style properties are skipped
+ */
+export function readElementStyleProps(props: readonly unknown[] | undefined): ElementStyle | undefined {
+  return nonEmpty(elementStyleOf(props));
+}
+
+function elementStyleOf(props: readonly unknown[] | undefined): ElementStyle {
   const style: ElementStyle = {};
-  for (const raw of block?.props ?? []) {
+  for (const raw of props ?? []) {
     const prop = raw as StylePropNode;
     const value = typeof prop.value === 'string' && prop.value !== '' ? prop.value : undefined;
     switch (prop.$type) {
