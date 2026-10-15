@@ -860,6 +860,8 @@ export interface LikeC4ComputedView {
   edges: Array<{ source: string; target: string }>;
   /** The step sequence of a dynamic view (one entry per computed edge, in order); empty for other views */
   steps: LikeC4ComputedStep[];
+  /** The layout LikeC4 computes the view with (`autoLayout` of the computed view) */
+  autoLayout: { direction: string; rankSep?: number; nodeSep?: number };
 }
 
 /** A computed edge, as far as {@link computedViews} reads it. */
@@ -892,6 +894,7 @@ export async function computedViews(
       _type: LikeC4ComputedView['type'];
       nodes: ReadonlyArray<{ id: string }>;
       edges: readonly ComputedEdge[];
+      autoLayout: LikeC4ComputedView['autoLayout'];
     };
     const steps: LikeC4ComputedStep[] = [];
     if (computed._type === 'dynamic') {
@@ -916,6 +919,7 @@ export async function computedViews(
       nodes: computed.nodes.map((n) => n.id),
       edges: computed.edges.map((e) => ({ source: e.source, target: e.target })),
       steps,
+      autoLayout: computed.autoLayout,
     };
   }
   return result;

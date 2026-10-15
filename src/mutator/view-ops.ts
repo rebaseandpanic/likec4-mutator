@@ -2,11 +2,14 @@
  * Text-edit operations and checks that target views.
  */
 import type { ParsedDocument } from '../parser/types.js';
-import type { ViewDeclaration, ViewIndex } from '../query/view-index.js';
+import type { ViewAstNode, ViewDeclaration, ViewIndex } from '../query/view-index.js';
 import type { TextEdit } from './text-edit.js';
 import type { GenerateViewOpts } from './codegen.js';
-import { generateView } from './codegen.js';
+import { escapeString, escapeTitle, formatLinkUrl, formatTag, generateView } from './codegen.js';
 import { blockInsertEdit, type BlockPlacement } from './block-placement.js';
+import { BodyInsertions } from './body-layout.js';
+import { buildRemovalEdit, buildReplaceLinksEdit, buildReplaceTagsInPlaceEdit, type BodyOwnerNode } from './cst-helpers.js';
+import { getNodeIndent } from './indent.js';
 import { InvalidWriteError } from './write-checks.js';
 
 export type { GenerateViewOpts };
@@ -77,4 +80,106 @@ export function extendsParent(views: ViewIndex, id: string, parentId: string, fi
     current = views.declarationsOf(next).find((d) => d.type === 'element');
   }
   return parent;
+}
+
+/**
+ * Patch of `LikeC4Mutator.updateView` (D33): `title` and `description`
+ * replace the view's own value (`null` removes it, `''` is written as an
+ * empty string); `tags` and `links` replace the whole list; `autoLayout`
+ * replaces the effective (last) `autoLayout` rule, or is appended as the
+ * last rule, and `null` removes every `autoLayout` rule.
+ */
+export interface UpdateViewPatch {
+  title?: string | null;
+  description?: string | null;
+  tags?: string[];
+  links?: Array<{ url: string; label?: string }>;
+  autoLayout?: string | null;
+}
+
+/** The text of a view string property. */
+function viewStringProperty(key: 'title' | 'description', value: string): string {
+  return `${key} '${key === 'title' ? escapeTitle(value) : escapeString(value)}'`;
+}
+
+/**
+ * The edits that apply `patch` (checked by the caller) to the declaration
+ * `view` in `doc`.  Properties go where the grammar puts them: tags open the
+ * body, other properties follow the tags and precede the first rule or step
+ * (FOR-PLAN 2); a declaration without a body gets one.  Text outside the
+ * replaced values is kept.
+ */
+export function updateViewEdits(doc: ParsedDocument, view: ViewDeclaration, patch: UpdateViewPatch): TextEdit[] {
+  const { fullText } = doc;
+  const indent = getNodeIndent(view.node, fullText);
+  const body = view.body as (ViewAstNode & { props?: ViewAstNode[]; tags?: ViewAstNode }) | undefined;
+
+  if (!body) {
+    const inner = indent + '  ';
+    const lines = [
+      ...(patch.tags ?? []).map((tag) => `${inner}${formatTag(tag)}\n`),
+      ...(['title', 'description'] as const).flatMap((key) => {
+        const value = patch[key];
+        return typeof value === 'string' ? [`${inner}${viewStringProperty(key, value)}\n`] : [];
+      }),
+      ...(patch.links ?? []).map(
+        (link) => `${inner}link ${formatLinkUrl(link.url)}${link.label ? ` '${escapeString(link.label)}'` : ''}\n`,
+      ),
+      ...(typeof patch.autoLayout === 'string' ? [`${inner}autoLayout ${patch.autoLayout}\n`] : []),
+    ];
+    const end = view.node.$cstNode?.end;
+    if (lines.length === 0 || end === undefined) return [];
+    return [{ offset: end, end, newText: ` {\n${lines.join('')}${indent}}` }];
+  }
+
+  const inserts = BodyInsertions.forViewBody(body as Parameters<typeof BodyInsertions.forViewBody>[0], fullText, indent);
+  const edits: TextEdit[] = [];
+  const removal = (node: ViewAstNode): TextEdit => {
+    const cst = node.$cstNode!;
+    const { offset, end, newText } = buildRemovalEdit(fullText, cst.offset, cst.end);
+    return { offset, end, newText };
+  };
+
+  if (patch.tags !== undefined) {
+    const tagsCst = body.tags?.$cstNode;
+    if (tagsCst) {
+      edits.push(patch.tags.length === 0 ? removal(body.tags!) : buildReplaceTagsInPlaceEdit(fullText, tagsCst, patch.tags));
+    } else if (patch.tags.length > 0) {
+      inserts.prepend(patch.tags.map((tag) => `${inserts.innerIndent}${formatTag(tag)}\n`).join(''));
+    }
+  }
+
+  for (const key of ['title', 'description'] as const) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    const existing = (body.props ?? []).filter((p) => p.$type === 'ViewStringProperty' && p.key === key);
+    if (value === null) {
+      edits.push(...existing.map(removal));
+    } else if (existing.length > 0) {
+      for (const prop of existing) {
+        const cst = prop.$cstNode!;
+        edits.push({ offset: cst.offset, end: cst.end, newText: viewStringProperty(key, value) });
+      }
+    } else {
+      inserts.addProperty(`${inserts.innerIndent}${viewStringProperty(key, value)}\n`);
+    }
+  }
+
+  if (patch.links !== undefined) {
+    edits.push(...buildReplaceLinksEdit(view.node as unknown as BodyOwnerNode, fullText, indent, patch.links, inserts));
+  }
+
+  if (patch.autoLayout !== undefined) {
+    const layouts = view.rules.filter((rule) => rule.kind === 'autoLayout');
+    if (patch.autoLayout === null) {
+      edits.push(...layouts.map((rule) => removal(rule.node)));
+    } else if (layouts.length > 0) {
+      const cst = layouts.at(-1)!.node.$cstNode!;
+      edits.push({ offset: cst.offset, end: cst.end, newText: `autoLayout ${patch.autoLayout}` });
+    } else {
+      inserts.append(`${inserts.innerIndent}autoLayout ${patch.autoLayout}\n`);
+    }
+  }
+
+  return inserts.apply(edits);
 }

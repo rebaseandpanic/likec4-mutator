@@ -1384,6 +1384,21 @@ mutator.addView({
 - **Rejected**, with nothing changed: a bad or already declared `id` (`id`); a `target` that is not a reference or does not resolve (`target`); `extends` with `target`, on a dynamic or deployment view, or naming no element view with a body, or closing a cycle (`extends`); a `file` that is not loaded (`file`); an `includes` item as above (`includes[i]`); a bad `autoLayout` (`autoLayout`).
 - A `navigateTo` or `extends` already written with the new id resolves once the view exists; that is not a change.
 
+#### Updating views
+
+`updateView(id, patch)` changes the own properties of the named view `id` and returns `{ changedFiles }` (the view's file, or `[]` when nothing changed):
+
+- `title`, `description` — REPLACE; `null` removes the property, `''` is written as an empty string;
+- `tags` — REPLACE (declared tags only; `[]` removes them); `links` — REPLACE (`{ url, label? }`; `[]` removes them);
+- `autoLayout` — replaces the view's last `autoLayout` rule in place (the one LikeC4 uses), or is appended as the last rule; `null` removes every `autoLayout` rule.
+
+```typescript
+mutator.updateView('appView', { title: 'App', tags: ['next'], autoLayout: 'LeftRight' });
+// { changedFiles: ['views.c4'] }
+```
+
+Properties go where the grammar puts them: tags first in the body, then the other properties, before any rule or step; a view declared without a body (`view v`) gets one, and LikeC4 then makes it a view. Other text and comments of the body are kept. The update is allowed while another loaded file has syntax errors; an edit that would leave the view's own file unparsable is refused. Rejected, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an undeclared tag (`tags[i]`); an invalid link URL (`links[i].url`); an invalid `autoLayout`, `''` included (`autoLayout`).
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.

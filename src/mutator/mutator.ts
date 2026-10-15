@@ -51,6 +51,7 @@ import type {
   SpecificationInfo,
   ViewInfo,
   ViewType,
+  ViewWriteResult,
 } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
 import { applyEdits, lineEndingOf, withLineEnding, type TextEdit } from './text-edit.js';
@@ -118,7 +119,8 @@ import {
   type UpdateRelationshipMatcher,
   type UpdateRelationshipPatch,
 } from './relationship-ops.js';
-import { addViewEdit, extendsParent, type GenerateViewOpts } from './view-ops.js';
+import { addViewEdit, extendsParent, updateViewEdits, type GenerateViewOpts, type UpdateViewPatch } from './view-ops.js';
+import { namedView } from './view-address.js';
 import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
@@ -131,6 +133,7 @@ import {
   checkReferenceForm,
   checkStyle,
   checkTags,
+  checkLinks,
   checkViewId,
   checkViewRule,
 } from './write-checks.js';
@@ -151,6 +154,7 @@ export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
  * the view to (a loaded file; see {@link LikeC4Mutator.addView}).
  */
 export type AddViewOpts = Omit<GenerateViewOpts, 'indent'> & { file?: string };
+export type { UpdateViewPatch };
 
 /**
  * Result of {@link LikeC4Mutator.removeElement}.  Lists every relationship
@@ -1060,6 +1064,61 @@ export class LikeC4Mutator {
       this.restore(snapshot);
       throw err;
     }
+  }
+
+  /**
+   * Update the own properties of the named view `id` (US-6, D33):
+   *  - `title`, `description`: REPLACE; `null` removes the property, `''` is
+   *    written as an empty string;
+   *  - `tags`, `links`: REPLACE the whole list (`[]` removes them);
+   *  - `autoLayout`: replaces the last `autoLayout` rule in place (the one
+   *    LikeC4 uses), or is appended as the last rule; `null` removes every
+   *    `autoLayout` rule.
+   *
+   * Properties are written where the grammar puts them — tags open the body,
+   * the other properties follow the tags and precede the first rule or step
+   * — and a declaration without a body gets one.  Text and comments outside
+   * the replaced values are kept.  Unlike element writes, the update is
+   * allowed while other loaded files have syntax errors (D42); an edit that
+   * would leave the view's own file unparsable is refused.
+   *
+   * @returns `{ changedFiles }`: the view's file, or none when nothing changed
+   * @throws {InvalidWriteError} on `id` (not exactly one named view),
+   *   `title` / `description` (not a string or null), `tags` / `tags[i]`
+   *   (not an array, an undeclared tag), `links` / `links[i].url`
+   *   (not an array, an invalid URL), `autoLayout` (not a layout directive)
+   */
+  updateView(id: string, patch: UpdateViewPatch): ViewWriteResult {
+    const view = namedView(this.views, id);
+    if (typeof patch !== 'object' || patch === null) {
+      throw new InvalidWriteError('patch', `expected an object of view properties, got ${JSON.stringify(patch)}`);
+    }
+    for (const key of ['title', 'description'] as const) {
+      const value: unknown = patch[key];
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        throw new InvalidWriteError(key, `${JSON.stringify(value)} is not a string (null removes the property)`);
+      }
+    }
+    if (patch.tags !== undefined) {
+      if (!Array.isArray(patch.tags)) throw new InvalidWriteError('tags', `expected an array of tags, got ${JSON.stringify(patch.tags)}`);
+      checkTags(patch.tags, this.workspace);
+    }
+    if (patch.links !== undefined) {
+      if (!Array.isArray(patch.links)) throw new InvalidWriteError('links', `expected an array of links, got ${JSON.stringify(patch.links)}`);
+      checkLinks(patch.links);
+    }
+    if (patch.autoLayout !== undefined && patch.autoLayout !== null) {
+      if (patch.autoLayout === '') {
+        throw new InvalidWriteError('autoLayout', "'' is not a layout directive; null removes every autoLayout rule");
+      }
+      checkAutoLayout(patch.autoLayout);
+    }
+    const file = view.file;
+    if (file === undefined) throw new Error(`Internal error: view '${id}' has no file`);
+    const before = this.document(file).fullText;
+    const edits = updateViewEdits(this.document(file), view, patch);
+    if (edits.length > 0) this.applyEditsToFile(file, edits);
+    return { changedFiles: this.sources.get(file) === before ? [] : [file] };
   }
 
   // ---------------------------------------------------------------------------

@@ -66,6 +66,7 @@ export type {
   AddDeploymentRelationshipOpts,
   AddElementOpts,
   AddViewOpts,
+  UpdateViewPatch,
   DeploymentExtendSelector,
   DeploymentRelationshipSelector,
   RemoveDeploymentExtendResult,
