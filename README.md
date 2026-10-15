@@ -1351,6 +1351,39 @@ A step statement is addressed by `{ path, segment?, text? }`: `[i]` at the top l
 
 Each step (or chain segment) reports `source` and `target` as LikeC4 means them — the element the interaction goes from and the one it goes to, so `a <- b` has source `b` and target `a` — each as written and resolved in the document scope; `direction` (`forward` or `backward`, as LikeC4 parses it: a chain segment that returns to the element it came from is backward, its arrow stays `->`); the written `arrow`; `kind` with its form; the inline `title`; the `body` (`title`, `description`, `technology`, `notes`, `notation`, `navigateTo`, `style`); and `sequence`, its position in LikeC4's step sequence (`step-NN[:par.MM]`: a `par` or stage-6 block takes one number), absent when LikeC4 drops the step.
 
+### Writing
+
+View writes address a view by its id; an unnamed view cannot be addressed. A rejected write throws an `InvalidWriteError` naming the option (see [Rejected writes](#rejected-writes)) and changes no file.
+
+#### Adding views
+
+`addView(opts)` adds a view: `id`, `type` (`element`, `dynamic` or `deployment`), and optionally `target` (the `of` element of an element view), `extends` (the element view an element view extends), `title`, `description` (a single-line text), `includes`, `autoLayout` and `file`.
+
+```typescript
+mutator.addView({
+  id: 'appDetails',
+  type: 'element',
+  extends: 'appView',
+  title: 'App details',
+  description: 'The services of the app',
+  includes: ['app.db'],
+  file: 'views.c4',
+});
+// written at the end of the first views block of views.c4:
+//   view appDetails extends appView {
+//     title 'App details'
+//     description 'The services of the app'
+//     include app.db
+//     autoLayout TopBottom
+//   }
+```
+
+- **Placement.** With `file` (one of the loaded files; no file is created): the first `views` block of that file, else a new `views` block at its end. Without `file`: the first `views` block of the first file in LikeC4's document order that has one; else a new block at the end of the first file (in that order) with a `model` block; else of the first file.
+- **Includes** are checked as LikeC4 reads them in the new view: each item forms one `include` rule; its references resolve in the chosen file with the scope of the `of` element, or of the `extends` parent's `of` element (a name unique in the document, the frame's descendants, qualified names; in a deployment view deployment nodes and instances — a logical element is not accepted in an `include`); kinds, tags, relationship kinds and custom colors are declared, library icons exist, an icon URI does not start with `file://`, an opacity lies within 0%..100%; a `navigateTo` names a declared view (from a relation's `with`, a dynamic view). Rejected as well are the items LikeC4 drops without an error: a relation predicate in a dynamic view, `with` on a wildcard, `element.kind` or `element.tag` in a dynamic view, `with` on `element.kind` / `element.tag`, and `with` in a deployment view.
+- **`extends`** needs an element view without `target`; the parent must be declared once, as an element view with a body (LikeC4 makes no view of `view p`), and its own `extends` chain must not lead back to the new view: LikeC4 drops the views of an `extends` cycle without an error.
+- **Rejected**, with nothing changed: a bad or already declared `id` (`id`); a `target` that is not a reference or does not resolve (`target`); `extends` with `target`, on a dynamic or deployment view, or naming no element view with a body, or closing a cycle (`extends`); a `file` that is not loaded (`file`); an `includes` item as above (`includes[i]`); a bad `autoLayout` (`autoLayout`).
+- A `navigateTo` or `extends` already written with the new id resolves once the view exists; that is not a change.
+
 ## Slashes in titles
 
 In a view title, and in an element title that names an implicit view, LikeC4 reads `/` as a folder separator and `\/` as a literal slash.  Title values (`addView({ title })`, `addElement` / `updateElement` `title`) use the same notation: `\/` is written as is and every other backslash is escaped, so LikeC4 reads the title given.
@@ -1378,7 +1411,7 @@ Every write call checks the values it introduces before anything changes. A reje
 | `occurrence` (`removeDeploymentExtend`) | A whole number from 1. |
 | relationship `source` / `target` (`addRelationship`), view `target` (`addView`) | Identifiers joined by `.` (`app.api`). |
 | `autoLayout` (`addView`) | A direction (`TopBottom`, `LeftRight`, `BottomTop`, `RightLeft`), optionally followed by a whole-number rankSep and nodeSep (`LeftRight 120 40`). |
-| `includes` items (`addView`) | Exactly one `include` rule of the view's type; in a deployment view without `with { ... }`, which LikeC4 does not apply there. |
+| `includes` items (`addView`) | Exactly one `include` rule of the view's type, whose references, kinds, tags and `with` values LikeC4 resolves in the new view, and no item LikeC4 drops (see [Adding views](#adding-views)). |
 | style values (`addElement`, `updateElement`, `addRelationship`, `updateRelationship` and the add / update writes of deployment nodes, instances and relationships) | See [Element style properties](#element-style-properties) and [Relationship style properties](#relationship-style-properties); a field the style type does not have is rejected. |
 
 A value that would add other DSL than the property asked for (`autoLayout: 'LeftRight\n exclude a'`, `style: { color: 'red\n shape cylinder' }`) is rejected by these checks, and so is a style value with a comment (`// ...`, `/* ... */`) or a separator (`color: 'red;'`): a style value is written in place of the existing one, where `red // x` would comment out a field that follows on the same line. Only what LikeC4 lexes as a comment counts: `//` inside a URI (`icon: 'https://example.com/a.svg'`) is accepted. `autoLayout` and `includes` items are written on lines of their own, so a trailing comment there (`'* // every element'`) is accepted and ends with the line.
@@ -1390,7 +1423,7 @@ Writes LikeC4 would reject are refused the same way:
 | `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`); the new name would change what an existing reference links to (field `name`, see below). |
 | `updateElement`, `updateRelationship`, `updateDeploymentRelationship` | a tag of `tags` is not declared. |
 | `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
-| `addView` | an element view's `target` does not resolve to an element. |
+| `addView` | an element view's `target` does not resolve to an element; an `includes` item LikeC4 would not resolve or would drop; `extends` with `target`, on a dynamic or deployment view, to no element view with a body, or closing an `extends` cycle (see [Adding views](#adding-views)). |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
 | `removeElement` | the deployment model refers to the element or an element of its subtree: as the element of an instance (`instanceOf`, LikeC4 would report `Could not resolve reference`) or as the element part of a deployment relationship endpoint (`prod.api.handler`). Field `fqn`; the error lists the instances and endpoints. |

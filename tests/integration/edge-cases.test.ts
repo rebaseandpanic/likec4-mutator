@@ -11,7 +11,8 @@ import { describe, it, expect } from 'vitest';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { C4Parser } from '../../src/parser/parser.js';
 import { InvalidWriteError } from '../../src/mutator/write-checks.js';
-import { expectValidLikeC4 } from '../helpers/likec4-model.js';
+import { expectValidLikeC4, validateLikeC4 } from '../helpers/likec4-model.js';
+import { expectValidViewWrite, expectViewWriteOnInvalidInput } from '../helpers/view-writes.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -216,11 +217,24 @@ describe('Mutation error cases', () => {
   });
 
   describe('addView', () => {
-    it('should throw a descriptive error when no views block exists', () => {
-      const mutator = LikeC4Mutator.fromFiles({ 'model.c4': NO_VIEWS });
-      expect(() =>
-        mutator.addView({ id: 'myView', type: 'element', target: 'app', title: 'My View' }),
-      ).toThrow(/views block/i);
+    // No `views` block anywhere: the block is created at the end of the
+    // file with the `model` block (D27; the write used to throw).
+    it('creates a views block at the end of the file when no views block exists', async () => {
+      const before = { 'model.c4': NO_VIEWS };
+      await expectValidLikeC4(before);
+      const mutator = LikeC4Mutator.fromFiles(before);
+      mutator.addView({ id: 'myView', type: 'element', target: 'app', title: 'My View' });
+      expect(mutator.serialize()['model.c4']).toBe(
+        `${NO_VIEWS}\nviews {\n  view myView of app {\n    title 'My View'\n    include *\n    autoLayout TopBottom\n  }\n}\n`,
+      );
+      expect(mutator.getView('myView')).toMatchObject({
+        id: 'myView',
+        type: 'element',
+        of: { text: 'app', target: 'app' },
+        title: 'My View',
+        file: 'model.c4',
+      });
+      await expectValidViewWrite(mutator, before);
     });
   });
 });
@@ -506,11 +520,16 @@ views {
 // ===========================================================================
 
 describe('Views edge cases', () => {
-  it('should throw with descriptive message when source has no views block', () => {
-    const mutator = LikeC4Mutator.fromFiles({ 'model.c4': NO_VIEWS });
-    expect(() =>
-      mutator.addView({ id: 'v1', type: 'element', target: 'app', title: 'My View' }),
-    ).toThrow(/views block/i);
+  it('creates a views block at the end of the file when the source has none', async () => {
+    const before = { 'model.c4': NO_VIEWS };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.addView({ id: 'v1', type: 'element', target: 'app', title: 'My View' });
+    expect(mutator.serialize()['model.c4']).toBe(
+      `${NO_VIEWS}\nviews {\n  view v1 of app {\n    title 'My View'\n    include *\n    autoLayout TopBottom\n  }\n}\n`,
+    );
+    expect(mutator.getView('v1')).toMatchObject({ id: 'v1', of: { text: 'app', target: 'app' }, title: 'My View' });
+    await expectValidViewWrite(mutator, before);
   });
 
   it('should add view to file that has a views block', () => {
@@ -631,11 +650,18 @@ describe('Element operations on model-only file', () => {
     await expectValidLikeC4(mutator.serialize());
   });
 
-  it('should throw when addView is called with no views block', () => {
-    const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MODEL_ONLY });
-    expect(() =>
-      mutator.addView({ id: 'v1', type: 'element', target: 'app' }),
-    ).toThrow(/views block/i);
+  // The input has LikeC4 errors (the kinds are not declared): the view is
+  // placed the same way and adds no error (Wi).
+  it('creates a views block at the end of the model file when addView is called with no views block', async () => {
+    const before = { 'model.c4': MODEL_ONLY };
+    expect(await validateLikeC4(before)).not.toEqual([]);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.addView({ id: 'v1', type: 'element', target: 'app' });
+    expect(mutator.serialize()['model.c4']).toBe(
+      `${MODEL_ONLY}\nviews {\n  view v1 of app {\n    include *\n    autoLayout TopBottom\n  }\n}\n`,
+    );
+    expect(mutator.getView('v1')).toMatchObject({ id: 'v1', of: { text: 'app', target: 'app' }, file: 'model.c4' });
+    await expectViewWriteOnInvalidInput(mutator, before);
   });
 });
 

@@ -73,6 +73,7 @@ import {
   generateDeploymentExtend,
   generateDeploymentNode,
   generateDeploymentRelationship,
+  viewIncludeExpression,
   type ElementStyle,
   type RelationshipStyle,
 } from './codegen.js';
@@ -117,7 +118,8 @@ import {
   type UpdateRelationshipMatcher,
   type UpdateRelationshipPatch,
 } from './relationship-ops.js';
-import { addViewEdit, type GenerateViewOpts } from './view-ops.js';
+import { addViewEdit, extendsParent, type GenerateViewOpts } from './view-ops.js';
+import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
 import {
@@ -130,7 +132,7 @@ import {
   checkStyle,
   checkTags,
   checkViewId,
-  checkViewIncludes,
+  checkViewRule,
 } from './write-checks.js';
 
 export type { AddElementOpts, UpdateElementPatch };
@@ -142,7 +144,13 @@ export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
 
-export type AddViewOpts = Omit<GenerateViewOpts, 'indent'>;
+/**
+ * Options of {@link LikeC4Mutator.addView}: the view fields of the code
+ * generator (`id`, `type`, `target` — the `of` element —, `extends`,
+ * `title`, `description`, `includes`, `autoLayout`) and the `file` to write
+ * the view to (a loaded file; see {@link LikeC4Mutator.addView}).
+ */
+export type AddViewOpts = Omit<GenerateViewOpts, 'indent'> & { file?: string };
 
 /**
  * Result of {@link LikeC4Mutator.removeElement}.  Lists every relationship
@@ -954,7 +962,39 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Add a new view to the views block.
+   * Add a new view.
+   *
+   * **Placement (D27, D41).**  With `opts.file` (a loaded file) the view is
+   * appended to that file's first `views` block, or to a new `views` block at
+   * its end.  Without it: the first `views` block of the first file, in
+   * LikeC4's document order, that has one; else a new block at the end of
+   * the first file with a `model` block; else of the first file.
+   *
+   * **Header.**  An element view is `view <id> of <target>`, `view <id>
+   * extends <parent>` or `view <id>`; the body holds the title, the
+   * description (single-line text), one `include` rule per `includes` item
+   * (`include *` for an element view without items) and the `autoLayout`
+   * directive (`TopBottom` unless `autoLayout` is `''` or `null`).
+   *
+   * The write is rejected, with no file changed, when:
+   *  - `id` is not one identifier, is reserved, or is already declared in a
+   *    loaded file — field `id`;
+   *  - `target` is not an element reference, or does not resolve in the
+   *    chosen file — `target`;
+   *  - `extends` is given together with `target`, on a dynamic or deployment
+   *    view, or names no declared element view with a body, or the parent's
+   *    `extends` chain leads back to `id` (LikeC4 drops such views) —
+   *    `extends`;
+   *  - `file` is not a loaded file — `file`;
+   *  - an `includes` item is not one include rule LikeC4 applies in the new
+   *    view, as {@link LikeC4Mutator.addViewRule} checks rules (references
+   *    resolved in the chosen file with the `of` element's, or the
+   *    `extends` parent's, scope; declared kinds, tags and colors; no
+   *    construct LikeC4 drops) — `includes[i]`;
+   *  - `autoLayout` is not a layout directive — `autoLayout`.
+   *
+   * A view reference that did not resolve before (a `navigateTo` or
+   * `extends` naming `id`) resolving afterwards is not a change.
    *
    * @param opts - Options for the new view
    */
@@ -965,21 +1005,61 @@ export class LikeC4Mutator {
       // project, whatever their types (`viewChecks`).
       throw new InvalidWriteError('id', `a view '${opts.id}' is already declared (in a loaded file)`);
     }
-    if (opts.type === 'element' && opts.target !== undefined && opts.target !== '') {
-      checkReferenceForm(opts.target, 'target');
+    const target = opts.type === 'element' && opts.target !== undefined && opts.target !== '' ? opts.target : undefined;
+    if (target !== undefined) checkReferenceForm(target, 'target');
+    const parentId = opts.extends !== undefined && opts.extends !== '' ? opts.extends : undefined;
+    if (parentId !== undefined) {
+      if (opts.type !== 'element') {
+        throw new InvalidWriteError('extends', `a ${opts.type} view cannot extend another view; only element views extend element views`);
+      }
+      if (target !== undefined) {
+        throw new InvalidWriteError('extends', `a view cannot have both 'of' (target '${target}') and 'extends': LikeC4's grammar allows one of them`);
+      }
+      checkViewId(parentId, 'extends');
     }
-    checkViewIncludes(opts.includes, opts.type);
     checkAutoLayout(opts.autoLayout);
-    const filename = this.findFileWithViews();
-    if (!filename) throw new Error('No file with a views block found');
+    const placement = chooseBlockPlacement('views', this.documents, opts.file);
+    const filename = placement.file;
+    const doc = this.document(filename);
+    const frame = target !== undefined ? this.resolveWritten(doc, filename, target, 'target', 'views') : undefined;
+    const parent = parentId !== undefined ? extendsParent(this.views, opts.id, parentId) : undefined;
 
-    const doc = this.documents.get(filename);
-    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    if (opts.type === 'element' && opts.target !== undefined && opts.target !== '') {
-      this.resolveWritten(doc, filename, opts.target, 'target', 'views');
+    const document = this.views.documents.findIndex((d) => d.file === filename);
+    const resolver = this.viewResolver();
+    const place = { type: opts.type, document, frame: frame ?? (parent ? resolver.frame(parent) : undefined) };
+    opts.includes?.forEach((item, i) => {
+      const field = `includes[${i}]`;
+      const expression = typeof item === 'string' ? viewIncludeExpression(item) : undefined;
+      if (expression === undefined) {
+        throw new InvalidWriteError(
+          field,
+          `${JSON.stringify(item)} is not exactly one include rule of a ${opts.type} view: expected its predicates, such as '*' or 'app.api, app.db'`,
+        );
+      }
+      checkViewRule({ kind: 'include', expression }, place, resolver, this.workspace, { kind: field, expression: field });
+    });
+
+    const { file: _file, ...view } = opts;
+    const edit = addViewEdit(doc, placement, {
+      ...view,
+      ...(target === undefined && { target: undefined }),
+      ...(parentId === undefined && { extends: undefined }),
+    });
+    const before = this.referenceSnapshot(undefined, { views: true });
+    const snapshot = this.snapshot();
+    try {
+      this.applyEdit(filename, edit);
+      this.rejectChangedReferences(
+        before,
+        new Map([[filename, insertedRanges(doc.fullText, [edit])]]),
+        opts.id,
+        { field: 'id', action: 'adding the view' },
+        { views: true },
+      );
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
     }
-    const edit = addViewEdit(doc, opts);
-    this.applyEdit(filename, edit);
   }
 
   // ---------------------------------------------------------------------------
@@ -2266,13 +2346,6 @@ export class LikeC4Mutator {
    * Use a single-file setup or pass an explicit target file (future work) when
    * precise file targeting is required.
    */
-  private findFileWithViews(): string | null {
-    for (const [filename, doc] of this.documents) {
-      if (doc.ast.views?.length > 0) return filename;
-    }
-    return null;
-  }
-
   private applyEdit(filename: string, edit: TextEdit): void {
     this.applyEditsToFile(filename, [edit]);
   }
