@@ -64,21 +64,22 @@
     | Step writers | resolver (document scope), step-spec check | 76, 81 |
     | `removeView` | reverse index, D43 exclusion of the removed declaration's own text | 63, 94 |
     | Move / remove / `addViewParallel` | `contributesSteps` (every form class) | 85, 87, 96 |
-    | Writers + `views` reference guard | snapshot comparator | **not distinguished (D44)**; acceptance half in 56; INV-8 as a property through LINK |
+    | Writers + `views` reference guard | snapshot comparator | **not distinguished (decision D44)**; acceptance half in 56; INV-8 as a property through LINK on feature writes |
 
   - Each distinguishable consumer guard row holds a rejection and its accepted counterpart in one obligation. A missing guard and an always-rejecting guard therefore both go red in the same row.
   - Rows 1–9 are anchored at T006, the task that creates `tests/query/view-resolution.test.ts`. The resolver and index tasks T004 and T005 are listed before it (critique round 1, F1).
-- **R-5 INV-8 guard: decision D44** (reasoning; the decision is the owner's).
-  - A surviving reference changes its target only if a declaration it resolves to, or a scope it resolves through, is added, removed or renamed. View writes:
+- **R-5 INV-8 guard: decision D44** (reasoning; the decision is the owner's. D44 is a decision comment on Skein task lc4m-15.29, not a spec norm. The spec text ends at D43.)
+  - A surviving reference changes its target only if a declaration it resolves to, or a scope it resolves through, is added, removed or renamed. Feature writes:
     - add no element or deployment declaration;
     - cannot remove a view referenced from outside itself (D26, rows 63, 94);
     - cannot touch an ambiguous id (INV-3);
     - change no `of`, `extends` or id (rename is out of scope).
   - Self-references removed with their view (D43) are inside text removed on purpose, so they are not survivors.
-  - So no accepted view write is known to re-target a survivor, and the guard's rejection half has no writer-observable trigger. Removing, unattaching or disabling the guard in a writer therefore changes no observable outcome of the suite.
-  - Spec D44 accepts this. What stays:
-    - the direct comparator rows 43–47 (row 46 now also covers resolved → unresolved);
-    - LINK, which asserts INV-8 as a property on every accepted write (Wv and Wi);
+  - So no accepted feature write is known to re-target a survivor, and the guard's rejection half has no writer-observable trigger. Removing, unattaching or disabling the guard in a writer therefore changes no observable outcome of the suite.
+  - Decision D44 accepts this. What stays:
+    - the direct comparator rows 43–46 (row 46 also covers resolved → unresolved);
+    - the opt-in row 47;
+    - LINK, which asserts INV-8 as a property on every accepted feature write (Wv and Wi);
     - row 56, the acceptance half.
   - What is not used: an artificial trigger, source inspection or a fake product mutation.
 - **R-6 Existing-test inventory (how it was found).**
@@ -96,9 +97,10 @@
   - `edge-cases.test.ts:634` uses `MODEL_ONLY` with undeclared kinds, so LikeC4 errors exist before the write. Its rewrite is Wi, not Wv (row 41).
   - `line-endings.test.ts` owns "written text uses the file's line ending", but the plan names no task that extends its `OPS` table with view writers. CRLF is therefore checked inside each writer's own file (rows 49, 60, 64, 77, 84), which keeps one test file per task.
 - **R-7 Discriminating question (reasoning only).**
-  - *Absent / not wired:* the oracle comparisons on per-rule cases, plus the consumer rows of R-4. The one exception is writer attachment of the reference guard (D44).
+  - *Absent / not wired:* the oracle comparisons on per-rule cases, plus the consumer rows of R-4. The one exception is writer attachment of the reference guard (decision D44).
   - *Unconditional guard:* the acceptance halves inside rows 52, 53, 54, 62, 70, 76, 80, 87, 90, 94, 95 and 96.
   - *Wrong key or order:* rows 29 and 48(c) (load order ≠ document order); rows 43 and 45 (snapshot keys); row 82 (pre-move vs post-removal indices); rows 17 and 74 (LikeC4's sense vs written positions); row 24 (tag order); row 94 (exclusion keyed on the removed declaration's range, not on the target id).
+  - *Collateral damage:* EFF over the whole edited view catches a write that does the requested thing but disturbs another step or node (critique round 2, F2).
   - *Disabling threshold:* no numeric threshold exists. The closest analogues are literal emptiness or a generic descendant search vs LikeC4's form-specific contribution (rows 19, 85, 87, 95, 96).
 - **R-8 Message fragments.** Rows 63 and 94 assert that the `detail` names each outside referrer's file and line, and row 94 also asserts that the self-reference's line is absent. US-8 records "listing each reference with file and position" as the contract. No other row asserts message text. Rejections are asserted by `InvalidWriteError.field`, or by `mutations[i].<path>` for `apply`.
 - **R-9 Sample limits.**
@@ -114,13 +116,22 @@
   - Pattern `tests/fixtures/views-flows/` (rows 73, 74). Does not give: step forms that only the catalog fixture has. Row 74 therefore runs 2F.
   - Wi rows do not compare survivors with the oracle field by field, because LikeC4's model of an invalid input is best effort. They do assert SURV and LINK.
 - **R-10 D43 (row 94).** Self-references are covered in two roles: an element `with` and a step. A relation `with { navigateTo self }` needs a dynamic target and is the same exclusion path, so it is not a separate case. The mixed case (a self-reference plus one outside referrer) is the discriminator, because it separates "exclude references inside the removed range" from "ignore every reference to this id".
-- **R-11 Accepted-write convention (critique round 1, F3 and F4).**
-  - Wv / Wi are a matrix-wide convention inherited by every successful write call, not an opt-in per row. This covers the accepted counterparts in rejection rows, the table branches, `apply` outputs and no-op branches.
-  - LINK enumerates every reference resolved before the write. It fails on a re-target and on a loss (resolved → unresolved), matching `compareReferenceSnapshots` (`src/query/reference-snapshot.ts:268-292`). Only occurrences inside the edited or removed text are excluded.
-  - SURV and LINK also apply to Wi, because INV-8 and INV-9 hold for every accepted write.
-  - Row 56's unresolved → resolved transition is an explicit positive assertion and does not conflict with LINK, which places no obligation on references unresolved before.
-- **R-12 `apply` type classes (row 90, critique round 1, F6).**
-  - The classes follow the plan T022 field table: objects, scalars, containers, required fields and nullable forms.
+- **R-11 Accepted-feature-write convention (critique round 1 F3/F4, round 2 F1/F2).**
+  - **Scope.** The convention binds successful **feature** writes and their `apply` forms only. Feature writes are the view, rule, step and `par` writes, `addView` and `removeView`.
+  - **Legacy calls are excluded.** Existing operations in rows 36–40, 42, 47 and 93 keep their own assertions. Row 47's `addElement` deliberately makes a view reference unresolved: it is the opt-in behaviour INV-7 preserves (RES-plan-1). Applying LINK or Wv there would contradict INV-7.
+  - **Row 41** rewrites `addView` tests and is therefore inside the scope.
+  - **LINK** enumerates every reference resolved before the write. It fails on a re-target and on a loss (resolved → unresolved), matching `compareReferenceSnapshots` (`src/query/reference-snapshot.ts:268-292`). Only occurrences inside the edited or removed text are excluded.
+  - **SURV and LINK also apply to Wi**, because INV-8 and INV-9 hold for every accepted feature write.
+  - **Row 56** asserts the unresolved → resolved transition positively. This does not conflict with LINK, which places no obligation on references unresolved before.
+  - **EFF** makes SC-004's computed effect universal for rule and step writes:
+    - CMP for element and deployment rule writes;
+    - CMP + SEQ for dynamic rule writes, because a rule write in a dynamic view must leave the step sequence unchanged (SC-004 names the step sequence for dynamic views);
+    - SEQ over the whole edited view for every step write.
+  
+    Comparing only the new step, or only parsed agreement, misses a write that disturbs other steps.
+- **R-12 `apply` type classes (row 90; critique round 1 F6, round 2 F3).**
+  - The classes follow the plan T022 field table: objects, scalars, containers, required fields, nullable forms, and (h) nested classes.
+  - The nested classes cover separate validator boundaries: a correct top-level `path` validator can coexist with an unvalidated `address.path`, and an object-shape check can accept `{}` without checking its required members. Each is therefore located at its own nested path.
   - The nullable forms mirror the library semantics: `null` removes for `updateView` strings and `autoLayout` (US-6) and for step-patch fields (US-10). Every other field is non-nullable.
-  - Each class has an accepted counterpart, so an implementation that rejects the whole field goes red.
-  - **ASSUMPTION:** the exact JSON field names of the step and patch objects (`direction`, `kindForm`, `segment`) are taken from plan T019/T022 and the step address `{ path, segment?, text? }`. The final names are fixed by T003/T022, and row 90 follows them.
+  - Each class has an accepted counterpart, so an implementation that rejects the whole field or object goes red.
+  - **ASSUMPTION:** the exact JSON member names of the step, patch and address objects (`direction`, `kindForm`, `segment`, `path`) are taken from plan T019/T022 and the step address `{ path, segment?, text? }`. The final names are fixed by T003/T022, and row 90 follows them.
