@@ -468,7 +468,14 @@ export type ReferencePosition =
   /** Directly in the `model` block with this index (a model-level relation) */
   | { model: number }
   /** In a `views` block, outside a view body (the element of `view ... of X`) */
-  | 'views';
+  | 'views'
+  /**
+   * In the body of an element or dynamic view.  `frame` is the element whose
+   * scope the body adds (LS `genScopeElementView`): X of `view ... of X`, or
+   * the `of` element of the `extends` parent chain; dynamic views and views
+   * without one have none.
+   */
+  | { view: { frame?: string } };
 
 /**
  * The absolute FQN LikeC4 links an element reference written as `reference`
@@ -479,7 +486,8 @@ export type ReferencePosition =
  * and `streamForFqnRef`): a parentless name is looked up in the local scope
  * of each container from the reference outwards — for a model-level relation
  * the `model` block (its children and unique descendants), for a reference in
- * a `views` block none — then in the document scope (names unique across the
+ * a `views` block none, for one in a view body the view's frame element
+ * (itself, then its unique descendants) — then in the document scope (names unique across the
  * document's model blocks), then among the root elements of the project.
  * Every further segment is looked up among the unique descendants of the
  * previous one (`FqnIndex.uniqueDescedants`).  `this` / `it` resolve only
@@ -499,7 +507,19 @@ export function resolveReferenceText(
   const modelScopes = models.map((m) => computeLocalScope(m.elements ?? [], null).scope);
   const resolver = new EndpointResolver(workspace, uniqueAcross(modelScopes));
   const chain: ScopeFrame[] = [];
-  if (position !== 'views') {
+  if (position === 'views') {
+    // No container scope: the document scope and the root elements only.
+  } else if ('view' in position) {
+    const frame = position.view.frame;
+    if (frame !== undefined) {
+      // The frame element itself by its name, then its unique descendants;
+      // LikeC4 offers the element first, so it wins over a descendant of the
+      // same name.
+      const scope: LocalScope = new Map(workspace.uniqueDescendants(frame));
+      scope.set(lastSegment(frame), frame);
+      chain.push({ scope });
+    }
+  } else {
     const scope = modelScopes[position.model];
     if (scope) chain.push({ scope });
   }
