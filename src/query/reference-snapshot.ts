@@ -28,11 +28,18 @@
  * `resolveDocumentReferences`); `instanceOf` targets, deployment
  * relationship endpoints (including the element part of an endpoint that
  * steps into an instance's element), `extend <node>` targets and the
- * references of deployment view rules (see `DeploymentResolver`).
+ * references of deployment view rules (see `DeploymentResolver`).  With the
+ * opt-in `views` option (taken by view writes only, so existing writes keep
+ * their behaviour): the element references in the bodies of element and
+ * dynamic views (rules, step endpoints), every `navigateTo` and every
+ * `extends` (see `ViewReferenceResolver`).  A step's key has no path, so a
+ * step moved into or out of a `par` block keeps its key.
  */
 import { readStrictFqnRef, resolveFqnRef } from './fqn.js';
 import type { DeploymentIndex } from './deployment-index.js';
 import { DeploymentResolver, type LinkedTarget } from './deployment-resolver.js';
+import type { ViewDeclaration, ViewIndex } from './view-index.js';
+import { ViewReferenceResolver, type ViewTargetRole } from './view-resolver.js';
 import { resolveDocumentReferences, type WorkspaceDocumentAst, type WorkspaceIndex } from './workspace-index.js';
 
 /** What a reference links to. */
@@ -88,6 +95,16 @@ export interface SnapshotDocument {
   ast: WorkspaceDocumentAst;
 }
 
+/** Options of {@link takeReferenceSnapshot}. */
+export interface ReferenceSnapshotOptions {
+  /**
+   * The view index of the same documents: also snapshot the references of
+   * view bodies, `navigateTo` and `extends` (INV-8).  Opt-in: an existing
+   * write that changes such a reference is not rejected (INV-7).
+   */
+  views?: ViewIndex;
+}
+
 /** Structural view of an AST node. */
 interface AstLike {
   $type?: string;
@@ -111,12 +128,14 @@ interface Attached {
  * @param deployments - Deployment index of the same documents
  * @param removed     - AST nodes the write deletes (taken before the write);
  *                      the references inside them are not surviving
+ * @param options     - `views`: include the view references
  */
 export function takeReferenceSnapshot(
   documents: Iterable<SnapshotDocument>,
   workspace: WorkspaceIndex,
   deployments: DeploymentIndex,
   removed: ReadonlySet<object> = new Set(),
+  options: ReferenceSnapshotOptions = {},
 ): ReferenceSnapshot {
   const attached = new Map<object, Attached[]>();
   const attach = (node: object, reference: Attached): void => {
@@ -157,6 +176,7 @@ export function takeReferenceSnapshot(
       attach(reference.node, { role: 'deployment view reference', text: reference.text, target: linked(reference.target) });
     }
   });
+  if (options.views) attachViewReferences(options.views, workspace, deployments, attach);
 
   const records: ReferenceRecord[] = [];
   const byKey = new Map<string, ReferenceRecord>();
@@ -289,6 +309,73 @@ export function compareReferenceSnapshots(
     }
   }
   return changes;
+}
+
+/** Step nodes: their element references are endpoints, their `navigateTo` a step's. */
+const STEP_TYPES: ReadonlySet<string> = new Set(['Step', 'StepSeries']);
+
+/**
+ * Attach the view references of every declaration of `views`: `extends`
+ * targets; the element references of element and dynamic view bodies
+ * (`view rule reference`, or `view step endpoint` inside a step) — those of
+ * deployment views are the `deployment view reference`s; every `navigateTo`
+ * by its place (an element `with` accepts any view, a relation `with` and a
+ * step a dynamic view).
+ */
+function attachViewReferences(
+  views: ViewIndex,
+  workspace: WorkspaceIndex,
+  deployments: DeploymentIndex,
+  attach: (node: object, reference: Attached) => void,
+): void {
+  const resolver = new ViewReferenceResolver(workspace, deployments, views);
+  for (const view of views.declarations()) {
+    const extendsNode = view.node.extends as AstLike | undefined;
+    const extendsText = resolver.extendsText(view);
+    if (extendsNode && extendsText !== undefined) {
+      attach(extendsNode, { role: 'view extends', text: extendsText, target: viewTarget(resolver.resolveViewText(extendsText, 'element')) });
+    }
+    if (view.body) visit(view, view.body as AstLike, false);
+  }
+
+  function visit(view: ViewDeclaration, node: AstLike, inStep: boolean): void {
+    for (const [key, value] of Object.entries(node)) {
+      if (key.startsWith('$')) continue;
+      for (const child of Array.isArray(value) ? value : [value]) {
+        if (!child || typeof child !== 'object' || '$refText' in child || !('$type' in child)) continue;
+        const item = child as AstLike;
+        if (item.$type === 'FqnRef') {
+          if (view.type === 'deployment') continue;
+          const fqn = resolver.resolveElementRef(view, item);
+          attach(item, {
+            role: inStep ? 'view step endpoint' : 'view rule reference',
+            text: resolveFqnRef(item),
+            target: fqn === undefined ? undefined : element(fqn),
+          });
+          continue;
+        }
+        if (item.$type === 'NavigateToProperty' || item.$type === 'RelationNavigateToProperty') {
+          const ref = item['value'] as AstLike | undefined;
+          const text = (ref?.['view'] as { $refText?: string } | undefined)?.$refText;
+          if (ref && text !== undefined) {
+            const [role, accepts]: [string, ViewTargetRole] =
+              item.$type === 'NavigateToProperty'
+                ? ['element with navigateTo', 'any']
+                : inStep
+                  ? ['step navigateTo', 'dynamic']
+                  : ['relation with navigateTo', 'dynamic'];
+            attach(ref, { role, text, target: viewTarget(resolver.resolveViewText(text, accepts)) });
+          }
+          continue;
+        }
+        visit(view, item, inStep || STEP_TYPES.has(item.$type ?? ''));
+      }
+    }
+  }
+}
+
+function viewTarget(id: string | undefined): ReferenceTarget | undefined {
+  return id === undefined ? undefined : { key: `view:${id}`, display: `view '${id}'` };
 }
 
 function element(fqn: string): ReferenceTarget {

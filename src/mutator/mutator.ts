@@ -1980,10 +1980,11 @@ export class LikeC4Mutator {
    * The reference snapshot of the loaded files (see {@link takeReferenceSnapshot}).
    *
    * @param removed - AST nodes the coming write deletes
+   * @param options - `views`: also the view references (view writes only, INV-8; existing writes leave it off, INV-7)
    */
-  private referenceSnapshot(removed?: ReadonlySet<object>): ReferenceSnapshot {
+  private referenceSnapshot(removed?: ReadonlySet<object>, options: { views?: boolean } = {}): ReferenceSnapshot {
     const documents = [...this.documents].map(([file, doc]) => ({ file, ast: doc.ast }));
-    return takeReferenceSnapshot(documents, this.workspace, this.deployments, removed);
+    return takeReferenceSnapshot(documents, this.workspace, this.deployments, removed, options.views ? { views: this.views } : {});
   }
 
   /**
@@ -2003,6 +2004,7 @@ export class LikeC4Mutator {
    *
    * @param inserted - Per file, the text ranges the write inserted
    * @param write    - The field the error names and the verb of the message
+   * @param options  - `views`: the snapshots include the view references (as `before` must)
    * @throws {InvalidWriteError} on `write.field` (`name` by default)
    */
   private rejectChangedReferences(
@@ -2010,8 +2012,9 @@ export class LikeC4Mutator {
     inserted: ReadonlyMap<string, readonly TextRange[]>,
     fqn: string,
     write: { field: string; action: string } = { field: 'name', action: 'declaring' },
+    options: { views?: boolean } = {},
   ): void {
-    const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(), inserted);
+    const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(undefined, options), inserted);
     if (!change) return;
     throw new InvalidWriteError(
       write.field,

@@ -2,7 +2,7 @@
  * Reference snapshots (`takeReferenceSnapshot` / `compareReferenceSnapshots`)
  * on hand-written pre- and post-write texts: extend scopes, strict-path
  * targets, survivors under an explicit removal set, change detection and
- * the internal errors.
+ * the internal errors; the opt-in `views` option.
  *
  * Expected targets are LikeC4 1.59.4's own observations of the same
  * sources: the targets its linker bound (`linkedReferences`), the endpoints
@@ -18,8 +18,18 @@ import {
   type ReferenceRecord,
   type ReferenceSnapshot,
 } from '../../src/query/reference-snapshot.js';
+import { ViewIndex } from '../../src/query/view-index.js';
 import { WorkspaceIndex } from '../../src/query/workspace-index.js';
-import { buildLikeC4Model, expectValidLikeC4, linkedReferences, type LinkedTarget } from '../helpers/likec4-model.js';
+import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import {
+  buildLikeC4Model,
+  expectValidLikeC4,
+  linkedReferences,
+  linkedViewReferences,
+  type LinkedTarget,
+  type LinkedViewReference,
+  type LinkedViewTarget,
+} from '../helpers/likec4-model.js';
 
 const SPEC = `specification {
   element service
@@ -314,5 +324,226 @@ describe('change detection and internal errors (row 31)', () => {
     expectInternalError(() =>
       compareReferenceSnapshots(snapshot(parse({ 'm.c4': WITH_ADDED })), snapshot(parse({ 'm.c4': PRE })), new Map()),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The opt-in `views` option (INV-8; rows 42–47 of lc4m-15.29)
+// ---------------------------------------------------------------------------
+
+function viewSnapshot(documents: Documents, removed?: ReadonlySet<object>): ReferenceSnapshot {
+  return takeReferenceSnapshot(documents, new WorkspaceIndex(documents), new DeploymentIndex(documents), removed, {
+    views: new ViewIndex(documents),
+  });
+}
+
+/** The snapshot's key of a LikeC4 linked view-reference target. */
+function viewKeyOf(target: LinkedViewTarget | null): string | undefined {
+  if (target !== null && 'view' in target) return `view:${target.view}`;
+  return keyOf(target);
+}
+
+/** The target LikeC4 links the one reference of `role` and `text` in view `view` to. */
+async function linkedTarget(
+  files: Record<string, string>,
+  view: string,
+  role: LinkedViewReference['role'],
+  text: string,
+): Promise<LinkedViewTarget | null> {
+  const found = (await linkedViewReferences(files)).filter((r) => r.view === view && r.role === role && r.text === text);
+  expect(found, `${view} ${role} ${text}`).toHaveLength(1);
+  return found[0]!.target;
+}
+
+describe('views option: equal rule texts in two views (row 43)', () => {
+  const FILES = {
+    'm.c4': `${SPEC}model {
+  app = service {
+    api = service
+  }
+  other = service {
+    api = service
+  }
+}
+views {
+  view a of app {
+    include api
+  }
+  view b of other {
+    include api
+  }
+}
+`,
+  };
+
+  it('keeps distinct keys, each with the target LikeC4 links', async () => {
+    await expectValidLikeC4(FILES);
+    const expected = [await linkedTarget(FILES, 'a', 'rule', 'api'), await linkedTarget(FILES, 'b', 'rule', 'api')];
+    // OP: LikeC4 links the same text to a different element in each view's `of` scope.
+    expect(expected).toEqual([{ model: 'app.api' }, { model: 'other.api' }]);
+
+    const records = recordsOf(viewSnapshot(parse(FILES)), 'view rule reference', 'api');
+    expect(records.map((r) => r.target?.key)).toEqual(expected.map(viewKeyOf));
+    expect(new Set(records.map((r) => r.key)).size).toBe(2);
+  });
+});
+
+describe('views option: a removed rule (row 44)', () => {
+  const PRE = `${SPEC}model {
+  app = service {
+    api = service
+    db = service
+  }
+}
+views {
+  view v of app {
+    include api
+    exclude db
+  }
+}
+`;
+  const POST = PRE.replace('    exclude db\n', '');
+
+  it('leaves the removed rule out: no change and no internal error', async () => {
+    await expectValidLikeC4({ 'm.c4': PRE });
+    const documents = parse({ 'm.c4': PRE });
+    const view = (documents[0]!.ast.views as Array<{ views: Array<{ body: { rules: object[] } }> }>)[0]!.views[0]!;
+    const rule = view.body.rules[1]!;
+    const before = viewSnapshot(documents, new Set([rule]));
+    expect(recordsOf(viewSnapshot(documents), 'view rule reference', 'db')).toHaveLength(1);
+    expect(before.records.some((r) => r.role === 'view rule reference' && r.text === 'db')).toBe(false);
+    expect(compareReferenceSnapshots(before, viewSnapshot(parse({ 'm.c4': POST })), new Map())).toEqual([]);
+  });
+});
+
+describe('views option: a step moved into a par block (row 45)', () => {
+  const MODEL = `${SPEC}model {
+  a = service
+  b = service
+  c = service
+}
+`;
+  const PRE = `${MODEL}views {
+  dynamic view d {
+    a -> b
+    b -> c 'moved'
+    par {
+      c -> a
+    }
+  }
+}
+`;
+  const POST = `${MODEL}views {
+  dynamic view d {
+    a -> b
+    par {
+      b -> c 'moved'
+      c -> a
+    }
+  }
+}
+`;
+
+  it("matches the moved step's endpoints: no change and no internal error", async () => {
+    await expectValidLikeC4({ 'm.c4': PRE });
+    await expectValidLikeC4({ 'm.c4': POST });
+    const steps = async (files: Record<string, string>) =>
+      (await linkedViewReferences(files)).filter((r) => r.role === 'step').map((r) => [r.text, r.target]);
+    // OP: LikeC4 links every endpoint to the same element before and after the move.
+    expect(await steps({ 'm.c4': POST })).toEqual(await steps({ 'm.c4': PRE }));
+
+    const before = viewSnapshot(parse({ 'm.c4': PRE }));
+    expect(recordsOf(before, 'view step endpoint')).toHaveLength(6);
+    expect(compareReferenceSnapshots(before, viewSnapshot(parse({ 'm.c4': POST })), new Map())).toEqual([]);
+  });
+});
+
+describe('views option: re-targeted and lost survivors (row 46)', () => {
+  const PRE = `${SPEC}model {
+  app = service {
+    api = service
+  }
+  other = service
+}
+views {
+  view base {
+    include *
+  }
+  view child extends base {
+    include *
+  }
+  view plain {
+    include api
+    include app -> other with {
+      navigateTo flow2
+    }
+  }
+  dynamic view flow {
+    api -> other
+  }
+  dynamic view flow2 {
+    include app
+  }
+}
+`;
+  const POST = PRE.replace('  other = service\n', '  other = service\n  api = service\n')
+    .replace('  view base {', '  dynamic view base {')
+    .replace('  dynamic view flow2 {', '  view flow2 {');
+  const FILES_PRE = { 'm.c4': PRE };
+  const FILES_POST = { 'm.c4': POST };
+
+  it('reports each class of view reference whose target changes or is lost', async () => {
+    await expectValidLikeC4(FILES_PRE);
+    const cases = [
+      // In source order, the order of the snapshot's records.
+      { view: 'child', role: 'extends', text: 'base', snapshotRole: 'view extends' },
+      { view: 'plain', role: 'rule', text: 'api', snapshotRole: 'view rule reference' },
+      { view: 'plain', role: 'relationWithNavigateTo', text: 'flow2', snapshotRole: 'relation with navigateTo' },
+      { view: 'flow', role: 'step', text: 'api', snapshotRole: 'view step endpoint' },
+    ] as const;
+    const linked = await Promise.all(
+      cases.map(async (c) => [await linkedTarget(FILES_PRE, c.view, c.role, c.text), await linkedTarget(FILES_POST, c.view, c.role, c.text)]),
+    );
+    // OP: the element references move to the new root `api`; the view references are left unresolved.
+    expect(linked).toEqual([
+      [{ view: 'base' }, null],
+      [{ model: 'app.api' }, { model: 'api' }],
+      [{ view: 'flow2' }, null],
+      [{ model: 'app.api' }, { model: 'api' }],
+    ]);
+
+    const changes = compareReferenceSnapshots(viewSnapshot(parse(FILES_PRE)), viewSnapshot(parse(FILES_POST)), new Map());
+    expect(
+      changes.map((c) => ({ role: c.role, text: c.text, before: c.before.key, after: c.after?.key })),
+    ).toEqual(
+      cases.map((c, i) => ({ role: c.snapshotRole, text: c.text, before: viewKeyOf(linked[i]![0]!), after: viewKeyOf(linked[i]![1]!) })),
+    );
+  });
+});
+
+describe('views option is opt-in (row 47)', () => {
+  const FILES = {
+    'm.c4': `${SPEC}model {
+  app = service {
+    api = service
+  }
+  other = service {
+  }
+}
+views {
+  view v {
+    include api
+  }
+}
+`,
+  };
+
+  it('keeps accepting addElement that leaves a view rule reference unresolved', async () => {
+    await expectValidLikeC4(FILES);
+    expect(await linkedTarget(FILES, 'v', 'rule', 'api')).toEqual({ model: 'app.api' });
+    const m = LikeC4Mutator.fromFiles(FILES);
+    expect(m.addElement('other', { name: 'api', kind: 'service' })).toBe('other.api');
+    // OP: LikeC4 now leaves the rule's `api` unresolved — the pre-existing behaviour INV-7 keeps (RES-plan-1).
+    expect(await linkedTarget(m.serialize(), 'v', 'rule', 'api')).toBeNull();
   });
 });
