@@ -16,9 +16,8 @@ import type {
 } from '../query/deployment-index.js';
 import type { DeploymentResolver, DeploymentTarget } from '../query/deployment-resolver.js';
 import type { DeploymentEndpoint, DeploymentRelationshipInfo } from '../query/types.js';
-import { mergeOrder } from '../query/workspace-index.js';
 import type { TextEdit } from './text-edit.js';
-import { lineEndingOf, withLineEnding } from './text-edit.js';
+import { blockInsertEdit, chooseBlockPlacement, type BlockPlacement } from './block-placement.js';
 import { getNodeIndent } from './indent.js';
 import { BodyInsertions } from './body-layout.js';
 import type { BodyOwnerNode, CstNodeLike } from './cst-helpers.js';
@@ -196,17 +195,11 @@ interface DeploymentBlockNode {
 
 /**
  * Where a root deployment construct (a root node, a relationship at the
- * top level of a `deployment` block, an `extend <node>` block) is written.
+ * top level of a `deployment` block, an `extend <node>` block) is written:
+ * the file, and the `deployment` block it is appended to (undefined when a
+ * new block is appended at the end of the file).
  */
-export interface DeploymentPlacement {
-  /** File the construct is written to */
-  file: string;
-  /**
-   * The `deployment` block it is appended to; undefined when a new block is
-   * appended at the end of `file`
-   */
-  block?: DeploymentBlockNode;
-}
+export type DeploymentPlacement = BlockPlacement<DeploymentBlockNode>;
 
 /**
  * Patch of `LikeC4Mutator.updateDeploymentNode`: the fields of an element
@@ -224,15 +217,8 @@ export type UpdateDeploymentNodePatch = UpdateElementPatch;
 export type UpdateDeploymentInstancePatch = UpdateElementPatch;
 
 /**
- * Choose where a root deployment construct is written (D4, D11).  The
- * choice branches on `file` first:
- *
- * - **Explicit `file`** (must be a loaded file): that file's first
- *   `deployment` block, else a new block at the end of that file.  No
- *   other file is consulted.
- * - **No `file`:** the first `deployment` block of the first file, in
- *   LikeC4's document order, that has one; else a new block at the end of
- *   the first file with a `model` block; else of the first file.
+ * Choose where a root deployment construct is written (D4, D11): the
+ * `deployment` case of {@link chooseBlockPlacement}.
  *
  * @param documents - Every loaded document by file name
  * @param file      - The caller's `file` option
@@ -243,27 +229,12 @@ export function chooseDeploymentPlacement(
   documents: ReadonlyMap<string, ParsedDocument>,
   file: string | undefined,
 ): DeploymentPlacement {
-  if (file !== undefined) {
-    checkFile(file, documents.keys());
-    return placementIn(file, documents.get(file)!);
-  }
-  const ordered = mergeOrder([...documents].map(([name, doc]) => ({ file: name, ast: doc.ast })));
-  const withBlock = ordered.find((doc) => firstDeploymentBlock(documents.get(doc.file!)!) !== undefined);
-  if (withBlock) return placementIn(withBlock.file!, documents.get(withBlock.file!)!);
-  const withModel = ordered.find((doc) => ((doc.ast as { models?: unknown[] }).models ?? []).length > 0);
-  const chosen = withModel ?? ordered[0];
-  if (!chosen) {
-    throw new InvalidWriteError('file', 'no file is loaded, so there is no file to write the deployment model to');
-  }
-  return { file: chosen.file! };
+  return chooseBlockPlacement<DeploymentBlockNode>('deployment', documents, file);
 }
 
 /**
- * The TextEdit that writes `snippet` at `placement` in `doc` (the document
- * of `placement.file`): appended to the end of the chosen `deployment`
- * block, or wrapped in a new `deployment { ... }` block appended at the end
- * of the file, after a blank line.  Line breaks are written with the file's
- * line ending.
+ * The TextEdit that writes `snippet` at `placement` in `doc`: the
+ * `deployment` case of {@link blockInsertEdit}.
  *
  * @param snippet - Produces the construct's text (one or more lines, without
  *                  the final line break) for the given indentation
@@ -273,19 +244,7 @@ export function deploymentInsertEdit(
   placement: DeploymentPlacement,
   snippet: (indent: string) => string,
 ): TextEdit {
-  const { fullText } = doc;
-  const eol = lineEndingOf(fullText);
-  const blockCst = placement.block?.$cstNode;
-  if (blockCst) {
-    const inserts = BodyInsertions.forBlock(blockCst, fullText, getNodeIndent(placement.block, fullText));
-    inserts.append(snippet(inserts.innerIndent) + '\n');
-    const [edit] = inserts.apply([]);
-    if (!edit) throw new Error('internal: no edit for the deployment block insertion');
-    return withLineEnding([edit], eol)[0]!;
-  }
-  const separator = fullText === '' ? '' : /\r?\n$/.test(fullText) ? '\n' : '\n\n';
-  const newText = `${separator}deployment {\n${snippet('  ')}\n}\n`;
-  return withLineEnding([{ offset: fullText.length, end: fullText.length, newText }], eol)[0]!;
+  return blockInsertEdit('deployment', doc, placement, snippet);
 }
 
 /**
@@ -542,18 +501,6 @@ export function idsDeclaredIn(index: DeploymentIndex, block: DeploymentExtendRef
     if (index.declarations(id).some((declaration) => declaration.frames.at(-1)?.node === block.node)) ids.push(id);
   }
   return ids;
-}
-
-/** The placement in `file`: its first `deployment` block, else a new block. */
-function placementIn(file: string, doc: ParsedDocument): DeploymentPlacement {
-  const block = firstDeploymentBlock(doc);
-  return block ? { file, block } : { file };
-}
-
-/** The first `deployment` block of `doc` that has a CST node. */
-function firstDeploymentBlock(doc: ParsedDocument): DeploymentBlockNode | undefined {
-  const blocks = ((doc.ast as { deployments?: DeploymentBlockNode[] }).deployments ?? []);
-  return blocks.find((block) => block.$cstNode !== undefined);
 }
 
 /**
