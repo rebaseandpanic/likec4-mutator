@@ -277,12 +277,18 @@ export function takeReferenceSnapshot(
 /**
  * The surviving references of `before` whose target changed in `after`.
  * References that did not resolve before are not considered: a write does
- * not change them.  The references of `after` written in inserted text are
- * the write's own; the others are numbered again among themselves, so that
- * a reference inserted before an equal one does not take its ordinal.
+ * not change them.
+ *
+ * The references of one key prefix (file, frames, role, text) are paired in
+ * order.  A reference of `after` outside the inserted text is a survivor and
+ * takes the next reference of `before`.  One inside it is the write's own,
+ * unless the references of `before` still to be paired outnumber the
+ * survivors still to come — text a write rewrites around its insertion (a
+ * one-line body laid out again) holds survivors too.  So a reference
+ * inserted before an equal one does not take its place.
  *
  * @param insertedRanges - Per file, the ranges of the post-write text that
- *                         the write inserted
+ *                         the write inserted or rewrote
  * @throws {Error} (internal) when a surviving reference has no counterpart
  *   after the write, or a reference found only after the write lies outside
  *   the inserted text
@@ -296,28 +302,46 @@ export function compareReferenceSnapshots(
     (insertedRanges.get(record.file) ?? []).some(
       (range) => record.offset !== undefined && record.offset >= range.offset && record.offset < range.end,
     );
-  const counts = new Map<string, number>();
-  const survivors = new Map<string, ReferenceRecord>();
-  for (const record of after.records) {
-    if (inserted(record)) continue;
-    const prefix = record.key.slice(0, record.key.lastIndexOf('#'));
-    const occurrence = counts.get(prefix) ?? 0;
-    counts.set(prefix, occurrence + 1);
-    survivors.set(`${prefix}#${occurrence}`, record);
-  }
+  const prefixOf = (record: ReferenceRecord): string => record.key.slice(0, record.key.lastIndexOf('#'));
+  const group = (records: readonly ReferenceRecord[]): Map<string, ReferenceRecord[]> => {
+    const groups = new Map<string, ReferenceRecord[]>();
+    for (const record of records) {
+      const list = groups.get(prefixOf(record));
+      if (list) list.push(record);
+      else groups.set(prefixOf(record), [record]);
+    }
+    return groups;
+  };
+  const was = group(before.records);
+  const now = group(after.records);
 
   const changes: ReferenceChange[] = [];
-  for (const old of before.records) {
-    const now = survivors.get(old.key);
-    if (!now) {
+  for (const [prefix, olds] of was) {
+    const news = now.get(prefix) ?? [];
+    let next = 0;
+    news.forEach((record, i) => {
+      const isNew = inserted(record);
+      if (isNew) {
+        const survivorsToCome = news.slice(i + 1).filter((r) => !inserted(r)).length;
+        if (olds.length - next <= survivorsToCome) return;
+      } else if (next >= olds.length) {
+        throw new Error(`Internal error: the ${record.role} '${record.text}' in '${record.file}' appeared outside the written text`);
+      }
+      const old = olds[next++]!;
+      if (old.target !== undefined && record.target?.key !== old.target.key) {
+        changes.push({ file: old.file, role: old.role, text: old.text, before: old.target, after: record.target });
+      }
+    });
+    if (next < olds.length) {
+      const old = olds[next]!;
       throw new Error(`Internal error: the ${old.role} '${old.text}' in '${old.file}' is not found after the write`);
     }
-    if (old.target === undefined || now.target?.key === old.target.key) continue;
-    changes.push({ file: old.file, role: old.role, text: old.text, before: old.target, after: now.target });
   }
-  for (const [key, record] of survivors) {
-    if (!before.byKey.has(key)) {
-      throw new Error(`Internal error: the ${record.role} '${record.text}' in '${record.file}' appeared outside the written text`);
+  for (const [prefix, news] of now) {
+    if (was.has(prefix)) continue;
+    const outside = news.find((record) => !inserted(record));
+    if (outside) {
+      throw new Error(`Internal error: the ${outside.role} '${outside.text}' in '${outside.file}' appeared outside the written text`);
     }
   }
   return changes;

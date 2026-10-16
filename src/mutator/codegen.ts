@@ -529,6 +529,7 @@ export interface GenerateStepOpts {
   description?: string;
   technology?: string;
   notes?: string;
+  notation?: string;
   /** Id of a dynamic view */
   navigateTo?: string;
   /** `color`, `line`, `head`, `tail`, written directly in the step body */
@@ -542,6 +543,7 @@ export interface GenerateStepOpts {
  *   description '…'
  *   technology '…'
  *   notes '…'
+ *   notation '…'
  *   navigateTo other
  *   color red
  * }
@@ -567,7 +569,7 @@ export function generateStep(opts: GenerateStepOpts): string {
 
   const innerIndent = indent + '  ';
   const lines: string[] = [];
-  for (const key of ['description', 'technology', 'notes'] as const) {
+  for (const key of ['description', 'technology', 'notes', 'notation'] as const) {
     const value = opts[key];
     if (value) lines.push(`${innerIndent}${key} '${escapeString(value)}'\n`);
   }

@@ -175,3 +175,85 @@ export async function expectSameStepSequence(
   expect(await sequence(after)).toEqual(await sequence(before));
   expect(await parsed(after)).toEqual(await parsed(before));
 }
+
+/** One step of a computed sequence: endpoints, label and kind as computed, direction as parsed. */
+export interface SequenceStep {
+  source: string;
+  target: string;
+  title: string | null;
+  kind?: string;
+  /** `isBackward` of LikeC4's parsed step */
+  backward: boolean;
+}
+
+/** The steps that share one number of the computed sequence: one step, or the steps of a `par` block. */
+export interface SequenceGroup {
+  parallel: boolean;
+  steps: SequenceStep[];
+}
+
+/** The parsed steps of a dynamic view in sequence order, the inner steps of every block included. */
+function flattenParsed(nodes: unknown): Array<{ isBackward?: boolean }> {
+  const result: Array<{ isBackward?: boolean }> = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (typeof node !== 'object' || node === null) return;
+    const n = node as Record<string, unknown>;
+    let block = false;
+    for (const key of ['steps', 'branches']) {
+      if (Array.isArray(n[key])) {
+        block = true;
+        walk(n[key]);
+      }
+    }
+    for (const key of ['try', 'catch', 'finally']) {
+      const part = n[key] as { steps?: unknown } | undefined;
+      if (part?.steps) {
+        block = true;
+        walk(part.steps);
+      }
+    }
+    if (!block && typeof n.source === 'string') result.push(n as { isBackward?: boolean });
+  };
+  walk(nodes);
+  return result;
+}
+
+/**
+ * LikeC4's computed step sequence of the dynamic view `id`, grouped by step
+ * number, each step with its parsed direction (the computed `dir` follows
+ * the actor order, see `LikeC4ComputedStep.backward`).
+ */
+export async function stepSequence(files: Record<string, string>, id: string): Promise<SequenceGroup[]> {
+  const computed = (await computedViews(files))[id]!.steps;
+  const parsed = flattenParsed((await parsedViews(files)).find((e) => e.view.id === id)!.view.steps);
+  expect(parsed.length, `LikeC4 parses as many steps of '${id}' as it computes`).toBe(computed.length);
+  const groups: SequenceGroup[] = [];
+  computed.forEach((step, i) => {
+    const entry: SequenceStep = {
+      source: step.source,
+      target: step.target,
+      title: step.title,
+      ...(step.kind !== undefined && { kind: step.kind }),
+      backward: parsed[i]!.isBackward === true,
+    };
+    const last = groups.at(-1);
+    if (last && step.parallel !== undefined && last.parallel && computed[i - 1]?.step === step.step) last.steps.push(entry);
+    else groups.push({ parallel: step.parallel !== undefined, steps: [entry] });
+  });
+  return groups;
+}
+
+/**
+ * SEQ for a step write: the sequence of `id` after the write equals the one
+ * before it with `edit` applied — the spec's transformation, written by the
+ * test (insert, patch, reorder, regroup, drop).
+ */
+export async function expectStepSequence(
+  before: Record<string, string>,
+  after: Record<string, string>,
+  id: string,
+  edit: (groups: SequenceGroup[]) => SequenceGroup[],
+): Promise<void> {
+  expect(await stepSequence(after, id)).toEqual(edit(await stepSequence(before, id)));
+}

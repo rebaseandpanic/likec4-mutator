@@ -1415,6 +1415,20 @@ mutator.removeViewRule('appView', { index: 0 });
 - **Replace and remove** take any rule — `autoLayout` and the rules read by kind only (`style`, `group`, `rank`, `global predicate`, `global style`, `includeAncestors`) included; a removed rule's lines go, its trailing comma with it.
 - **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an index out of range or a `text` that does not match (`address.index`, `address.text`, `before.index`, `before.text`); a kind the view does not have (`rule.kind`); an expression as above (`rule.expression`).
 
+#### Dynamic view steps
+
+`addViewStep(id, step, opts?)` adds a step to the named dynamic view `id` and returns `{ changedFiles }`. A step is given by `source` and `target` as LikeC4 means them — the element the interaction goes from and the one it goes to — written as references; `direction: 'backward'` is written `target <- source`, so a step read with `getView` and written back keeps its meaning. Optional: `kind` (a declared relationship kind) with `kindForm` `'bracket'` (`-[kind]->`, default) or `'dot'` (`.kind`); `title` (after the target); `description`, `technology`, `notes`, `notation`, `navigateTo` (a dynamic view), `color`, `line`, `head`, `tail` (in the step's body).
+
+```typescript
+mutator.addViewStep('checkout', { source: 'web', target: 'api', kind: 'https', title: 'Places the order' });
+// web -[https]-> api 'Places the order'
+mutator.addViewStep('checkout', { source: 'web', target: 'api', direction: 'backward', title: 'Confirms' }, { path: [2, 0] });
+// api <- web 'Confirms', first in the par block at [2]
+```
+
+- **Where.** `opts.path` is the boundary the step is written at: `[i]` before the top-level step statement `i` (`[n]` after the last one), `[i, j]` before statement `j` of the `par` block at `i` (`[i, n]` at its end). Without it the step goes right after the last top-level step statement. A view declared without a body gets one.
+- **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an endpoint that does not resolve in the view's document — LikeC4 links step endpoints there: a name unique in that document, or a qualified one (`step.source`, `step.target`); a parent and its descendant (`step.target`; a step from an element to itself is valid); an undeclared kind, or a kind on a backward step, which no connector writes (`step.kind`); a `navigateTo` that is not a dynamic view (`step.navigateTo`); an invalid style value (`step.color`, ...); a path that does not exist or leads into a single step, a chain or a block such as `opt` (`path`).
+
 #### Removing views
 
 `removeView(id)` removes the declaration of the named view `id` and nothing else, and returns `{ changedFiles }`. A manual layout snapshot of the view (a file kept by LikeC4's layout tooling) is not touched.

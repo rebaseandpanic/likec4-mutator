@@ -134,6 +134,7 @@ import {
   type UpdateViewPatch,
 } from './view-ops.js';
 import { namedView, ruleAt } from './view-address.js';
+import { checkViewStep, insertStepEdits, stepInsertion, stepText, type ViewStepSpec } from './step-ops.js';
 import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
@@ -169,6 +170,7 @@ export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
  */
 export type AddViewOpts = Omit<GenerateViewOpts, 'indent'> & { file?: string };
 export type { UpdateViewPatch };
+export type { ViewStepSpec };
 
 /**
  * Result of {@link LikeC4Mutator.removeElement}.  Lists every relationship
@@ -1238,6 +1240,40 @@ export class LikeC4Mutator {
     const old = ruleAt(view, address, 'address');
     const file = this.viewFile(view);
     this.writeViewEdits(file, [removeViewRuleEdit(this.document(file), old.node)], new Set([old.node]), 'address');
+    return { changedFiles: [file] };
+  }
+
+  /**
+   * Add a step to the named dynamic view `id` (US-9), written as a single
+   * step statement: `source -> target`, `source -[kind]-> target` or
+   * `source .kind target`, and `target <- source` for a backward step (D36),
+   * with its title after the target and the other fields in its body.
+   *
+   * `opts.path` is the insertion boundary (D24): `[i]` before top-level
+   * statement `i` (`[n]` after the last one), `[i, j]` before statement `j`
+   * of the `par` block at `i` (`[i, n]` at its end).  By default the step goes
+   * right after the last top-level step statement.  A declaration without a
+   * body gets one.
+   *
+   * Rejected, with nothing changed: an `id` that names no dynamic view
+   * (`id`, or `path` for another view type); an endpoint that does not
+   * resolve in the view's document — a name unique there, or qualified
+   * (`step.source`, `step.target`); endpoints that are a parent and its
+   * descendant (`step.target`); an undeclared kind, or a
+   * kind on a backward step, which no connector writes (`step.kind`); a
+   * `navigateTo` that is not a dynamic view (`step.navigateTo`); an invalid
+   * style value (`step.color`, `step.line`, `step.head`, `step.tail`); a
+   * path that does not exist or leads into a chain or a stage-6 block
+   * (`path`).
+   *
+   * @returns `{ changedFiles }`: the view's file
+   */
+  addViewStep(id: string, step: ViewStepSpec, opts: { path?: number[] } = {}): ViewWriteResult {
+    const view = namedView(this.views, id);
+    const insertion = stepInsertion(view, opts.path);
+    const fields = checkViewStep(view, step, this.viewResolver(), this.workspace, 'step');
+    const file = this.viewFile(view);
+    this.writeViewEdits(file, insertStepEdits(this.document(file), view, insertion, stepText(fields)), new Set(), 'step');
     return { changedFiles: [file] };
   }
 
