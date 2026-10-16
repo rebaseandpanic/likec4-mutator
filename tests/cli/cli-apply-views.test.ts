@@ -171,6 +171,17 @@ describe('each view operation through apply (row 89)', SLOW, () => {
     expect(m.getView('detail')!.rules.map((r) => r.text)).toEqual(['include shop', 'autoLayout LeftRight']);
     expect(after[VIEWS]).toBe(BASE[VIEWS]);
     expect(Object.keys(await computedViews(after))).toContain('detail');
+    // EFF (review W2): the view as written by hand at the end of the CRLF file's views block.
+    const operations = BASE['operations.c4']!;
+    expect(operations.endsWith('  }\r\n}\r\n')).toBe(true);
+    const expected = {
+      ...BASE,
+      'operations.c4':
+        operations.slice(0, -'}\r\n'.length) +
+        "  view detail extends landscape {\r\n    title 'Detail'\r\n    description 'Details'\r\n    include shop\r\n    autoLayout LeftRight\r\n  }\r\n}\r\n",
+    };
+    expect(after).toEqual(expected);
+    await expectSameComputedView(after, expected, 'detail');
   });
 });
 
@@ -298,6 +309,8 @@ describe('strict validation of the mutations file (row 90)', SLOW, () => {
     expect(after[VIEWS]).toContain(expectedFlow);
     expect(after[VIEWS]).toContain('  view landscape {\n    include *\n    exclude partner\n  }\n');
     expect(after[VIEWS]).toContain("  view shopView of shop {\n    title 'Shop'\n    exclude partner\n    include *, customer,\n");
+    // EFF (review W2): shopView with only its new rule, written by hand.
+    await expectSameComputedView(after, edited("  view shopView of shop {\n    title 'Shop'\n", "  view shopView of shop {\n    title 'Shop'\n    exclude partner\n"), 'shopView');
     // SEQ of the step writes: LikeC4 titles a step without one after its relationship.
     await expectStepSequence(BASE, after, 'orderFlow', (g) => [
       {
@@ -346,6 +359,31 @@ describe('library rejections through apply are atomic (row 91)', SLOW, () => {
   it('the D40 block case → mutations[1].from', () => {
     const files = edited(ORDER_FLOW, "  dynamic view orderFlow {\n    par {\n      customer -> shop.storefront\n      opt { }\n    }\n    include partner\n  }\n");
     expectRejectedRun([FIRST, { op: 'moveViewStep', id: 'orderFlow', from: { path: [0, 0] }, to: [1] }], 'mutations[1].from', files);
+  });
+
+  it('applies Wv and EFF to each prefix of the accepted batch (review W2)', async () => {
+    // Without a file, x goes to the first file in LikeC4's document order with a views block: operations.c4 (CRLF).
+    const X = '  view x {\r\n    include customer with { color brand }\r\n  }\r\n';
+    const withX = (files: Record<string, string>) => ({ ...files, 'operations.c4': files['operations.c4']!.replace(/}\r\n$/, `${X}}\r\n`) });
+    const ICON = '    autoLayout LeftRight\n    include customer with { icon tech:react }\n    autoLayout TopBottom 120 60\n';
+    const mutations = [
+      { op: 'addView', id: 'x', type: 'element', includes: ['customer with { color brand }'], autoLayout: '' },
+      { op: 'addViewRule', id: 'landscape', rule: { kind: 'include', expression: 'customer with { icon tech:react }' } },
+      { op: 'replaceViewRule', id: 'landscape', address: { index: 1 }, rule: { kind: 'exclude', expression: 'partner' } },
+    ];
+    const one = withX(BASE);
+    const two = withX(edited('    autoLayout LeftRight\n    autoLayout TopBottom 120 60\n', ICON));
+    const prefixes = [
+      { length: 1, expected: one, views: ['x'] },
+      { length: 2, expected: two, views: ['x', 'landscape'] },
+      { length: 3, expected: two, views: ['x', 'landscape'] },
+    ];
+    for (const { length, expected, views } of prefixes) {
+      const { after } = await expectAcceptedRun(mutations.slice(0, length), BASE, true);
+      // The third op replaces `exclude partner` with itself: the text stays that of the second prefix.
+      expect(after).toEqual(expected);
+      for (const id of views) await expectSameComputedView(after, expected, id);
+    }
   });
 
   it('accepts a declared custom color and a library icon through addView, addViewRule and replaceViewRule', async () => {

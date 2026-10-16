@@ -561,5 +561,12 @@ describe('a reference that resolves only after the write is not a change (row 56
     const resolved = before.filter((e) => e.includes('newV'));
     expect(resolved.length).toBeGreaterThan(0);
     await expectViewWriteOnInvalidInput(m, input, { resolved });
+    // EFF (review W2): the new view, written by hand, computes the same nodes.
+    const expected = withView(
+      '  view c extends newV {\n  }\n  view w {\n    include app.api with { navigateTo newV }\n  }\n' +
+        '  view newV {\n    include app.api\n    autoLayout TopBottom\n  }\n',
+    );
+    expect(after).toEqual(expected);
+    await expectSameComputedView(after, expected, 'newV');
   });
 });
