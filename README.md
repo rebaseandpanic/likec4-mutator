@@ -1473,12 +1473,21 @@ mutator.updateViewStep('checkout', { path: [1] }, { direction: 'backward', kind:
 
 `moveViewStep(id, from, to)`, `removeViewStep(id, address)` and `addViewParallel(id, opts)` move, remove and group whole step statements — a single step, a chain, a `par` block, a block such as `opt` or `alt`:
 
+Each call below is a separate example, starting from the statements in its comment:
+
 ```typescript
-// statements [A, B, C] at the top level
+// [A, B, C] at the top level
 mutator.moveViewStep('checkout', { path: [0] }, [2]);    // [B, A, C]
+
+// [A, B, C]
 mutator.moveViewStep('checkout', { path: [0] }, [3]);    // [B, C, A]
-mutator.removeViewStep('checkout', { path: [1, 0] });    // { changedFiles, removedParallelBlocks }
+
+// [A, par { B }, C]: removing the block's last statement removes the block
+mutator.removeViewStep('checkout', { path: [1, 0] });    // [A, C]; { changedFiles, removedParallelBlocks: [[1]] }
+
+// [A, B, C]: A and C go into a new par block, with a new step after them, at the end
 mutator.addViewParallel('checkout', { statements: [[0], [2]], steps: [{ source: 'web', target: 'cache' }], path: [3] });
+// [B, par { A, C, web -> cache }]
 ```
 
 - **Addresses.** `from` and `to` are paths in the view as it is before the move; `to` is the boundary "before the statement at this path" (`[n]` after the last top-level statement, `[i, n]` at the end of the `par` block at `i`), so `[0] → [2]` puts the first statement after the second. A move to the statement's own boundary changes nothing and writes nothing. A chain is moved or removed whole; one of its segments is rejected (`segment`).
