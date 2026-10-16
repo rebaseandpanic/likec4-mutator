@@ -1399,6 +1399,22 @@ mutator.updateView('appView', { title: 'App', tags: ['next'], autoLayout: 'LeftR
 
 Properties go where the grammar puts them: tags first in the body, then the other properties, before any rule or step; a view declared without a body (`view v`) gets one, and LikeC4 then makes it a view. Other text and comments of the body are kept. The update is allowed while another loaded file has syntax errors; an edit that would leave the view's own file unparsable is refused. Rejected, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an undeclared tag (`tags[i]`); an invalid link URL (`links[i].url`); an invalid `autoLayout`, `''` included (`autoLayout`).
 
+#### Writing rules
+
+`addViewRule(id, rule, opts?)`, `replaceViewRule(id, address, rule)` and `removeViewRule(id, address)` write the rules of the named view `id` and return `{ changedFiles }`. A rule is given as its kind and the expression written after the keyword — `{ kind: 'include', expression: 'app.api, app.db' }` — and is written on a line of its own as given. A rule is addressed by `{ index, text? }` as `getView` reports it: `index` in the view's rule list, and `text`, when given, must equal the rule's text.
+
+```typescript
+mutator.addViewRule('appView', { kind: 'exclude', expression: 'app.db' });
+mutator.addViewRule('appView', { kind: 'include', expression: 'app.api with { navigateTo checkout }' }, { before: { index: 0 } });
+mutator.replaceViewRule('appView', { index: 1, text: 'exclude app.db' }, { kind: 'include', expression: 'app.db' });
+mutator.removeViewRule('appView', { index: 0 });
+```
+
+- **Position.** `addViewRule` writes the rule before the rule at `opts.before`; by default after the last item of the body, or before it when that item is an `autoLayout` rule — so in a dynamic view after the last step. A view declared without a body gets one.
+- **Checks** of `addViewRule` and `replaceViewRule`, at the place the rule is written: one rule of a kind the view type has (element and deployment views: `include`, `exclude`; dynamic views: `include`), and everything [Adding views](#adding-views) checks for `includes` — references resolved in the view's scope (its `of` element or its `extends` parent's, its document), declared kinds, tags and custom colors, typed `navigateTo`, no item LikeC4 drops; also no `with` in an `exclude`, and in a deployment view a logical element only inside a relation predicate of an `exclude` (`exclude app.api -> app.db`). An expression ending with a comma is rejected: it would join the next line of the body to the rule.
+- **Replace and remove** take any rule — `autoLayout` and the rules read by kind only (`style`, `group`, `rank`, `global predicate`, `global style`, `includeAncestors`) included; a removed rule's lines go, its trailing comma with it.
+- **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an index out of range or a `text` that does not match (`address.index`, `address.text`, `before.index`, `before.text`); a kind the view does not have (`rule.kind`); an expression as above (`rule.expression`).
+
 #### Removing views
 
 `removeView(id)` removes the declaration of the named view `id` and nothing else, and returns `{ changedFiles }`. A manual layout snapshot of the view (a file kept by LikeC4's layout tooling) is not touched.

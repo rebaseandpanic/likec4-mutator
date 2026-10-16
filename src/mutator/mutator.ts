@@ -9,7 +9,7 @@
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
 import { DeploymentIndex, type DeploymentExtendRef, type DeploymentRelationRef } from '../query/deployment-index.js';
-import { ViewIndex } from '../query/view-index.js';
+import { ViewIndex, type ViewDeclaration } from '../query/view-index.js';
 import { buildViewInfo } from '../query/view-query.js';
 import { ViewReferenceResolver } from '../query/view-resolver.js';
 import {
@@ -50,6 +50,7 @@ import type {
   RelationshipInfo,
   SpecificationInfo,
   ViewInfo,
+  ViewRuleAddress,
   ViewType,
   ViewWriteResult,
 } from '../query/types.js';
@@ -121,6 +122,9 @@ import {
 } from './relationship-ops.js';
 import {
   addViewEdit,
+  addViewRuleEdits,
+  removeViewRuleEdit,
+  replaceViewRuleEdit,
   describeReferrer,
   extendsParent,
   outsideReferrers,
@@ -129,7 +133,7 @@ import {
   type GenerateViewOpts,
   type UpdateViewPatch,
 } from './view-ops.js';
-import { namedView } from './view-address.js';
+import { namedView, ruleAt } from './view-address.js';
 import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
@@ -145,6 +149,7 @@ import {
   checkLinks,
   checkViewId,
   checkViewRule,
+  type ViewRuleText,
 } from './write-checks.js';
 
 export type { AddElementOpts, UpdateElementPatch };
@@ -1167,6 +1172,112 @@ export class LikeC4Mutator {
       throw err;
     }
     return { changedFiles: [file] };
+  }
+
+  /**
+   * Add an `include` / `exclude` rule, given as its kind and the expression
+   * written after the keyword (D23), to the named view `id` (US-7).
+   *
+   * Placed before the rule at `opts.before` (`{ index, text? }`, see
+   * {@link ViewRuleAddress}); by default after the last item of the body,
+   * or before it when that item is an `autoLayout` rule — in a dynamic view
+   * after the last step.  A declaration without a body gets one.
+   *
+   * The rule must be one LikeC4 applies at that place: one rule of a kind
+   * the view type has (`exclude` is not a dynamic view rule; `with` is not
+   * applied in deployment views), references resolved in the view's scope
+   * (its `of` element, its `extends` parent's, its document; deployment
+   * views: nodes and instances, a logical element only inside a relation
+   * predicate of an `exclude`), declared kinds, tags and custom colors,
+   * typed `navigateTo` targets, and none of the items LikeC4 drops (see
+   * {@link LikeC4Mutator.addView}).
+   *
+   * @returns `{ changedFiles }`: the view's file
+   * @throws {InvalidWriteError} on `id`, `before.index` / `before.text`,
+   *   `rule.kind` or `rule.expression`
+   */
+  addViewRule(id: string, rule: ViewRuleText, opts: { before?: ViewRuleAddress } = {}): ViewWriteResult {
+    const view = namedView(this.views, id);
+    const before = opts.before === undefined ? undefined : ruleAt(view, opts.before, 'before');
+    this.checkRule(view, rule);
+    const file = this.viewFile(view);
+    const edits = addViewRuleEdits(this.document(file), view, `${rule.kind} ${rule.expression}`, before?.node.$cstNode?.offset);
+    this.writeViewEdits(file, edits, new Set(), 'rule.expression');
+    return { changedFiles: [file] };
+  }
+
+  /**
+   * Replace the rule at `address` (`{ index, text? }`) of the named view
+   * `id` — of any kind, `autoLayout` and stage-6 rules included — with an
+   * `include` / `exclude` rule, checked as {@link LikeC4Mutator.addViewRule}
+   * checks it.
+   *
+   * @returns `{ changedFiles }`: the view's file
+   * @throws {InvalidWriteError} on `id`, `address.index` / `address.text`,
+   *   `rule.kind` or `rule.expression`
+   */
+  replaceViewRule(id: string, address: ViewRuleAddress, rule: ViewRuleText): ViewWriteResult {
+    const view = namedView(this.views, id);
+    const old = ruleAt(view, address, 'address');
+    this.checkRule(view, rule);
+    const file = this.viewFile(view);
+    this.writeViewEdits(file, [replaceViewRuleEdit(old.node, `${rule.kind} ${rule.expression}`)], new Set([old.node]), 'rule.expression');
+    return { changedFiles: [file] };
+  }
+
+  /**
+   * Remove the rule at `address` (`{ index, text? }`) of the named view
+   * `id`: any kind of rule, `autoLayout` and the stage-6 rules included
+   * (D30), with the lines it fills; a trailing comma goes with it.
+   *
+   * @returns `{ changedFiles }`: the view's file
+   * @throws {InvalidWriteError} on `id`, `address.index` / `address.text`
+   */
+  removeViewRule(id: string, address: ViewRuleAddress): ViewWriteResult {
+    const view = namedView(this.views, id);
+    const old = ruleAt(view, address, 'address');
+    const file = this.viewFile(view);
+    this.writeViewEdits(file, [removeViewRuleEdit(this.document(file), old.node)], new Set([old.node]), 'address');
+    return { changedFiles: [file] };
+  }
+
+  /** `checkViewRule` of `rule` in the body of `view`, with the rule writers' fields. */
+  private checkRule(view: ViewDeclaration, rule: ViewRuleText): void {
+    if (typeof rule !== 'object' || rule === null) {
+      throw new InvalidWriteError('rule', `expected a rule { kind, expression }, got ${JSON.stringify(rule)}`);
+    }
+    checkViewRule(rule, view, this.viewResolver(), this.workspace, { kind: 'rule.kind', expression: 'rule.expression' });
+  }
+
+  /** The file the declaration `view` is written in. */
+  private viewFile(view: ViewDeclaration): string {
+    if (view.file === undefined) throw new Error(`Internal error: view '${view.id}' has no file`);
+    return view.file;
+  }
+
+  /**
+   * Apply the edits of a view write to `file`, guarded by the reference
+   * snapshot with view references (INV-8): `removed` holds the AST nodes the
+   * write deletes on purpose; a reference that would link elsewhere
+   * afterwards rejects the write on `field`, with nothing changed.
+   */
+  private writeViewEdits(file: string, edits: TextEdit[], removed: ReadonlySet<object>, field: string): void {
+    const doc = this.document(file);
+    const before = this.referenceSnapshot(removed, { views: true });
+    const snapshot = this.snapshot();
+    try {
+      this.applyEditsToFile(file, edits);
+      this.rejectChangedReferences(
+        before,
+        new Map([[file, insertedRanges(doc.fullText, edits)]]),
+        file,
+        { field, action: `writing into '${file}'` },
+        { views: true },
+      );
+    } catch (err) {
+      this.restore(snapshot);
+      throw err;
+    }
   }
 
   // ---------------------------------------------------------------------------

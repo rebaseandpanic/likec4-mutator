@@ -17,6 +17,7 @@
 import { expect } from 'vitest';
 import {
   computedViews,
+  parsedViews,
   expectComputedViewsSurvive,
   expectValidLikeC4,
   expectViewsAgreeWithLikeC4,
@@ -138,4 +139,39 @@ export async function expectSameComputedView(
       backward,
     }));
   expect(sequence(a[id]!)).toEqual(sequence(e[id]!));
+}
+
+/** `value` without the positional `astPath` keys LikeC4 gives parsed steps. */
+function withoutAstPaths(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutAstPaths);
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'astPath').map(([key, v]) => [key, withoutAstPaths(v)]));
+}
+
+/**
+ * SEQ for a write that must leave the steps of the dynamic view `id` as
+ * they were (a rule write): LikeC4's computed step sequence — endpoints,
+ * titles, kinds, `par` grouping — and its parsed steps, whose
+ * `isBackward` is the direction of each step, are the same in `after` as
+ * in `before`.  The computed `dir: 'back'` is not compared: it follows the
+ * actor order, which the view's rules decide.
+ */
+export async function expectSameStepSequence(
+  before: Record<string, string>,
+  after: Record<string, string>,
+  id: string,
+): Promise<void> {
+  const sequence = async (files: Record<string, string>) =>
+    (await computedViews(files))[id]!.steps.map(({ step, parallel, source, target, title, kind }) => ({
+      step,
+      parallel,
+      source,
+      target,
+      title,
+      kind,
+    }));
+  const parsed = async (files: Record<string, string>) =>
+    withoutAstPaths((await parsedViews(files)).find((e) => e.view.id === id)!.view.steps);
+  expect(await sequence(after)).toEqual(await sequence(before));
+  expect(await parsed(after)).toEqual(await parsed(before));
 }

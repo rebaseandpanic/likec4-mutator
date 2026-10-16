@@ -277,7 +277,9 @@ export function takeReferenceSnapshot(
 /**
  * The surviving references of `before` whose target changed in `after`.
  * References that did not resolve before are not considered: a write does
- * not change them.
+ * not change them.  The references of `after` written in inserted text are
+ * the write's own; the others are numbered again among themselves, so that
+ * a reference inserted before an equal one does not take its ordinal.
  *
  * @param insertedRanges - Per file, the ranges of the post-write text that
  *                         the write inserted
@@ -290,21 +292,31 @@ export function compareReferenceSnapshots(
   after: ReferenceSnapshot,
   insertedRanges: ReadonlyMap<string, readonly TextRange[]>,
 ): ReferenceChange[] {
+  const inserted = (record: ReferenceRecord): boolean =>
+    (insertedRanges.get(record.file) ?? []).some(
+      (range) => record.offset !== undefined && record.offset >= range.offset && record.offset < range.end,
+    );
+  const counts = new Map<string, number>();
+  const survivors = new Map<string, ReferenceRecord>();
+  for (const record of after.records) {
+    if (inserted(record)) continue;
+    const prefix = record.key.slice(0, record.key.lastIndexOf('#'));
+    const occurrence = counts.get(prefix) ?? 0;
+    counts.set(prefix, occurrence + 1);
+    survivors.set(`${prefix}#${occurrence}`, record);
+  }
+
   const changes: ReferenceChange[] = [];
   for (const old of before.records) {
-    const now = after.byKey.get(old.key);
+    const now = survivors.get(old.key);
     if (!now) {
       throw new Error(`Internal error: the ${old.role} '${old.text}' in '${old.file}' is not found after the write`);
     }
     if (old.target === undefined || now.target?.key === old.target.key) continue;
     changes.push({ file: old.file, role: old.role, text: old.text, before: old.target, after: now.target });
   }
-  for (const record of after.records) {
-    if (before.byKey.has(record.key)) continue;
-    const inserted = (insertedRanges.get(record.file) ?? []).some(
-      (range) => record.offset !== undefined && record.offset >= range.offset && record.offset < range.end,
-    );
-    if (!inserted) {
+  for (const [key, record] of survivors) {
+    if (!before.byKey.has(key)) {
       throw new Error(`Internal error: the ${record.role} '${record.text}' in '${record.file}' appeared outside the written text`);
     }
   }

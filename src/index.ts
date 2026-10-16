@@ -59,6 +59,7 @@ export type { DeploymentTarget, LinkedTarget } from './query/deployment-resolver
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';
 export { InvalidWriteError } from './mutator/write-checks.js';
+export type { ViewRuleText } from './mutator/write-checks.js';
 export type {
   AddDeploymentExtendOpts,
   AddDeploymentInstanceOpts,

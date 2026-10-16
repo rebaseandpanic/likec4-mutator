@@ -862,6 +862,8 @@ export interface LikeC4ComputedView {
   steps: LikeC4ComputedStep[];
   /** The layout LikeC4 computes the view with (`autoLayout` of the computed view) */
   autoLayout: { direction: string; rankSep?: number; nodeSep?: number };
+  /** The view each node navigates to, for the nodes that have a `navigateTo` */
+  navigateTo: Record<string, string>;
 }
 
 /** A computed edge, as far as {@link computedViews} reads it. */
@@ -892,7 +894,7 @@ export async function computedViews(
   for (const view of model?.views() ?? []) {
     const computed = view.$view as unknown as {
       _type: LikeC4ComputedView['type'];
-      nodes: ReadonlyArray<{ id: string }>;
+      nodes: ReadonlyArray<{ id: string; navigateTo?: string | null }>;
       edges: readonly ComputedEdge[];
       autoLayout: LikeC4ComputedView['autoLayout'];
     };
@@ -920,6 +922,7 @@ export async function computedViews(
       edges: computed.edges.map((e) => ({ source: e.source, target: e.target })),
       steps,
       autoLayout: computed.autoLayout,
+      navigateTo: Object.fromEntries(computed.nodes.flatMap((n) => (n.navigateTo ? [[n.id, n.navigateTo]] : []))),
     };
   }
   return result;

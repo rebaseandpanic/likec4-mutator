@@ -230,3 +230,46 @@ export function removeViewEdit(doc: ParsedDocument, view: ViewDeclaration): Text
   const { offset, end, newText } = buildRemovalEdit(doc.fullText, cst.offset, cst.end);
   return { offset, end, newText };
 }
+
+/**
+ * The edit that writes the rule line `text` (`<kind> <expression>`) into
+ * the view `view`: before the body item starting at `before` when given;
+ * otherwise after the last body item, or before it when that item is an
+ * `autoLayout` rule (LikeC4 reads every rule wherever it stands; the layout
+ * stays last).  A declaration without a body gets one.
+ */
+export function addViewRuleEdits(doc: ParsedDocument, view: ViewDeclaration, text: string, before?: number): TextEdit[] {
+  const { fullText } = doc;
+  const indent = getNodeIndent(view.node, fullText);
+  if (!view.body) {
+    const end = view.node.$cstNode?.end;
+    if (end === undefined) throw new Error(`internal: view '${view.id}' has no CST node`);
+    return [{ offset: end, end, newText: ` {\n${indent}  ${text}\n${indent}}` }];
+  }
+  const inserts = BodyInsertions.forViewBody(view.body as Parameters<typeof BodyInsertions.forViewBody>[0], fullText, indent);
+  const line = `${inserts.innerIndent}${text}\n`;
+  let anchor = before;
+  if (anchor === undefined) {
+    const items = [...view.rules.map((r) => ({ node: r.node, layout: r.kind === 'autoLayout' })), ...view.steps.map((s) => ({ node: s.node, layout: false }))];
+    const last = items.sort((a, b) => (a.node.$cstNode?.offset ?? 0) - (b.node.$cstNode?.offset ?? 0)).at(-1);
+    if (last?.layout) anchor = last.node.$cstNode?.offset;
+  }
+  if (anchor === undefined) inserts.append(line);
+  else inserts.before(anchor, line);
+  return inserts.apply([]);
+}
+
+/** The edit that replaces the rule `node` with the rule line `text`. */
+export function replaceViewRuleEdit(node: ViewAstNode, text: string): TextEdit {
+  const cst = node.$cstNode;
+  if (!cst) throw new Error('internal: rule without a CST node');
+  return { offset: cst.offset, end: cst.end, newText: text };
+}
+
+/** The edit that removes the rule `node` with the lines it fills (a trailing comma is part of the rule). */
+export function removeViewRuleEdit(doc: ParsedDocument, node: ViewAstNode): TextEdit {
+  const cst = node.$cstNode;
+  if (!cst) throw new Error('internal: rule without a CST node');
+  const { offset, end, newText } = buildRemovalEdit(doc.fullText, cst.offset, cst.end);
+  return { offset, end, newText };
+}
