@@ -318,12 +318,15 @@ export function compareReferenceSnapshots(
   const changes: ReferenceChange[] = [];
   for (const [prefix, olds] of was) {
     const news = now.get(prefix) ?? [];
+    // Once per group: which references lie in inserted text, and how many
+    // outside it follow each position (one backward pass).
+    const isInserted = news.map(inserted);
+    const outsideAfter = new Array<number>(news.length + 1).fill(0);
+    for (let i = news.length - 1; i >= 0; i--) outsideAfter[i] = outsideAfter[i + 1]! + (isInserted[i] ? 0 : 1);
     let next = 0;
     news.forEach((record, i) => {
-      const isNew = inserted(record);
-      if (isNew) {
-        const survivorsToCome = news.slice(i + 1).filter((r) => !inserted(r)).length;
-        if (olds.length - next <= survivorsToCome) return;
+      if (isInserted[i]) {
+        if (olds.length - next <= outsideAfter[i + 1]!) return;
       } else if (next >= olds.length) {
         throw new Error(`Internal error: the ${record.role} '${record.text}' in '${record.file}' appeared outside the written text`);
       }
