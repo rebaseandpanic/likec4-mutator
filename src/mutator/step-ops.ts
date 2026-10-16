@@ -3,11 +3,12 @@
  */
 import { isLikeC4Id, isReferenceForm } from '../parser/grammar.js';
 import type { ParsedDocument } from '../parser/types.js';
-import type { ViewDeclaration, ViewStepStatementEntry } from '../query/view-index.js';
+import type { ViewAstNode, ViewDeclaration, ViewStepStatementEntry } from '../query/view-index.js';
 import type { ViewReferenceResolver } from '../query/view-resolver.js';
 import type { WorkspaceIndex } from '../query/workspace-index.js';
 import { BodyInsertions } from './body-layout.js';
-import { generateStep, type GenerateStepOpts } from './codegen.js';
+import { escapeString, generateStep, type GenerateStepOpts } from './codegen.js';
+import { buildRemovalEdit } from './cst-helpers.js';
 import { getNodeIndent } from './indent.js';
 import type { TextEdit } from './text-edit.js';
 import { checkStyle, InvalidWriteError } from './write-checks.js';
@@ -61,7 +62,9 @@ function isDescendant(fqn: string, ancestor: string): boolean {
  * `navigateTo` that is not a dynamic view; a body string that is not a
  * string; a style value as `checkStyle` rejects it.
  *
- * @param field - The option holding the step: `step`, `steps[i]`
+ * @param field   - The option holding the step: `step`, `steps[i]`, `patch`
+ * @param patched - Check only these fields (the fields a patch gives) —
+ *                  and D38 on the whole step; by default every field
  */
 export function checkViewStep(
   view: ViewDeclaration,
@@ -69,12 +72,16 @@ export function checkViewStep(
   resolver: ViewReferenceResolver,
   workspace: WorkspaceIndex,
   field: string,
+  patched?: ReadonlySet<string>,
 ): Omit<GenerateStepOpts, 'indent'> {
+  const checks = (key: string): boolean => patched === undefined || patched.has(key);
   if (typeof step !== 'object' || step === null) {
     throw new InvalidWriteError(field, `expected a step { source, target, ... }, got ${JSON.stringify(step)}`);
   }
-  const endpoint = (key: 'source' | 'target'): string => {
+  const endpoint = (key: 'source' | 'target'): string | undefined => {
     const text: unknown = step[key];
+    if (!checks('source') && !checks('target')) return undefined;
+    if (!checks(key) && typeof text === 'string') return resolver.resolveElementText(view, text);
     if (typeof text !== 'string' || !isReferenceForm(text)) {
       throw new InvalidWriteError(`${field}.${key}`, `${JSON.stringify(text)} is not an element reference: expected LikeC4 identifiers joined by '.' (e.g. app.api)`);
     }
@@ -89,7 +96,7 @@ export function checkViewStep(
   };
   const source = endpoint('source');
   const target = endpoint('target');
-  if (isDescendant(source, target) || isDescendant(target, source)) {
+  if (source !== undefined && target !== undefined && (isDescendant(source, target) || isDescendant(target, source))) {
     throw new InvalidWriteError(
       `${field}.target`,
       `'${step.target}' (${target}) and '${step.source}' (${source}) are a parent and its descendant; LikeC4 rejects such a step (Invalid parent-child relationship)`,
@@ -105,10 +112,10 @@ export function checkViewStep(
     throw new InvalidWriteError(`${field}.kindForm`, `${JSON.stringify(step.kindForm)} is not a kind form: expected bracket or dot`);
   }
   if (step.kind !== undefined) {
-    if (typeof step.kind !== 'string' || !isLikeC4Id(step.kind)) {
+    if (checks('kind') && (typeof step.kind !== 'string' || !isLikeC4Id(step.kind))) {
       throw new InvalidWriteError(`${field}.kind`, `${JSON.stringify(step.kind)} is not a relationship kind name`);
     }
-    if (!resolver.isRelationshipKind(step.kind)) {
+    if (checks('kind') && !resolver.isRelationshipKind(step.kind)) {
       throw new InvalidWriteError(
         `${field}.kind`,
         `relationship kind '${step.kind}' is not declared by a specification of the loaded files (\`specification { relationship ${step.kind} }\`)`,
@@ -116,12 +123,12 @@ export function checkViewStep(
     }
     if (direction === 'backward') {
       throw new InvalidWriteError(
-        `${field}.kind`,
+        patched === undefined || patched.has('kind') ? `${field}.kind` : `${field}.direction`,
         `a backward step cannot have a relationship kind: LikeC4 has no connector for both (write it forward, or without the kind)`,
       );
     }
   }
-  if (step.navigateTo !== undefined) {
+  if (step.navigateTo !== undefined && checks('navigateTo')) {
     if (typeof step.navigateTo !== 'string' || !isLikeC4Id(step.navigateTo)) {
       throw new InvalidWriteError(`${field}.navigateTo`, `${JSON.stringify(step.navigateTo)} is not a view id`);
     }
@@ -130,12 +137,12 @@ export function checkViewStep(
     }
   }
   for (const key of STRING_FIELDS) {
-    if (step[key] !== undefined && typeof step[key] !== 'string') {
+    if (checks(key) && step[key] !== undefined && typeof step[key] !== 'string') {
       throw new InvalidWriteError(`${field}.${key}`, `${JSON.stringify(step[key])} is not a string`);
     }
   }
   const style = Object.fromEntries(STYLE_FIELDS.flatMap((key) => (step[key] === undefined ? [] : [[key, step[key]]])));
-  checkStyle(style, 'relationship', workspace, field);
+  checkStyle(Object.fromEntries(Object.entries(style).filter(([key]) => checks(key))), 'relationship', workspace, field);
 
   return {
     source: step.source,
@@ -244,4 +251,213 @@ export function insertStepEdits(
 /** The text of a single step statement at `indent`. */
 export function stepText(fields: Omit<GenerateStepOpts, 'indent'>): (indent: string) => string {
   return (indent) => generateStep({ indent, ...fields });
+}
+
+/**
+ * Patch of `LikeC4Mutator.updateViewStep` (US-10): each field given
+ * replaces the step's value; `null` removes an optional one (`kind`,
+ * `title`, a body string, `navigateTo`, a style field).  `source`,
+ * `target` and `direction` are meant as for {@link ViewStepSpec} (D36).
+ */
+export interface ViewStepPatch {
+  source?: string;
+  target?: string;
+  direction?: 'forward' | 'backward';
+  kind?: string | null;
+  kindForm?: 'bracket' | 'dot';
+  title?: string | null;
+  description?: string | null;
+  technology?: string | null;
+  notes?: string | null;
+  notation?: string | null;
+  navigateTo?: string | null;
+  color?: string | null;
+  line?: string | null;
+  head?: string | null;
+  tail?: string | null;
+}
+
+/** Fields of a chain segment a patch may change (D31). */
+const SEGMENT_FIELDS: ReadonlySet<string> = new Set([
+  'kind',
+  'kindForm',
+  'title',
+  'description',
+  'technology',
+  'notes',
+  'notation',
+  'navigateTo',
+  'color',
+  'line',
+  'head',
+  'tail',
+]);
+
+/** Body keys of a step, as the grammar writes them. */
+const BODY_KEYS = ['description', 'technology', 'notes', 'notation', 'navigateTo', 'color', 'line', 'head', 'tail'] as const;
+type BodyKey = (typeof BODY_KEYS)[number];
+
+/** A CST node, as far as a step patch reads it. */
+interface StepCst {
+  offset: number;
+  end: number;
+  text: string;
+  hidden?: boolean;
+  content?: StepCst[];
+}
+
+/** The leaves of `node`, hidden ones (comments) left out. */
+function tokens(node: StepCst): StepCst[] {
+  return node.content ? node.content.flatMap(tokens) : node.hidden ? [] : [node];
+}
+
+/** The step a segment node holds, as written, with the CST it needs. */
+export interface WrittenStep {
+  node: ViewAstNode;
+  /** The left reference as written; undefined for a later chain segment (its source is the previous segment) */
+  left?: ViewAstNode;
+  right: ViewAstNode;
+  backward: boolean;
+  kind?: string;
+  kindForm?: 'bracket' | 'dot';
+  title?: string;
+}
+
+/** The step written in the segment node `node` (`Step` or `StepSeries`). */
+export function writtenStep(node: ViewAstNode): WrittenStep {
+  const later = node.$type === 'StepSeries';
+  const dot = node.dotKind as ViewAstNode | undefined;
+  const kind = ((node.kind as { $refText?: string } | undefined)?.$refText ?? (dot?.kind as { $refText?: string } | undefined)?.$refText) || undefined;
+  return {
+    node,
+    ...(!later && { left: node.source as ViewAstNode }),
+    right: node.target as ViewAstNode,
+    backward: node.isBackward === true,
+    ...(kind !== undefined && { kind, kindForm: dot ? 'dot' : 'bracket' }),
+    ...(typeof node.title === 'string' && { title: node.title }),
+  };
+}
+
+/** The connector of a step as the grammar writes it. */
+function connector(backward: boolean, kind: string | undefined, form: 'bracket' | 'dot'): string {
+  if (backward) return '<-';
+  if (kind === undefined) return '->';
+  return form === 'dot' ? `.${kind}` : `-[${kind}]->`;
+}
+
+/** The text of a body property `key` with `value`. */
+function bodyLine(key: BodyKey, value: string): string {
+  if (key === 'navigateTo' || STYLE_FIELDS.includes(key as (typeof STYLE_FIELDS)[number])) return `${key} ${value}`;
+  return `${key} '${escapeString(value)}'`;
+}
+
+/** The result of {@link updateStepEdits}: the edits and the AST nodes they replace. */
+export interface StepUpdate {
+  edits: TextEdit[];
+  /** Nodes whose text the edits replace or remove (their references do not survive) */
+  removed: Set<object>;
+}
+
+/**
+ * The edits that apply `patch` to the step `segment` (a `Step` or a later
+ * chain segment `StepSeries`), whose final fields `final` the caller has
+ * checked: the left and right references, the connector and the inline
+ * title are replaced token by token when they change, body properties per
+ * field (`null` removes one, a new one is added at the end of the body, a
+ * missing body is created).  Everything else — comments included — is kept.
+ */
+export function updateStepEdits(
+  doc: ParsedDocument,
+  segment: ViewAstNode,
+  patch: ViewStepPatch,
+  final: { left?: string; right: string; backward: boolean; kind?: string; kindForm: 'bracket' | 'dot' },
+): StepUpdate {
+  const { fullText } = doc;
+  const step = writtenStep(segment);
+  const edits: TextEdit[] = [];
+  const removed = new Set<object>();
+  const span = (node: ViewAstNode): { offset: number; end: number } => node.$cstNode!;
+  const replace = (node: ViewAstNode, text: string): void => {
+    const { offset, end } = span(node);
+    if (fullText.slice(offset, end) === text) return;
+    edits.push({ offset, end, newText: text });
+    removed.add(node);
+  };
+
+  if (step.left && final.left !== undefined) replace(step.left, final.left);
+  replace(step.right, final.right);
+
+  // The connector: the tokens between the left side (the left reference,
+  // or the previous segment) and the right reference.
+  const leftEnd = span((segment.source as ViewAstNode | undefined) ?? step.right).end;
+  const rightStart = span(step.right).offset;
+  const own = tokens(segment.$cstNode as unknown as StepCst);
+  const between = own.filter((t) => t.offset >= leftEnd && t.end <= rightStart);
+  const wanted = connector(final.backward, final.kind, final.kindForm);
+  const current = connector(step.backward, step.kind, step.kindForm ?? 'bracket');
+  if (wanted !== current && between.length > 0) {
+    edits.push({ offset: between[0]!.offset, end: between.at(-1)!.end, newText: wanted });
+  }
+
+  // The inline title: the string token after the right reference.
+  const custom = segment.custom as (ViewAstNode & { props?: ViewAstNode[] }) | undefined;
+  const bodyStart = custom ? span(custom).offset : span(segment).end;
+  const titleToken = own.find((t) => t.offset >= span(step.right).end && t.end <= bodyStart && /^['"]/.test(t.text));
+  if (patch.title !== undefined) {
+    if (patch.title === null) {
+      if (titleToken) {
+        let start = titleToken.offset;
+        while (start > 0 && (fullText[start - 1] === ' ' || fullText[start - 1] === '\t')) start--;
+        edits.push({ offset: start, end: titleToken.end, newText: '' });
+      }
+    } else {
+      const text = `'${escapeString(patch.title)}'`;
+      if (titleToken) edits.push({ offset: titleToken.offset, end: titleToken.end, newText: text });
+      else edits.push({ offset: span(step.right).end, end: span(step.right).end, newText: ` ${text}` });
+    }
+  }
+
+  // Body properties, per field.
+  const indent = getNodeIndent(segment, fullText);
+  const added: string[] = [];
+  const props = custom?.props ?? [];
+  for (const key of BODY_KEYS) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    const existing = props.filter((p) => p.key === key);
+    if (value === null) {
+      for (const prop of existing) {
+        const { offset, end, newText } = buildRemovalEdit(fullText, span(prop).offset, span(prop).end);
+        edits.push({ offset, end, newText });
+        removed.add(prop);
+      }
+    } else if (existing.length > 0) {
+      for (const prop of existing) replace(prop, bodyLine(key, value));
+    } else {
+      added.push(bodyLine(key, value));
+    }
+  }
+  if (added.length === 0) return { edits, removed };
+  if (!custom) {
+    // After the title (kept or replaced), else after the right reference —
+    // where a title this patch adds goes too, merged before the body.
+    const at = titleToken && patch.title !== null ? titleToken.end : span(step.right).end;
+    const lines = added.map((line) => `${indent}  ${line}\n`).join('');
+    edits.push({ offset: at, end: at, newText: ` {\n${lines}${indent}}` });
+    return { edits: mergeAtSameOffset(edits), removed };
+  }
+  const inserts = BodyInsertions.forBlock(span(custom) as Parameters<typeof BodyInsertions.forBlock>[0], fullText, indent);
+  inserts.append(added.map((line) => `${inserts.innerIndent}${line}\n`).join(''));
+  return { edits: inserts.apply(edits), removed };
+}
+
+/** Zero-width edits at one offset joined into one, in the order given. */
+function mergeAtSameOffset(edits: TextEdit[]): TextEdit[] {
+  const result: TextEdit[] = [];
+  for (const edit of edits) {
+    const last = result.find((e) => e.offset === edit.offset && e.end === edit.offset && edit.end === edit.offset);
+    if (last) last.newText += edit.newText;
+    else result.push({ ...edit });
+  }
+  return result;
 }

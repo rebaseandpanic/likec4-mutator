@@ -1429,6 +1429,17 @@ mutator.addViewStep('checkout', { source: 'web', target: 'api', direction: 'back
 - **Where.** `opts.path` is the boundary the step is written at: `[i]` before the top-level step statement `i` (`[n]` after the last one), `[i, j]` before statement `j` of the `par` block at `i` (`[i, n]` at its end). Without it the step goes right after the last top-level step statement. A view declared without a body gets one.
 - **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an endpoint that does not resolve in the view's document — LikeC4 links step endpoints there: a name unique in that document, or a qualified one (`step.source`, `step.target`); a parent and its descendant (`step.target`; a step from an element to itself is valid); an undeclared kind, or a kind on a backward step, which no connector writes (`step.kind`); a `navigateTo` that is not a dynamic view (`step.navigateTo`); an invalid style value (`step.color`, ...); a path that does not exist or leads into a single step, a chain or a block such as `opt` (`path`).
 
+`updateViewStep(id, address, patch)` patches the step at `address` in place and returns `{ changedFiles }`: a single step `{ path, text? }`, or one segment of a chain `{ path, segment, text? }` (as `getView` reports them). Each field of `patch` replaces the step's value, `null` removes an optional one (`kind`, `title`, a body string, `navigateTo`, a style field); only the tokens a field concerns are rewritten — the references, the connector, the title, one body property — and the rest of the step, comments included, is kept.
+
+```typescript
+mutator.updateViewStep('checkout', { path: [0] }, { title: 'Pays', technology: null, color: 'green' });
+mutator.updateViewStep('checkout', { path: [1] }, { direction: 'backward', kind: null }); // api <- web
+```
+
+- On a segment of a chain only the title, the kind, body strings, `navigateTo` and style change; changing its endpoints or direction is rejected (`patch.source`, `patch.target`, `patch.direction`), as they belong to the chain. A segment LikeC4 reads as returning stays returning.
+- A step that would end up backward with a kind is rejected (`patch.kind`, or `patch.direction` when the patch turns a kind-bearing step backward) unless the same patch removes the kind or makes the step forward.
+- The patched values are checked as `addViewStep` checks them, on `patch.<field>`; a chain addressed without a segment is rejected on `segment`, a `text` that does not match on `text`, a path to something other than a step or chain on `path`.
+
 #### Removing views
 
 `removeView(id)` removes the declaration of the named view `id` and nothing else, and returns `{ changedFiles }`. A manual layout snapshot of the view (a file kept by LikeC4's layout tooling) is not touched.

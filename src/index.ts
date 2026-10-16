@@ -68,6 +68,7 @@ export type {
   AddElementOpts,
   AddViewOpts,
   UpdateViewPatch,
+  ViewStepPatch,
   ViewStepSpec,
   DeploymentExtendSelector,
   DeploymentRelationshipSelector,

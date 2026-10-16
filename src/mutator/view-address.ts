@@ -95,14 +95,16 @@ export interface AddressedStep {
  * are not statements.
  *
  * @param field - The address option (`address`, `from`): failures name
- *                `<field>`, `<field>.path`, `<field>.segment` or `<field>.text`
+ *                `<field>`, `<field>.path`, `<field>.segment` or `<field>.text`;
+ *                `''` names `path`, `segment` and `text` alone
  */
 export function stepAt(view: ViewDeclaration, address: ViewStepAddress, field: string): AddressedStep {
   if (typeof address !== 'object' || address === null) {
     throw new InvalidWriteError(field, `expected a step address { path, segment?, text? }, got ${quote(address)}`);
   }
   const { path, segment, text } = address;
-  const pathField = `${field}.path`;
+  const sub = (key: string): string => (field === '' ? key : `${field}.${key}`);
+  const pathField = sub('path');
   if (view.type !== 'dynamic') {
     throw new InvalidWriteError(pathField, `view '${view.id}' is a ${view.type} view; only dynamic views have steps`);
   }
@@ -132,10 +134,10 @@ export function stepAt(view: ViewDeclaration, address: ViewStepAddress, field: s
   let addressed: ViewStepSegment | undefined;
   if (segment !== undefined) {
     if (statement.form !== 'chain') {
-      throw new InvalidWriteError(`${field}.segment`, `${quote(segment)}: the statement at ${quote(path)} is not a chain; only chain segments are addressed by number`);
+      throw new InvalidWriteError(sub('segment'), `${quote(segment)}: the statement at ${quote(path)} is not a chain; only chain segments are addressed by number`);
     }
     if (!Number.isInteger(segment) || segment < 0 || segment >= statement.segments.length) {
-      throw new InvalidWriteError(`${field}.segment`, `${quote(segment)} is not a segment of the chain at ${quote(path)}, which has ${statement.segments.length}`);
+      throw new InvalidWriteError(sub('segment'), `${quote(segment)} is not a segment of the chain at ${quote(path)}, which has ${statement.segments.length}`);
     }
     addressed = statement.segments[segment]!;
   }
@@ -143,7 +145,7 @@ export function stepAt(view: ViewDeclaration, address: ViewStepAddress, field: s
     const actual = addressed ? stepSegmentText(addressed) : (statement.node.$cstNode?.text ?? '');
     if (text !== actual) {
       throw new InvalidWriteError(
-        `${field}.text`,
+        sub('text'),
         `${quote(text)} does not match the ${addressed ? `segment ${segment} of the chain` : 'step statement'} at ${quote(path)}, which reads ${quote(actual)}`,
       );
     }

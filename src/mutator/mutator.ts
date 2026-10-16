@@ -51,6 +51,7 @@ import type {
   SpecificationInfo,
   ViewInfo,
   ViewRuleAddress,
+  ViewStepAddress,
   ViewType,
   ViewWriteResult,
 } from '../query/types.js';
@@ -133,8 +134,17 @@ import {
   type GenerateViewOpts,
   type UpdateViewPatch,
 } from './view-ops.js';
-import { namedView, ruleAt } from './view-address.js';
-import { checkViewStep, insertStepEdits, stepInsertion, stepText, type ViewStepSpec } from './step-ops.js';
+import { namedView, ruleAt, stepAt } from './view-address.js';
+import {
+  checkViewStep,
+  insertStepEdits,
+  stepInsertion,
+  stepText,
+  updateStepEdits,
+  writtenStep,
+  type ViewStepPatch,
+  type ViewStepSpec,
+} from './step-ops.js';
 import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
@@ -170,7 +180,7 @@ export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
  */
 export type AddViewOpts = Omit<GenerateViewOpts, 'indent'> & { file?: string };
 export type { UpdateViewPatch };
-export type { ViewStepSpec };
+export type { ViewStepPatch, ViewStepSpec };
 
 /**
  * Result of {@link LikeC4Mutator.removeElement}.  Lists every relationship
@@ -1274,6 +1284,98 @@ export class LikeC4Mutator {
     const fields = checkViewStep(view, step, this.viewResolver(), this.workspace, 'step');
     const file = this.viewFile(view);
     this.writeViewEdits(file, insertStepEdits(this.document(file), view, insertion, stepText(fields)), new Set(), 'step');
+    return { changedFiles: [file] };
+  }
+
+  /**
+   * Patch the step at `address` of the named dynamic view `id` in place
+   * (US-10): a single step (`{ path, text? }`) or one segment of a chain
+   * (`{ path, segment, text? }`).  Each field of `patch` replaces the step's
+   * value — `null` removes an optional one (`kind`, `title`, a body string,
+   * `navigateTo`, a style field) — and only the tokens it concerns are
+   * rewritten: the references, the connector, the inline title, one body
+   * property.  `source`, `target` and `direction` are meant as for
+   * {@link LikeC4Mutator.addViewStep}; turning a step backward writes it
+   * `target <- source`.
+   *
+   * On a segment of a chain only the title, the kind, body strings,
+   * `navigateTo` and style change: its endpoints and direction belong to the
+   * chain (D31).  A step that would end up backward with a kind is rejected
+   * (D38), unless the same patch removes the kind or makes it forward.
+   *
+   * Rejected, with nothing changed: `id` as for the other view writes; a
+   * path that is not a step or chain, or a `text` that does not match
+   * (`path`, `segment`, `text`); a patched value as `addViewStep` rejects
+   * it, on `patch.<field>`; an endpoint or direction change on a chain
+   * segment (`patch.<field>`).
+   *
+   * @returns `{ changedFiles }`: the view's file, or none when nothing changed
+   */
+  updateViewStep(id: string, address: ViewStepAddress, patch: ViewStepPatch): ViewWriteResult {
+    const view = namedView(this.views, id);
+    const { statement, segment } = stepAt(view, address, '');
+    if (statement.form !== 'step' && statement.form !== 'chain') {
+      throw new InvalidWriteError('path', `${JSON.stringify(address.path)} is a ${statement.form === 'parallel' ? 'par' : (statement.keyword ?? 'stage-6')} block, not a step`);
+    }
+    if (statement.form === 'chain' && !segment) {
+      throw new InvalidWriteError('segment', `${JSON.stringify(address.path)} is a chain of ${statement.segments.length} segments: address one segment by its number`);
+    }
+    if (typeof patch !== 'object' || patch === null) {
+      throw new InvalidWriteError('patch', `expected an object of step fields, got ${JSON.stringify(patch)}`);
+    }
+    const node = (segment ?? statement.segments[0]!).node;
+    const step = writtenStep(node);
+    const text = (ref: { $cstNode?: { text?: string } } | undefined): string => ref?.$cstNode?.text ?? '';
+    const left = step.left ? text(step.left) : undefined;
+    const right = text(step.right);
+    // The current interaction in LikeC4's sense; a later chain segment goes from the previous one's target.
+    const previous = node.source as { target?: { $cstNode?: { text?: string } } } | undefined;
+    const source = left === undefined ? text(previous?.target) : step.backward ? right : left;
+    const target = left === undefined ? right : step.backward ? left : right;
+    const direction = step.backward ? 'backward' : 'forward';
+
+    if (statement.form === 'chain') {
+      const changed = { source: patch.source !== undefined && patch.source !== source, target: patch.target !== undefined && patch.target !== target, direction: patch.direction !== undefined && patch.direction !== direction };
+      for (const key of ['source', 'target', 'direction'] as const) {
+        if (changed[key]) {
+          throw new InvalidWriteError(
+            `patch.${key}`,
+            `segment ${segment!.segment} belongs to the chain at ${JSON.stringify(address.path)}: its endpoints and direction are the chain's; only its title, kind, body strings, navigateTo and style can change`,
+          );
+        }
+      }
+    }
+    const final = {
+      source: patch.source ?? source,
+      target: patch.target ?? target,
+      direction: patch.direction ?? direction,
+      kind: patch.kind === null ? undefined : (patch.kind ?? step.kind),
+      kindForm: patch.kindForm ?? step.kindForm ?? 'bracket',
+    } as const;
+    if (patch.kindForm !== undefined && final.kind === undefined) {
+      throw new InvalidWriteError('patch.kindForm', 'the step has no kind to write in that form');
+    }
+    const patched = new Set(Object.keys(patch).filter((key) => (patch as Record<string, unknown>)[key] !== undefined));
+    const values = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== null && value !== undefined));
+    checkViewStep(
+      view,
+      { ...values, source: final.source, target: final.target, direction: final.direction, ...(final.kind !== undefined && { kind: final.kind, kindForm: final.kindForm }) },
+      this.viewResolver(),
+      this.workspace,
+      'patch',
+      patched,
+    );
+    const backward = final.direction === 'backward';
+    const update = updateStepEdits(this.document(this.viewFile(view)), node, patch, {
+      ...(left !== undefined && { left: backward ? final.target : final.source }),
+      right: left === undefined ? right : backward ? final.source : final.target,
+      backward: left !== undefined && backward,
+      ...(final.kind !== undefined && { kind: final.kind }),
+      kindForm: final.kindForm,
+    });
+    const file = this.viewFile(view);
+    if (update.edits.length === 0) return { changedFiles: [] };
+    this.writeViewEdits(file, update.edits, update.removed, 'patch');
     return { changedFiles: [file] };
   }
 

@@ -257,3 +257,26 @@ export async function expectStepSequence(
 ): Promise<void> {
   expect(await stepSequence(after, id)).toEqual(edit(await stepSequence(before, id)));
 }
+
+/**
+ * LINK options for a write that changed `file` only in the lines between a
+ * common head and tail of its text before and after: references written in
+ * those lines are the write's own (edited before, inserted after).  The
+ * range is computed from the literal texts, as INV-5's Untouched is.
+ */
+export function editedLines(before: Record<string, string>, after: Record<string, string>, file: string): LinkOptions {
+  const a = before[file]!.split('\n');
+  const b = after[file]!.split('\n');
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const within = (at: string, last: number): boolean => {
+    const [name, line] = at.split(':');
+    return name === file && Number(line) > head && Number(line) <= last;
+  };
+  return {
+    editedBefore: (r) => within(r.at, a.length - tail),
+    insertedAfter: (r) => within(r.at, b.length - tail),
+  };
+}
