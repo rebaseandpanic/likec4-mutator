@@ -378,6 +378,8 @@ const WITH_CASES: CheckCase[] = [
   { name: 'a file:// icon URI', id: 'plain', rejected: { kind: 'include', expression: 'app.api with { icon file:///tmp/icon.svg }' }, accepted: { kind: 'include', expression: 'app.api with { icon https://example.com/icon.svg }' } },
   { name: 'an opacity of 150%', id: 'plain', rejected: { kind: 'include', expression: 'app.api with { opacity 150% }' }, accepted: { kind: 'include', expression: 'app.api with { opacity 40% }' } },
   { name: 'an undeclared custom color on a relation with', id: 'plain', rejected: { kind: 'include', expression: 'app.api -> app.db with { color nocolor }' }, accepted: { kind: 'include', expression: 'app.api -> app.db with { color brand }' } },
+  // Review C1: an icon given twice in one body, against one icon.
+  { name: 'an icon given twice', id: 'plain', rejected: { kind: 'include', expression: 'app.api with { icon tech:react icon https://example.com/b.svg }' }, accepted: { kind: 'include', expression: 'app.api with { icon tech:react }' } },
 ];
 
 /** The declaration of `id` with its first rule replaced by `rule`, or with `rule` added at the default place. */
@@ -414,6 +416,7 @@ describe('the with values rejected in row 71 are what LikeC4 reports (OP)', () =
     ['app.api with { icon file:///tmp/icon.svg }', 'Icon URI must not start with file://'],
     ['app.api with { opacity 150% }', 'Value ignored, must be between 0% and 100%'],
     ['app.api -> app.db with { color nocolor }', "Could not resolve reference to CustomColor named 'nocolor'."],
+    ['app.api with { icon tech:react icon https://example.com/b.svg }', 'Icon must be defined once'],
   ])('%s', async (item, diagnostic) => {
     const { diagnostics } = await buildLikeC4Model(workspace({ plain: `  view plain {\n    include ${item}\n  }\n` }));
     expect(diagnostics.some((d) => d.endsWith(diagnostic)), diagnostics.join('\n')).toBe(true);

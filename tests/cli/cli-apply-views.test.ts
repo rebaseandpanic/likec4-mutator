@@ -327,6 +327,9 @@ describe('library rejections through apply are atomic (row 91)', SLOW, () => {
     ['a library icon that does not exist through addViewRule', { op: 'addViewRule', id: 'landscape', rule: { kind: 'include', expression: 'customer with { icon tech:no-such-icon }' } }, 'mutations[1].rule.expression'],
     ['an undeclared custom color on a relation through replaceViewRule', { op: 'replaceViewRule', id: 'landscape', address: { index: 0 }, rule: { kind: 'include', expression: 'customer -> shop.storefront with { color nocolor }' } }, 'mutations[1].rule.expression'],
     ['a guard mismatch through updateViewStep', { op: 'updateViewStep', id: 'orderFlow', address: { path: [0], text: 'x' }, patch: { title: 'x' } }, 'mutations[1].address.text'],
+    // Review C1: an icon given twice in one with body.
+    ['an icon given twice through addViewRule', { op: 'addViewRule', id: 'landscape', rule: { kind: 'include', expression: 'customer with { icon tech:react icon https://example.com/b.svg }' } }, 'mutations[1].rule.expression'],
+    ['an icon given twice through addView', { op: 'addView', id: 'x', type: 'element', includes: ['customer with { icon tech:react icon tech:vue }'] }, 'mutations[1].includes[0]'],
     // Review C2: an expression that leaves its rule for a block-level style.
     ['an include escaping into a block-level style through addView', { op: 'addView', id: 'x', type: 'element', includes: ['customer\n}\nstyle * {\ncolor red'] }, 'mutations[1].includes[0]'],
     ['an expression escaping into a block-level style through addViewRule', { op: 'addViewRule', id: 'landscape', rule: { kind: 'include', expression: 'customer\n}\nstyle * {\ncolor red' } }, 'mutations[1].rule.expression'],

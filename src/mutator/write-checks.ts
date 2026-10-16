@@ -421,6 +421,8 @@ interface RuleContents {
   named: Array<{ role: Exclude<ReferenceRole, 'style'>; text: string }>;
   /** Style properties of `with { … }` bodies, with the style class of their subject */
   styles: Array<{ property: ParsedAstNode; target: 'element' | 'relationship' }>;
+  /** The `with { … }` bodies themselves */
+  bodies: ParsedAstNode[];
 }
 
 /**
@@ -450,7 +452,8 @@ interface RuleContents {
  *     a deployment node kind);
  *  5. `with` properties — each style property passes the checks of
  *     {@link checkStyle} for the subject's class (declared custom colors,
- *     library icons, no `file://` icon URI, opacity within 0%..100%).
+ *     library icons, no `file://` icon URI, opacity within 0%..100%), and a
+ *     body gives an icon at most once.
  *
  * The expression is written as given; nothing is regenerated.
  *
@@ -494,7 +497,7 @@ export function checkViewRule(
   // (2) Structure
   for (const item of items) checkRuleItemStructure(item, kind, place.type, fail);
 
-  const contents: RuleContents = { refs: [], named: [], styles: [] };
+  const contents: RuleContents = { refs: [], named: [], styles: [], bodies: [] };
   for (const item of items) collectRuleContents(item, false, contents, fail);
 
   // (3) References
@@ -547,7 +550,13 @@ export function checkViewRule(
     }
   }
 
-  // (5) `with` properties
+  // (5) `with` properties: the property checks of LikeC4 1.59.4
+  // (`property-checks.ts`), the one on the body included: an icon is given
+  // once (`Icon must be defined once`).
+  for (const body of contents.bodies) {
+    const icons = ((body.props ?? []) as ParsedAstNode[]).filter((p) => p.$type === 'IconProperty');
+    if (icons.length > 1) fail("gives an icon more than once in one 'with' body; LikeC4 reports: Icon must be defined once");
+  }
   for (const { property, target } of contents.styles) {
     const key = String(property.key);
     if (!STYLE_FIELDS[target].has(key)) continue;
@@ -591,6 +600,7 @@ function collectRuleContents(
     return;
   }
   if (node.$type === 'CustomElementProperties' || node.$type === 'CustomRelationProperties') {
+    contents.bodies.push(node);
     const target = node.$type === 'CustomElementProperties' ? 'element' : 'relationship';
     for (const property of (node.props ?? []) as ParsedAstNode[]) contents.styles.push({ property, target });
   }

@@ -488,6 +488,8 @@ describe('with properties through includes (row 54)', SLOW, () => {
     { name: 'a file:// icon URI', item: 'app.api with { icon file:///tmp/icon.svg }', diagnostic: 'Icon URI must not start with file://' },
     { name: 'an opacity of 150%', item: 'app.api with { opacity 150% }', diagnostic: 'Value ignored, must be between 0% and 100%' },
     { name: 'an undeclared custom color on a relation', item: 'app.api -> app.db with { color nocolor }', diagnostic: "Could not resolve reference to CustomColor named 'nocolor'." },
+    // Review C1: a body-level check of LikeC4, not one of a single value.
+    { name: 'an icon given twice', item: 'app.api with {\n      icon tech:react\n      icon https://example.com/b.svg\n    }', diagnostic: 'Icon must be defined once' },
   ])('rejects $name on includes[0]', async ({ item, diagnostic }) => {
     // OP: LikeC4 reports the value on the literal text.
     const { diagnostics } = await buildLikeC4Model(withView(`  view probe {\n    include ${item}\n  }\n`));
