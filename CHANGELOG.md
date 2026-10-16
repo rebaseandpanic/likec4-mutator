@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.10.0] - 2026-10-16
+
+Read and edit views (lc4m-15.29): list views with their properties, rules and dynamic view steps; update and remove views; add, replace and remove rules; add, update, move and remove steps and `par` blocks. See [Views](README.md#views) in the README.
+
+### Breaking
+- `addView` checks its `includes` items as LikeC4 reads them in the new view, as the new rule writes do; before, an item was only checked to form exactly one `include` rule. Rejected now, on `includes[i]`, with nothing written:
+  - a reference that does not resolve in the view's scope (its `of` element or its `extends` parent's, its document; in a deployment view deployment nodes and instances, a logical element not accepted in an `include`), an undeclared kind, tag or relationship kind;
+  - a `with { }` value LikeC4 reports: an undeclared custom color, a library icon that does not exist, a `file://` icon URI, an opacity outside 0%..100%, an icon given twice in one body (LikeC4: `Icon must be defined once`), a `navigateTo` that names no view (from a relation's `with`, no dynamic view);
+  - items LikeC4 drops without an error: a relation predicate in a dynamic view, `with` on a wildcard, `element.kind` or `element.tag` in a dynamic view, `with` on `element.kind` / `element.tag`; a bare wildcard, kind or tag predicate in a dynamic view stays accepted (it adds elements no step names);
+  - an item ending with a comma, and one whose text reaches past its rule (closing the view and opening a block-level `style` or a `global` block). The `autoLayout` value is confined to its rule the same way.
+- `addView` without `file` writes into the first `views` block of the first file in LikeC4's document order that has one, instead of the first such file in load order; the two differ only when the files were loaded in another order than LikeC4 sorts them.
+- `addView` creates a `views` block when there is none to write into — at the end of its `file`, or of the first file in LikeC4's order with a `model` block, else of the first file — instead of throwing `No file with a views block found`.
+- `addView` reports an edit the file's parser refuses as an `InvalidWriteError` on `file` instead of a plain `Error`.
+
+### Added
+- Reads: `listViews({ type?, file? })` and `getView(id)`. A view reports its own values as LikeC4 parses the declaration (no `extends` inheritance): id, type, `of` / `extends` (as written and resolved), title, description, tags, links, folder, file and source range, `inModel`; its rules in source order with their index, text and structure (predicate items with `where` and `with`, `autoLayout`, the stage-6 rules by kind); for a dynamic view its step statements (steps, chains, `par` blocks, opaque stage-6 blocks) with resolved endpoints, direction as LikeC4 parses it and the position in LikeC4's step sequence. Unnamed views are read with `id: null`; views LikeC4 generates are not listed.
+- `addView` options `description`, `extends` (an element view declared once with a body, no `extends` cycle, not together with `target`) and `file`.
+- Writes, each returning `{ changedFiles }`: `updateView` (title, description, tags, links, `autoLayout`); `addViewRule`, `replaceViewRule`, `removeViewRule` (a rule given as kind and expression text, addressed by `{ index, text? }`); `addViewStep`, `updateViewStep`, `moveViewStep`, `removeViewStep`, `addViewParallel` (steps given by structured fields, addressed by `{ path, segment?, text? }`; moves and removals also return `removedParallelBlocks`); `removeView`, rejected while another view, a step or a relationship refers to the view. Every write throws `InvalidWriteError` naming the option and changes nothing when rejected, also when the edited file would not parse; the writes that add or remove text are rejected when a surviving reference would link elsewhere; view writes are allowed while other files have syntax errors.
+- A `par` block that a move or removal empties is removed with it; one left giving LikeC4 no step is rejected, as is a new block that would give none.
+- `apply`: `addView` gains `autoLayout` (a string, or `null` for none), `description`, `extends` and `file`; new operations `updateView`, `addViewRule`, `replaceViewRule`, `removeViewRule`, `removeView`, `addViewStep`, `updateViewStep`, `moveViewStep`, `removeViewStep`, `addViewParallel` with the same fields, validated as a whole before anything is written; errors name `mutations[i].<path>`.
+- Exported types of the new API: `ViewInfo` and the rule, predicate, step and address types (`ViewRuleInfo`, `ViewPredicateItem`, `ViewStepStatementInfo`, `ViewStepInfo`, `ViewRuleAddress`, `ViewStepAddress`, ...), `ViewWriteResult`, `ViewStepWriteResult`, `UpdateViewPatch`, `ViewRuleText`, `ViewStepSpec`, `ViewStepPatch`, `LinkedTarget`, `DeploymentTarget`.
+
 ## [0.9.0] - 2026-10-12
 
 Read and write the deployment model (lc4m-15.28): deployment node kinds, nodes, instances, deployment relationships and `extend <node>` blocks. See [Deployment model](README.md#deployment-model) in the README.
