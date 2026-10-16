@@ -1,0 +1,13 @@
+emptySpec
+ diag: ["warn a.c4:2: Prefer one specification per document"]
+ validate: []
+rankSame
+ diag: []
+ validate: []
+rankOne
+ diag: []
+ validate: []
+emptyGroup
+ diag: []
+ validate: []
+ nodes: ["@gr1","a"]

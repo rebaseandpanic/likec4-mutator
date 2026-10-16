@@ -1,0 +1,34 @@
+
+=== shared kind name, element view
+diagnostics: []
+validate: []
+pick: ["a"]
+
+=== extend without kind title
+diagnostics: []
+validate: []
+pick: [{"title":"kt"}]
+
+=== extend with kind title
+diagnostics: ["warn a.c4:7: This extend does not match any relation (by source, kind, target, title, and directionality)"]
+validate: []
+pick: [{"title":"kt","tags":["t"]}]
+
+=== identical relationships
+diagnostics: []
+validate: []
+pick: 2
+
+=== include app.* before move
+diagnostics: []
+validate: []
+pick: ["app.api"]
+
+=== include app.* after move
+diagnostics: []
+validate: []
+pick: ["app"]
+
+=== views block style rules
+diagnostics: []
+validate: []
