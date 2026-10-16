@@ -450,3 +450,35 @@ describe('the rule operations address one named view (row 72)', () => {
     expectRejected(m, () => write(m, generated[0]!), 'id');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review C2: an expression that leaves its rule
+// ---------------------------------------------------------------------------
+
+describe('an expression that leaves its rule is rejected (review C2)', () => {
+  const ESCAPES = [
+    { name: 'into a block-level style', expression: 'app.api\n}\nstyle * {\ncolor red' },
+    { name: 'into a global style block', expression: 'app.api\n}\n}\nglobal {\nstyle loud * {\ncolor red\n}' },
+    { name: 'into a global style rule', expression: 'app.api\n    global style faded' },
+  ];
+
+  it.each(ESCAPES)('addViewRule rejects escaping $name on rule.expression', ({ expression }) => {
+    const m = LikeC4Mutator.fromFiles(BASE);
+    expectRejected(m, () => m.addViewRule('plain', { kind: 'include', expression }), 'rule.expression');
+  });
+
+  it.each(ESCAPES)('replaceViewRule rejects escaping $name on rule.expression', ({ expression }) => {
+    const m = LikeC4Mutator.fromFiles(BASE);
+    expectRejected(m, () => m.replaceViewRule('plain', { index: 0 }, { kind: 'include', expression }), 'rule.expression');
+  });
+
+  it.each(ESCAPES)('addView rejects an include escaping $name on includes[0]', ({ expression }) => {
+    const m = LikeC4Mutator.fromFiles(BASE);
+    expectRejected(m, () => m.addView({ id: 'fresh', type: 'element', includes: [expression] }), 'includes[0]');
+  });
+
+  it('updateView rejects an autoLayout escaping into a block-level style on autoLayout', () => {
+    const m = LikeC4Mutator.fromFiles(BASE);
+    expectRejected(m, () => m.updateView('main', { autoLayout: 'LeftRight\n}\nstyle * {\ncolor red' }), 'autoLayout');
+  });
+});

@@ -129,24 +129,25 @@ export interface ParsedAstNode {
  * `* exclude x` or `*\n autoLayout LeftRight`, which is valid LikeC4 but
  * would write more than the one rule asked for.  A comment after the
  * predicates (`* // every element`) is accepted: the rule is written on a
- * line of its own, so the comment ends with it.
+ * line of its own, so the comment ends with it.  Every token of the text
+ * must belong to the one rule: text that closes the probe view and opens a
+ * block-level `style` or a `global` block is rejected even where the wrapper
+ * still parses.
  */
 export function parseViewRule(
   kind: ViewRuleKeyword,
   expression: string,
   type: IncludeViewType,
 ): ParsedViewRule | undefined {
-  const source = `views {\n${VIEW_KEYWORD[type]} probe {\n${kind} ${expression}\n}\n}\n`;
+  const prefix = `views {\n${VIEW_KEYWORD[type]} probe {\n${kind} `;
+  const source = `${prefix}${expression}\n}\n}\n`;
   const result = getServices().likec4.parser.LangiumParser.parse(source);
   if (result.parserErrors.length > 0 || result.lexerErrors.length > 0) return undefined;
 
   const document = result.value as unknown as Record<string, unknown>;
-  for (const [key, value] of Object.entries(document)) {
-    if (key.startsWith('$') || key === 'views') continue;
-    if (Array.isArray(value) && value.length > 0) return undefined;
-  }
-  const blocks = document.views as ReadonlyArray<{ views?: ReadonlyArray<unknown> }> | undefined;
-  if (blocks?.length !== 1 || blocks[0]!.views?.length !== 1) return undefined;
+  if (!onlyBlock(document, 'views') || !emptyBlockStyles(document)) return undefined;
+  const blocks = document.views as ReadonlyArray<{ views?: ReadonlyArray<unknown> }>;
+  if (blocks[0]!.views?.length !== 1) return undefined;
 
   const view = blocks[0]!.views[0] as {
     body?: { rules?: ReadonlyArray<ParsedViewRule>; props?: unknown[]; steps?: unknown[] };
@@ -157,9 +158,33 @@ export function parseViewRule(
   if (rules.length !== 1) return undefined;
   const [rule] = rules;
   if (rule!.$type !== PREDICATE_RULE_TYPE[type]) return undefined;
+  if (!tokensWithin(document, prefix.length, prefix.length + expression.length, rule as unknown as { $cstNode?: CstNodeView })) {
+    return undefined;
+  }
   // A dynamic view has no `exclude` rule; its include rule has no `isInclude`.
   const include = type === 'dynamic' || rule!.isInclude !== false;
   return include === (kind === 'include') ? rule : undefined;
+}
+
+/** Whether the one `views` block of a probe `document` declares no block-level `style`. */
+function emptyBlockStyles(document: Record<string, unknown>): boolean {
+  const blocks = document.views as ReadonlyArray<{ styles?: ReadonlyArray<unknown> }> | undefined;
+  return (blocks ?? []).every((block) => (block.styles?.length ?? 0) === 0);
+}
+
+/**
+ * Whether every token of the probe `document` that lies in `[start, end)` —
+ * the text supplied by the caller — lies within `node`, comments aside:
+ * supplied text that the parser attaches elsewhere (a block-level style, a
+ * global block, another view) escaped the place it is written to.
+ */
+function tokensWithin(document: Record<string, unknown>, start: number, end: number, node: { $cstNode?: CstNodeView }): boolean {
+  const root = (document as { $cstNode?: CstNodeView }).$cstNode;
+  const own = node.$cstNode;
+  if (!root || !own) return false;
+  return cstLeaves(root)
+    .filter((leaf) => !leaf.hidden && leaf.offset >= start && leaf.end <= end)
+    .every((leaf) => leaf.offset >= own.offset && leaf.end <= own.end);
 }
 
 /**
@@ -270,14 +295,16 @@ export interface AutoLayoutValue {
  * own, so the comment ends with it.
  */
 export function parseAutoLayout(value: string): AutoLayoutValue | undefined {
-  const document = parseClean(`views {\nview probe {\nautoLayout ${value}\n}\n}\n`);
-  if (!document || !onlyBlock(document, 'views')) return undefined;
+  const prefix = 'views {\nview probe {\nautoLayout ';
+  const document = parseClean(`${prefix}${value}\n}\n}\n`);
+  if (!document || !onlyBlock(document, 'views') || !emptyBlockStyles(document)) return undefined;
   const views = (document.views as ReadonlyArray<{ views?: ReadonlyArray<unknown> }>)[0]!.views ?? [];
   if (views.length !== 1) return undefined;
   const body = (views[0] as { body?: { rules?: unknown[]; props?: unknown[] } }).body;
   if (!body || (body.props?.length ?? 0) > 0 || body.rules?.length !== 1) return undefined;
-  const rule = body.rules[0] as { $type: string; direction?: string; rankSep?: number; nodeSep?: number };
+  const rule = body.rules[0] as { $type: string; direction?: string; rankSep?: number; nodeSep?: number; $cstNode?: CstNodeView };
   if (rule.$type !== 'ViewRuleAutoLayout' || rule.direction === undefined) return undefined;
+  if (!tokensWithin(document, prefix.length, prefix.length + value.length, rule)) return undefined;
   return {
     direction: rule.direction,
     ...(rule.rankSep !== undefined && { rankSep: rule.rankSep }),
