@@ -1,0 +1,31 @@
+
+=== predicate connector with a declared kind
+diagnostics: []
+validate: []
+
+=== predicate connector after the kind is renamed elsewhere
+diagnostics: ["ERROR a.c4:9: Could not resolve reference to RelationshipKind named 'async'."]
+validate: ["a.c4:9: Could not resolve reference to RelationshipKind named 'async'."]
+
+=== deployment view style target by kind
+diagnostics: ["ERROR a.c4:11: Could not resolve reference to ElementKind named 'node'."]
+validate: ["a.c4:11: Could not resolve reference to ElementKind named 'node'."]
+pick: ["index","dv"]
+
+=== deployment view style target by name
+diagnostics: []
+validate: []
+pick: ["index","dv"]
+
+=== unnamed instance id equal to a sibling node
+diagnostics: ["ERROR a.c4:7: Duplicate node name \"prod.svc\"","ERROR a.c4:8: Duplicate instance name \"prod.svc\""]
+validate: ["a.c4:7: Duplicate node name \"prod.svc\"","a.c4:8: Duplicate instance name \"prod.svc\""]
+
+=== unnamed instance id equal to a named instance
+diagnostics: ["ERROR a.c4:8: Duplicate instance name \"prod.svc\"","ERROR a.c4:9: Duplicate instance name \"prod.svc\""]
+validate: ["a.c4:8: Duplicate instance name \"prod.svc\"","a.c4:9: Duplicate instance name \"prod.svc\""]
+
+=== deployment view style target by element kind
+diagnostics: []
+validate: []
+pick: ["index"]

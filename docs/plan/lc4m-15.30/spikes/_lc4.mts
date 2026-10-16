@@ -9,6 +9,8 @@
  *    (`LanguageServices.getErrors()` + `LanguageServices.diagrams()`), copied
  *    here because the helper imports vitest.
  * Also re-exports a fixture shared by the spikes.
+ * Note: deployment views are absent from `model.$data.views`; read them from
+ * `services.likec4.LanguageServices.diagrams()`.
  */
 import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
 import { URI } from 'langium';
