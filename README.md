@@ -136,7 +136,7 @@ const errors = mutator.validate(); // [] = valid
 const files = mutator.serialize(); // { 'model.c4': '...' }
 ```
 
-The deployment model (`deployment { ... }`: nodes, instances, their relationships and `extend <node>` blocks) has its own read and write methods — see [Deployment model](#deployment-model).
+The deployment model (`deployment { ... }`: nodes, instances, their relationships and `extend <node>` blocks) has its own read and write methods — see [Deployment model](#deployment-model). So have views — their rules, the steps of dynamic views and their removal; see [Views](#views).
 
 ## CLI
 
@@ -1378,6 +1378,8 @@ Each step (or chain segment) reports `source` and `target` as LikeC4 means them 
 
 View writes address a view by its id; an unnamed view cannot be addressed. A rejected write throws an `InvalidWriteError` naming the option (see [Rejected writes](#rejected-writes)) and changes no file. That includes an edit the edited file would not parse after (for example while it already has syntax errors): it is refused on the input that addresses the text — `id` for `updateView` and `removeView`, `file` for `addView`, `rule.expression` / `address` for the rule writes, `step`, `patch`, `to`, `address` or `statements` for the step writes.
 
+View writes are allowed while other loaded files have syntax errors. Every view write that adds or removes text other than view properties — all but `updateView` — resolves the references of the loaded files again, view rules, steps, `navigateTo`, `extends` and `of` included, and is rejected when one that survives the write would then link to something else or no longer resolve; references inside the text a write removes do not survive it. The error names the option that writes the text: `id` (`addView`, `removeView`), `rule.expression` or `address` (rule writes), `step`, `patch`, `to`, `address` or `statements` (step writes).
+
 #### Adding views
 
 `addView(opts)` adds a view: `id`, `type` (`element`, `dynamic` or `deployment`), and optionally `target` (the `of` element of an element view), `extends` (the element view an element view extends), `title`, `description` (a single-line text), `includes`, `autoLayout` and `file`.
@@ -1427,10 +1429,14 @@ Properties go where the grammar puts them: tags first in the body, then the othe
 `addViewRule(id, rule, opts?)`, `replaceViewRule(id, address, rule)` and `removeViewRule(id, address)` write the rules of the named view `id` and return `{ changedFiles }`. A rule is given as its kind and the expression written after the keyword — `{ kind: 'include', expression: 'app.api, app.db' }` — and is written on a line of its own as given. A rule is addressed by `{ index, text? }` as `getView` reports it: `index` in the view's rule list, and `text`, when given, must equal the rule's text.
 
 ```typescript
+// appView's rules: include *, autoLayout TopBottom
 mutator.addViewRule('appView', { kind: 'exclude', expression: 'app.db' });
+// include *, exclude app.db, autoLayout TopBottom
 mutator.addViewRule('appView', { kind: 'include', expression: 'app.api with { navigateTo checkout }' }, { before: { index: 0 } });
-mutator.replaceViewRule('appView', { index: 1, text: 'exclude app.db' }, { kind: 'include', expression: 'app.db' });
+// include app.api with { navigateTo checkout }, include *, exclude app.db, autoLayout TopBottom
+mutator.replaceViewRule('appView', { index: 2, text: 'exclude app.db' }, { kind: 'include', expression: 'app.db' });
 mutator.removeViewRule('appView', { index: 0 });
+// include *, include app.db, autoLayout TopBottom
 ```
 
 - **Position.** `addViewRule` writes the rule before the rule at `opts.before`; by default after the last item of the body, or before it when that item is an `autoLayout` rule — so in a dynamic view after the last step. A view declared without a body gets one.
@@ -1450,7 +1456,7 @@ mutator.addViewStep('checkout', { source: 'web', target: 'api', direction: 'back
 ```
 
 - **Where.** `opts.path` is the boundary the step is written at: `[i]` before the top-level step statement `i` (`[n]` after the last one), `[i, j]` before statement `j` of the `par` block at `i` (`[i, n]` at its end). Without it the step goes right after the last top-level step statement. A view declared without a body gets one.
-- **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an endpoint that does not resolve in the view's document — LikeC4 links step endpoints there: a name unique in that document, or a qualified one (`step.source`, `step.target`); a parent and its descendant (`step.target`; a step from an element to itself is valid); an undeclared kind, or a kind on a backward step, which no connector writes (`step.kind`); a `navigateTo` that is not a dynamic view (`step.navigateTo`); an invalid style value (`step.color`, ...); a path that does not exist or leads into a single step, a chain or a block such as `opt` (`path`).
+- **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an endpoint that does not resolve in the view's document — LikeC4 links step endpoints there: a name unique in that document, or a qualified one (`step.source`, `step.target`); a parent and its descendant (`step.target`; a step from an element to itself is valid); an undeclared kind, or a kind on a backward step, which no connector writes (`step.kind`); a `navigateTo` that is not a dynamic view (`step.navigateTo`); an invalid style value (`step.color`, ...); a path that does not exist or leads into a single step, a chain or a block such as `opt`, or a view that is not a dynamic view (`path`).
 
 `updateViewStep(id, address, patch)` patches the step at `address` in place and returns `{ changedFiles }`: a single step `{ path, text? }`, or one segment of a chain `{ path, segment, text? }` (as `getView` reports them). Each field of `patch` replaces the step's value, `null` removes an optional one (`kind`, `title`, a body string, `navigateTo`, a style field); only the tokens a field concerns are rewritten — the references, the connector, the title, one body property — and the rest of the step, comments included, is kept.
 
@@ -1522,7 +1528,13 @@ Writes LikeC4 would reject are refused the same way:
 | `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`); the new name would change what an existing reference links to (field `name`, see below). |
 | `updateElement`, `updateRelationship`, `updateDeploymentRelationship` | a tag of `tags` is not declared. |
 | `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
-| `addView` | an element view's `target` does not resolve to an element; an `includes` item LikeC4 would not resolve or would drop; `extends` with `target`, on a dynamic or deployment view, to no element view with a body, or closing an `extends` cycle (see [Adding views](#adding-views)). |
+| `addView` | an element view's `target` does not resolve to an element; an `includes` item LikeC4 would not accept, resolve or would drop; `extends` with `target`, on a dynamic or deployment view, to no element view with a body, or closing an `extends` cycle (see [Adding views](#adding-views)). |
+| `updateView` | `id` names no view, an unnamed view or a view declared more than once; a tag is not declared; a link URL or `autoLayout` is invalid (see [Updating views](#updating-views)). |
+| `addViewRule`, `replaceViewRule`, `removeViewRule` | `id` as for `updateView`; the address names no rule or its `text` does not match; the view type has no such rule kind; the expression is not exactly one rule that LikeC4 resolves at its place and keeps (see [Writing rules](#writing-rules)). |
+| `addViewStep`, `updateViewStep` | `id` as for `updateView`; a view that is not a dynamic view (`path`); an endpoint does not resolve in the view's document; a parent and its descendant; an undeclared kind, or a kind on a backward step; an endpoint or direction change of a chain segment; an invalid path or style value (see [Dynamic view steps](#dynamic-view-steps)). |
+| `moveViewStep`, `removeViewStep`, `addViewParallel` | `id` as for `updateView`; a path that does not exist, a chain segment, a destination inside the moved statement, a nested `par`; a `par` block left giving LikeC4 no step (see [Dynamic view steps](#dynamic-view-steps)). |
+| `removeView` | another view, a step or a relationship refers to the view; `id` names no view or a view declared more than once (see [Removing views](#removing-views)). |
+| every view write | the edited file would not parse; a surviving reference would link to something else (see [Views › Writing](#writing-3)). |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
 | `removeElement` | the deployment model refers to the element or an element of its subtree: as the element of an instance (`instanceOf`, LikeC4 would report `Could not resolve reference`) or as the element part of a deployment relationship endpoint (`prod.api.handler`). Field `fqn`; the error lists the instances and endpoints. |
@@ -1541,7 +1553,7 @@ A new element can change how LikeC4 links references that are already written: w
 - in the logical model: relationship endpoints (at model level, in element bodies and in `extend` bodies), the endpoints of `extend a -> b` blocks, the targets of `extend X` blocks and the `of` targets of element views;
 - in the deployment model: the element of every instance (`instanceOf api`), the element part of a deployment relationship endpoint that steps into an instance's element (`prod.api.handler`), the targets of `extend <node>` blocks, and every reference in the rules of deployment views (`include`, `exclude`, relationship predicates, `style`), whether it names a node, an instance or a logical element.
 
-The rules of element and dynamic views, and the steps of dynamic views, are not resolved by the library and not checked. References that did not resolve before the call are not considered.
+`addElement` does not resolve the rules of element and dynamic views, the steps of dynamic views or `navigateTo` and does not check them (the view writes do, see [Views › Writing](#writing-3)). References that did not resolve before the call are not considered.
 
 **Only what the call introduces is checked.** Problems already in the files — undeclared tags or kinds, dangling references, duplicates — are neither reported nor a reason to reject a valid write, so a workspace with unrelated LikeC4 errors still accepts valid edits. `validate()` still reports syntax errors only.
 
