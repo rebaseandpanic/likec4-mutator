@@ -356,6 +356,16 @@ describe('library rejections through apply are atomic (row 91)', SLOW, () => {
     expectRejectedRun([FIRST, { op: 'updateView', id: 'broken', tags: ['beta'] }], 'mutations[1].id', files);
   });
 
+  it.each([
+    ['addViewStep', { op: 'addViewStep', id: 'landscape', step: { source: 'customer', target: 'shop' }, path: [0] }],
+    ['updateViewStep', { op: 'updateViewStep', id: 'landscape', address: { path: [0] }, patch: { title: 'T' } }],
+    ['moveViewStep', { op: 'moveViewStep', id: 'landscape', from: { path: [0] }, to: [1] }],
+    ['removeViewStep', { op: 'removeViewStep', id: 'landscape', address: { path: [0] } }],
+    ['addViewParallel', { op: 'addViewParallel', id: 'landscape', steps: [{ source: 'customer', target: 'shop' }] }],
+  ])('%s on an element view → mutations[1].id (D52)', (_name, op) => {
+    expectRejectedRun([FIRST, op], 'mutations[1].id');
+  });
+
   it('the D40 block case → mutations[1].from', () => {
     const files = edited(ORDER_FLOW, "  dynamic view orderFlow {\n    par {\n      customer -> shop.storefront\n      opt { }\n    }\n    include partner\n  }\n");
     expectRejectedRun([FIRST, { op: 'moveViewStep', id: 'orderFlow', from: { path: [0, 0] }, to: [1] }], 'mutations[1].from', files);

@@ -173,9 +173,6 @@ export interface StepInsertion {
  *   whose block is not a `par` (a chain, a stage-6 block, a single step)
  */
 export function stepInsertion(view: ViewDeclaration, path: readonly number[] | undefined, field = 'path'): StepInsertion {
-  if (view.type !== 'dynamic') {
-    throw new InvalidWriteError(field, `view '${view.id}' is a ${view.type} view; only dynamic views have steps`);
-  }
   if (path === undefined) return {};
   if (!Array.isArray(path) || path.length === 0 || path.length > 2 || !path.every((i) => Number.isInteger(i) && i >= 0)) {
     throw new InvalidWriteError(field, `${JSON.stringify(path)} is not a step path: expected [i] or [i, j] with non-negative integers`);

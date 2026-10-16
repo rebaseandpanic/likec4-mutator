@@ -375,3 +375,32 @@ describe('move and remove rejections (row 88)', () => {
     expectRejected(unnamed, () => unnamed.removeViewStep(generated[0]!, { path: [0] }), 'id');
   });
 });
+
+// ---------------------------------------------------------------------------
+// D52: step writes on a view that is not a dynamic view
+// ---------------------------------------------------------------------------
+
+describe('step writes on a view that is not a dynamic view are rejected on id (D52)', () => {
+  const OTHER_TYPES = {
+    'm.c4': `${MODEL}views {\n  dynamic view v {\n${A}${B}  }\n  view ev {\n    include *\n  }\n  deployment view dv {\n    include *\n  }\n}\n`,
+  };
+  const STEP = { source: 'a', target: 'b' };
+  const WRITES: Array<[string, (m: LikeC4Mutator, id: string) => unknown]> = [
+    ['addViewStep', (m, id) => m.addViewStep(id, STEP, { path: [0] })],
+    ['updateViewStep', (m, id) => m.updateViewStep(id, { path: [0] }, { title: 'T' })],
+    ['moveViewStep', (m, id) => m.moveViewStep(id, { path: [0] }, [2])],
+    ['removeViewStep', (m, id) => m.removeViewStep(id, { path: [0] })],
+    ['addViewParallel', (m, id) => m.addViewParallel(id, { statements: [[0]], steps: [STEP] })],
+  ];
+
+  it.each(WRITES)('%s', (_name, write) => {
+    for (const id of ['ev', 'dv']) {
+      const m = LikeC4Mutator.fromFiles(OTHER_TYPES);
+      const error = expectRejected(m, () => write(m, id), 'id');
+      expect(error.detail).toContain('only dynamic views have steps');
+    }
+    // The same arguments are accepted on the dynamic view: the view type alone is rejected.
+    const m = LikeC4Mutator.fromFiles(OTHER_TYPES);
+    expect(() => write(m, 'v')).not.toThrow();
+  });
+});

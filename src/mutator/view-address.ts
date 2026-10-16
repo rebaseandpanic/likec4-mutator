@@ -48,6 +48,21 @@ export function namedView(views: ViewIndex, id: string, field = 'id'): ViewDecla
 }
 
 /**
+ * The one declaration of the named view `id`, which must be a dynamic view:
+ * only dynamic views have steps (D52).
+ *
+ * @throws {InvalidWriteError} on `id` as {@link namedView} does, and when
+ *   the view is an element or deployment view
+ */
+export function dynamicView(views: ViewIndex, id: string): ViewDeclaration {
+  const view = namedView(views, id);
+  if (view.type !== 'dynamic') {
+    throw new InvalidWriteError('id', `view '${id}' is a ${view.type} view; only dynamic views have steps`);
+  }
+  return view;
+}
+
+/**
  * The rule at `address` in `view`: `index` within the view's rules in source
  * order, and — when given — `text` equal to the rule's source text as
  * `getView` reports it.
@@ -86,7 +101,8 @@ export interface AddressedStep {
 }
 
 /**
- * The step statement at `address` in the dynamic view `view`: `path` is
+ * The step statement at `address` in the dynamic view `view` (see
+ * {@link dynamicView}): `path` is
  * `[i]` for the top-level statement `i` or `[i, j]` for statement `j` of the
  * `par` block at `i` (D24); `segment` addresses one segment of a chain; the
  * `text` guard, when given, must equal the statement's source text (or the
@@ -105,9 +121,6 @@ export function stepAt(view: ViewDeclaration, address: ViewStepAddress, field: s
   const { path, segment, text } = address;
   const sub = (key: string): string => (field === '' ? key : `${field}.${key}`);
   const pathField = sub('path');
-  if (view.type !== 'dynamic') {
-    throw new InvalidWriteError(pathField, `view '${view.id}' is a ${view.type} view; only dynamic views have steps`);
-  }
   if (!Array.isArray(path) || path.length === 0 || path.length > 2 || !path.every((i) => Number.isInteger(i) && i >= 0)) {
     throw new InvalidWriteError(pathField, `${quote(path)} is not a step path: expected [i] or [i, j] with non-negative integers`);
   }

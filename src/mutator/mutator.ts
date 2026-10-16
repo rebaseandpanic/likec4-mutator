@@ -137,7 +137,7 @@ import {
   type GenerateViewOpts,
   type UpdateViewPatch,
 } from './view-ops.js';
-import { namedView, ruleAt, stepAt } from './view-address.js';
+import { dynamicView, namedView, ruleAt, stepAt } from './view-address.js';
 import {
   checkViewStep,
   indentedText,
@@ -1274,8 +1274,9 @@ export class LikeC4Mutator {
    * right after the last top-level step statement.  A declaration without a
    * body gets one.
    *
-   * Rejected, with nothing changed: an `id` that names no dynamic view
-   * (`id`, or `path` for another view type); an endpoint that does not
+   * Rejected, with nothing changed: an `id` that names no view, an unnamed
+   * view, a view declared more than once or a view that is not a dynamic view
+   * (`id`); an endpoint that does not
    * resolve in the view's document — a name unique there, or qualified
    * (`step.source`, `step.target`); endpoints that are a parent and its
    * descendant (`step.target`); an undeclared kind, or a
@@ -1288,7 +1289,7 @@ export class LikeC4Mutator {
    * @returns `{ changedFiles }`: the view's file
    */
   addViewStep(id: string, step: ViewStepSpec, opts: { path?: number[] } = {}): ViewWriteResult {
-    const view = namedView(this.views, id);
+    const view = dynamicView(this.views, id);
     const insertion = stepInsertion(view, opts.path);
     const fields = checkViewStep(view, step, this.viewResolver(), this.workspace, 'step');
     const file = this.viewFile(view);
@@ -1312,7 +1313,7 @@ export class LikeC4Mutator {
    * chain (D31).  A step that would end up backward with a kind is rejected
    * (D38), unless the same patch removes the kind or makes it forward.
    *
-   * Rejected, with nothing changed: `id` as for the other view writes; a
+   * Rejected, with nothing changed: `id` as for {@link LikeC4Mutator.addViewStep}, a view that is not a dynamic view included; a
    * path that is not a step or chain, or a `text` that does not match
    * (`path`, `segment`, `text`); a patched value as `addViewStep` rejects
    * it, on `patch.<field>`; an endpoint or direction change on a chain
@@ -1321,7 +1322,7 @@ export class LikeC4Mutator {
    * @returns `{ changedFiles }`: the view's file, or none when nothing changed
    */
   updateViewStep(id: string, address: ViewStepAddress, patch: ViewStepPatch): ViewWriteResult {
-    const view = namedView(this.views, id);
+    const view = dynamicView(this.views, id);
     const { statement, segment } = stepAt(view, address, '');
     if (statement.form !== 'step' && statement.form !== 'chain') {
       throw new InvalidWriteError('path', `${JSON.stringify(address.path)} is a ${statement.form === 'parallel' ? 'par' : (statement.keyword ?? 'stage-6')} block, not a step`);
@@ -1402,14 +1403,14 @@ export class LikeC4Mutator {
    * move that would leave it holding only statements LikeC4 discards (such
    * as an empty `opt { }`) is rejected on `from`, naming the block.
    *
-   * Rejected, with nothing changed: `id` as for the other view writes; a
+   * Rejected, with nothing changed: `id` as for {@link LikeC4Mutator.addViewStep}, a view that is not a dynamic view included; a
    * `from` that does not exist or a `text` that does not match (`from`,
    * `text`); a single segment of a chain (`segment`); a `to` that does not
    * exist, lies inside the moved statement, or puts a `par` block into a
    * `par` block (`to`; LikeC4: Nested parallel blocks are not allowed).
    */
   moveViewStep(id: string, from: ViewStepAddress, to: number[]): ViewStepWriteResult {
-    const view = namedView(this.views, id);
+    const view = dynamicView(this.views, id);
     const source = this.statementAddress(view, from, 'from');
     const insertion = stepInsertion(view, to, 'to');
     const fromPath = source.statement.path!;
@@ -1449,12 +1450,12 @@ export class LikeC4Mutator {
    * statements LikeC4 discards is rejected on `address`, naming the block
    * (D40).
    *
-   * Rejected, with nothing changed: `id` as for the other view writes; an
+   * Rejected, with nothing changed: `id` as for {@link LikeC4Mutator.addViewStep}, a view that is not a dynamic view included; an
    * `address` that does not exist or a `text` that does not match
    * (`address`, `text`); a single segment of a chain (`segment`, D31).
    */
   removeViewStep(id: string, address: ViewStepAddress): ViewStepWriteResult {
-    const view = namedView(this.views, id);
+    const view = dynamicView(this.views, id);
     const target = this.statementAddress(view, address, 'address');
     const removedParallelBlocks: number[][] = [];
     let node = target.statement.node;
@@ -1476,7 +1477,7 @@ export class LikeC4Mutator {
    * checks it), in the order given.  Rules between moved statements stay
    * where they are.
    *
-   * Rejected, with nothing changed: `id` as for the other view writes; no
+   * Rejected, with nothing changed: `id` as for {@link LikeC4Mutator.addViewStep}, a view that is not a dynamic view included; no
    * statement and no step, or a block that would contribute no step to
    * LikeC4, which drops such a block (`statements`); a statement path that
    * is not top-level, does not exist, repeats one before it or addresses a
@@ -1487,8 +1488,7 @@ export class LikeC4Mutator {
     id: string,
     opts: { path?: number[]; statements?: number[][]; steps?: ViewStepSpec[] } = {},
   ): ViewWriteResult {
-    const view = namedView(this.views, id);
-    stepInsertion(view, undefined, 'path');
+    const view = dynamicView(this.views, id);
     const statements = opts.statements ?? [];
     const steps = opts.steps ?? [];
     if (!Array.isArray(statements)) throw new InvalidWriteError('statements', `expected a list of top-level paths, got ${JSON.stringify(statements)}`);
