@@ -1,0 +1,41 @@
+
+=== empty rank
+diagnostics: ["ERROR a.c4:5: Expecting: one of these possible Token sequences:"]
+validate: ["a.c4:5: Expecting: one of these possible Token sequences:\n  1. [*]\n  2. [element.tag]\n  3. [element.kind]\n  4. [IdTerminal]\n  5. [rectangle]\n  6. [component]\n  "]
+
+=== style with no target
+diagnostics: ["ERROR a.c4:5: Expecting: one of these possible Token sequences:"]
+validate: ["a.c4:5: Expecting: one of these possible Token sequences:\n  1. [*]\n  2. [element.tag]\n  3. [element.kind]\n  4. [IdTerminal]\n  5. [rectangle]\n  6. [component]\n  "]
+
+=== parallel block
+diagnostics: []
+validate: []
+pick: ["a","b"]
+
+=== break block with a missing endpoint
+diagnostics: ["ERROR a.c4:5: Could not resolve reference to Referenceable named 'gone'.","ERROR a.c4:5: Target not found (not parsed/indexed yet)"]
+validate: ["a.c4:5: Could not resolve reference to Referenceable named 'gone'.","a.c4:5: Target not found (not parsed/indexed yet)"]
+
+=== exclude-only scoped view
+diagnostics: []
+validate: []
+pick: ["app"]
+
+=== exclude-only unscoped view
+diagnostics: []
+validate: []
+pick: []
+
+=== empty dynamic view
+diagnostics: []
+validate: []
+pick: []
+
+=== unnamed instance id
+diagnostics: []
+validate: []
+pick: ["prod","prod.api"]
+
+=== unnamed instances colliding after rename
+diagnostics: ["ERROR a.c4:5: Duplicate instance name \"prod.svc\"","ERROR a.c4:6: Duplicate instance name \"prod.svc\""]
+validate: ["a.c4:5: Duplicate instance name \"prod.svc\"","a.c4:6: Duplicate instance name \"prod.svc\""]
