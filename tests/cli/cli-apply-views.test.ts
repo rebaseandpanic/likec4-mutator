@@ -338,6 +338,11 @@ describe('library rejections through apply are atomic (row 91)', SLOW, () => {
     expectRejectedRun([FIRST, mutation], path);
   });
 
+  it('an edit the broken file cannot take → mutations[1].id (D42, review W1)', () => {
+    const files = { ...BASE, 'broken.c4': "views {\n  view broken {\n    include *\n  }\n}\nmodel {\n  x = system 'unclosed\n}\n" };
+    expectRejectedRun([FIRST, { op: 'updateView', id: 'broken', tags: ['beta'] }], 'mutations[1].id', files);
+  });
+
   it('the D40 block case → mutations[1].from', () => {
     const files = edited(ORDER_FLOW, "  dynamic view orderFlow {\n    par {\n      customer -> shop.storefront\n      opt { }\n    }\n    include partner\n  }\n");
     expectRejectedRun([FIRST, { op: 'moveViewStep', id: 'orderFlow', from: { path: [0, 0] }, to: [1] }], 'mutations[1].from', files);

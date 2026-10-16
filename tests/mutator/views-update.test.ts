@@ -282,14 +282,10 @@ describe('writes next to errors (row 62)', SLOW, () => {
     await expectViewWriteOnInvalidInput(m, before);
   });
 
-  it('refuses the same update of a view in the broken file, changing nothing', () => {
+  it('refuses the same update of a view in the broken file on id, changing nothing', () => {
     const m = LikeC4Mutator.fromFiles({ ...files('  view v {\n    include *\n  }\n'), 'z.c4': BROKEN });
     expect(m.getView('broken')).not.toBeNull();
-    const before = m.serialize();
-    const views = m.listViews();
-    expect(() => m.updateView('broken', { tags: ['next'], links: [{ url: 'https://example.com/x' }] })).toThrow(/parse errors/);
-    expect(m.serialize()).toEqual(before);
-    expect(m.listViews()).toEqual(views);
+    expectRejected(m, () => m.updateView('broken', { tags: ['next'], links: [{ url: 'https://example.com/x' }] }), 'id');
   });
 
   it('updates view A while view B has an unresolved navigateTo', async () => {

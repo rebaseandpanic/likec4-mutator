@@ -1087,7 +1087,7 @@ export class LikeC4Mutator {
     const before = this.referenceSnapshot(undefined, { views: true });
     const snapshot = this.snapshot();
     try {
-      this.applyEdit(filename, edit);
+      refusedOn('file', () => this.applyEdit(filename, edit));
       this.rejectChangedReferences(
         before,
         new Map([[filename, insertedRanges(doc.fullText, [edit])]]),
@@ -1152,7 +1152,7 @@ export class LikeC4Mutator {
     if (file === undefined) throw new Error(`Internal error: view '${id}' has no file`);
     const before = this.document(file).fullText;
     const edits = updateViewEdits(this.document(file), view, patch);
-    if (edits.length > 0) this.applyEditsToFile(file, edits);
+    if (edits.length > 0) refusedOn('id', () => this.applyEditsToFile(file, edits));
     return { changedFiles: this.sources.get(file) === before ? [] : [file] };
   }
 
@@ -1186,7 +1186,7 @@ export class LikeC4Mutator {
     const before = this.referenceSnapshot(new Set([view.node]), { views: true });
     const snapshot = this.snapshot();
     try {
-      this.applyEdit(file, edit);
+      refusedOn('id', () => this.applyEdit(file, edit));
       this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing the view' }, { views: true });
     } catch (err) {
       this.restore(snapshot);
@@ -1563,14 +1563,15 @@ export class LikeC4Mutator {
    * Apply the edits of a view write to `file`, guarded by the reference
    * snapshot with view references (INV-8): `removed` holds the AST nodes the
    * write deletes on purpose; a reference that would link elsewhere
-   * afterwards rejects the write on `field`, with nothing changed.
+   * afterwards rejects the write on `field`, with nothing changed, as does an
+   * edit the file's parser refuses.
    */
   private writeViewEdits(file: string, edits: TextEdit[], removed: ReadonlySet<object>, field: string): void {
     const doc = this.document(file);
     const before = this.referenceSnapshot(removed, { views: true });
     const snapshot = this.snapshot();
     try {
-      this.applyEditsToFile(file, edits);
+      refusedOn(field, () => this.applyEditsToFile(file, edits));
       this.rejectChangedReferences(
         before,
         new Map([[file, insertedRanges(doc.fullText, edits)]]),
@@ -2883,13 +2884,13 @@ export class LikeC4Mutator {
       const details = doc.errors
         .map((e) => `  ${filename}:${e.line}:${e.column}: ${e.message}`)
         .join('\n');
-      throw new Error(`Edit produced parse errors in '${filename}':\n${details}`);
+      throw new EditRefusedError(`Edit produced parse errors in '${filename}':\n${details}`);
     }
     // Secondary structural check: catch brace imbalance that the parser may
     // accept silently (e.g. extra braces appended outside of any grammar rule).
     const balanceError = checkBraceBalance(updated);
     if (balanceError !== null) {
-      throw new Error(`Edit produced structural errors in '${filename}': ${balanceError}`);
+      throw new EditRefusedError(`Edit produced structural errors in '${filename}': ${balanceError}`);
     }
     this.sources.set(filename, updated);
     this.documents.set(filename, doc);
@@ -2900,6 +2901,26 @@ export class LikeC4Mutator {
 // ---------------------------------------------------------------------------
 // Module-level helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * An edit the file's parser refuses: the edited text would not parse, or
+ * its braces would not balance.  Nothing is written.  The view writes report
+ * it as an {@link InvalidWriteError} on the input that addresses the edited
+ * text (see {@link refusedOn}); the other writes keep it as a plain `Error`.
+ */
+class EditRefusedError extends Error {}
+
+/** Run `write`, reporting a refused edit as an {@link InvalidWriteError} on `field`. */
+function refusedOn(field: string, write: () => void): void {
+  try {
+    write();
+  } catch (err) {
+    if (err instanceof EditRefusedError) {
+      throw new InvalidWriteError(field, `the write was refused because the edited file would not parse — ${err.message}`);
+    }
+    throw err;
+  }
+}
 
 /** Mutable state of a {@link LikeC4Mutator}, captured for rollback. */
 interface MutatorSnapshot {

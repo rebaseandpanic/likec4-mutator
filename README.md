@@ -1376,7 +1376,7 @@ Each step (or chain segment) reports `source` and `target` as LikeC4 means them 
 
 ### Writing
 
-View writes address a view by its id; an unnamed view cannot be addressed. A rejected write throws an `InvalidWriteError` naming the option (see [Rejected writes](#rejected-writes)) and changes no file.
+View writes address a view by its id; an unnamed view cannot be addressed. A rejected write throws an `InvalidWriteError` naming the option (see [Rejected writes](#rejected-writes)) and changes no file. That includes an edit the edited file would not parse after (for example while it already has syntax errors): it is refused on the input that addresses the text — `id` for `updateView` and `removeView`, `file` for `addView`, `rule.expression` / `address` for the rule writes, `step`, `patch`, `to`, `address` or `statements` for the step writes.
 
 #### Adding views
 
@@ -1420,7 +1420,7 @@ mutator.updateView('appView', { title: 'App', tags: ['next'], autoLayout: 'LeftR
 // { changedFiles: ['views.c4'] }
 ```
 
-Properties go where the grammar puts them: tags first in the body, then the other properties, before any rule or step; a view declared without a body (`view v`) gets one, and LikeC4 then makes it a view. Other text and comments of the body are kept. The update is allowed while another loaded file has syntax errors; an edit that would leave the view's own file unparsable is refused. Rejected, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an undeclared tag (`tags[i]`); an invalid link URL (`links[i].url`); an invalid `autoLayout`, `''` included (`autoLayout`).
+Properties go where the grammar puts them: tags first in the body, then the other properties, before any rule or step; a view declared without a body (`view v`) gets one, and LikeC4 then makes it a view. Other text and comments of the body are kept. The update is allowed while another loaded file has syntax errors; an edit that would leave the view's own file unparsable is refused, on `id`. Rejected, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an undeclared tag (`tags[i]`); an invalid link URL (`links[i].url`); an invalid `autoLayout`, `''` included (`autoLayout`).
 
 #### Writing rules
 
