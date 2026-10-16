@@ -399,7 +399,7 @@ Removes a relationship between two elements (matched by absolute source and targ
 
 #### addView
 
-Adds a new view. Type can be `element`, `dynamic`, or `deployment`. Required: `op`, `id`, `type`; `target`, `title` and `includes` are optional.
+Adds a new view. Type can be `element`, `dynamic`, or `deployment`. Required: `op`, `id`, `type`; `target`, `extends`, `title`, `description`, `includes`, `autoLayout` (a string, or `null` for none) and `file` are optional, with the meaning and checks of the library's `addView` (see [Adding views](#adding-views)).
 
 ```json
 {
@@ -413,6 +413,29 @@ Adds a new view. Type can be `element`, `dynamic`, or `deployment`. Required: `o
 ```
 
 `includes` is an array of strings; each item becomes one `include` rule of the view, in order. An item is what follows the keyword: one or more comma-separated predicates, as LikeC4 accepts them after `include` (`"*"`, `"app.db"`, `"app.*, app.api -> app.db"`). One leading `include` keyword followed by whitespace is stripped, so `"include *"` writes `include *`, not `include include *` (`"include*"` is not stripped and is rejected); surrounding whitespace is trimmed. Each item must form exactly one `include` rule of the view's type: an item that is empty or only `include`, that LikeC4 cannot parse, or that would add anything beyond that rule (another rule such as `"* exclude x"` or `"*\n autoLayout LeftRight"`, a view property, or another view) is rejected before any file is touched (exit code 1, path `mutations[i].includes[j]`). Without `includes` (or with `[]`) an element view gets `include *` and other view types get no include rule. The library's `addView({ includes })` handles items the same way and throws on such an item.
+
+#### View operations
+
+Every view write of the library is an op with the same fields as its arguments — `id`, then its options (see [Views › Writing](#writing-3) for what each write does and rejects):
+
+| op | fields besides `op` and `id` |
+| --- | --- |
+| `updateView` | `title`, `description`, `autoLayout` (a string, or `null` to remove), `tags`, `links` |
+| `addViewRule` | `rule` `{ kind, expression }`, `before` `{ index, text? }` |
+| `replaceViewRule` | `address` `{ index, text? }`, `rule` |
+| `removeViewRule` | `address` |
+| `removeView` | — |
+| `addViewStep` | `step` `{ source, target, direction?, kind?, kindForm?, title?, description?, technology?, notes?, notation?, navigateTo?, color?, line?, head?, tail? }`, `path` |
+| `updateViewStep` | `address` `{ path, segment?, text? }`, `patch` (the step fields; `null` removes `kind`, `title`, a body string, `navigateTo` or a style field) |
+| `moveViewStep` | `from` (a step address), `to` (a path) |
+| `removeViewStep` | `address` |
+| `addViewParallel` | `path`, `statements` (top-level paths), `steps`; at least one of the last two |
+
+```json
+{ "op": "addViewStep", "id": "checkout", "step": { "source": "web", "target": "api", "title": "Pays" }, "path": [2, 0] }
+```
+
+The whole file is checked before any file is touched: unknown fields (also inside `rule`, `address`, `before`, `step`, `patch`, `links`), values of the wrong type and missing required fields are rejected with their full JSON path, such as `mutations[1].address.path[0]`. The checks that need the loaded files — references, declared kinds, tags and colors, the `par` block rules — run when the op is applied; a rejected op exits 1, names `mutations[i].<path>` and writes nothing. `moveViewStep` and `removeViewStep` print the `par` blocks they removed.
 
 #### Deployment operations
 

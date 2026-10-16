@@ -12,9 +12,13 @@
 import type { ElementStyle, RelationshipStyle } from './mutator/codegen.js';
 import { checkEndpointForm, checkSelectorForm, type DeploymentRelationshipSelector } from './mutator/deployment-ops.js';
 import type { MetadataPatch } from './mutator/metadata-ops.js';
-import type { DeploymentEndpoint } from './query/types.js';
+import type { DeploymentEndpoint, ViewRuleAddress, ViewStepAddress } from './query/types.js';
+import type { ViewStepPatch, ViewStepSpec } from './mutator/step-ops.js';
 import {
   InvalidWriteError,
+  checkAutoLayout,
+  checkLinks,
+  type ViewRuleText,
   checkElementName,
   checkKind,
   checkMetadata,
@@ -66,6 +70,84 @@ export interface AddViewMutation {
   title?: string;
   /** Include rules, one `include` statement each; see `GenerateViewOpts.includes`. */
   includes?: string[];
+  /** Layout directive; `''` or `null` writes none (see `LikeC4Mutator.addView`) */
+  autoLayout?: string | null;
+  description?: string;
+  /** The element view the new element view extends */
+  extends?: string;
+  /** The loaded file the view is written to */
+  file?: string;
+}
+
+/** `LikeC4Mutator.updateView`: `null` removes `title`, `description`, `autoLayout`. */
+export interface UpdateViewMutation {
+  op: 'updateView';
+  id: string;
+  title?: string | null;
+  description?: string | null;
+  tags?: string[];
+  links?: LinkSpec[];
+  autoLayout?: string | null;
+}
+
+export interface AddViewRuleMutation {
+  op: 'addViewRule';
+  id: string;
+  rule: ViewRuleText;
+  before?: ViewRuleAddress;
+}
+
+export interface ReplaceViewRuleMutation {
+  op: 'replaceViewRule';
+  id: string;
+  address: ViewRuleAddress;
+  rule: ViewRuleText;
+}
+
+export interface RemoveViewRuleMutation {
+  op: 'removeViewRule';
+  id: string;
+  address: ViewRuleAddress;
+}
+
+export interface RemoveViewMutation {
+  op: 'removeView';
+  id: string;
+}
+
+export interface AddViewStepMutation {
+  op: 'addViewStep';
+  id: string;
+  step: ViewStepSpec;
+  path?: number[];
+}
+
+export interface UpdateViewStepMutation {
+  op: 'updateViewStep';
+  id: string;
+  address: ViewStepAddress;
+  patch: ViewStepPatch;
+}
+
+export interface MoveViewStepMutation {
+  op: 'moveViewStep';
+  id: string;
+  from: ViewStepAddress;
+  to: number[];
+}
+
+export interface RemoveViewStepMutation {
+  op: 'removeViewStep';
+  id: string;
+  address: ViewStepAddress;
+}
+
+export interface AddViewParallelMutation {
+  op: 'addViewParallel';
+  id: string;
+  path?: number[];
+  statements?: number[][];
+  steps?: ViewStepSpec[];
 }
 
 export interface UpdateElementMutation {
@@ -257,7 +339,17 @@ export type Mutation =
   | UpdateDeploymentRelationshipMutation
   | RemoveDeploymentRelationshipMutation
   | AddDeploymentExtendMutation
-  | RemoveDeploymentExtendMutation;
+  | RemoveDeploymentExtendMutation
+  | UpdateViewMutation
+  | AddViewRuleMutation
+  | ReplaceViewRuleMutation
+  | RemoveViewRuleMutation
+  | RemoveViewMutation
+  | AddViewStepMutation
+  | UpdateViewStepMutation
+  | MoveViewStepMutation
+  | RemoveViewStepMutation
+  | AddViewParallelMutation;
 
 export interface MutationsFile {
   mutations: Mutation[];
@@ -394,12 +486,16 @@ function requireEndpoint(obj: JsonObject, key: string, path: string): void {
 /**
  * The JSON path of a field named by an {@link InvalidWriteError} raised for a
  * mutation of `op` at `path`.  The library names fields after the options of
- * its calls; `apply` names the element of addElement `id`, and the selector
- * `kind` / `title` of a deployment relationship `matchKind` / `matchTitle`.
+ * its calls; `apply` names the element of addElement `id`, the selector
+ * `kind` / `title` of a deployment relationship `matchKind` / `matchTitle`,
+ * and the parts of a step address under `address` / `from`.
  */
 export function mutationFieldPath(op: Mutation['op'], path: string, field: string): string {
   let jsonField = field;
   if (op === 'addElement' && (field === 'name' || field.startsWith('name.'))) jsonField = `id${field.slice(4)}`;
+  // The step writers name the parts of their own step address alone.
+  if ((op === 'updateViewStep' || op === 'removeViewStep') && ['path', 'segment', 'text'].includes(field)) jsonField = `address.${field}`;
+  if (op === 'moveViewStep' && ['segment', 'text'].includes(field)) jsonField = `from.${field}`;
   if (op === 'updateDeploymentRelationship' || op === 'removeDeploymentRelationship') {
     if (field === 'kind') jsonField = 'matchKind';
     if (field === 'title') jsonField = 'matchTitle';
@@ -506,6 +602,194 @@ function optionalStyle(obj: JsonObject, path: string, target: 'element' | 'relat
   }
 }
 
+// ---------------------------------------------------------------------------
+// View operations (US-12): addresses, rules, steps and patches.
+// ---------------------------------------------------------------------------
+
+function isIndex(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/** A string or `null` (a removal) at `obj[key]`, when present. */
+function optionalNullableString(obj: JsonObject, key: string, path: string): void {
+  const value = obj[key];
+  if (value !== undefined && value !== null && typeof value !== 'string') {
+    throw new MutationsFileError(`${path}.${key}`, `expected a string or null, got ${describeValue(value)}`);
+  }
+}
+
+/** One of `values` at `obj[key]`, when present. */
+function optionalEnum(obj: JsonObject, key: string, path: string, values: ReadonlyArray<string>): void {
+  const value = obj[key];
+  if (value !== undefined && !(typeof value === 'string' && values.includes(value))) {
+    throw new MutationsFileError(
+      `${path}.${key}`,
+      `expected one of ${values.map((v) => `'${v}'`).join(', ')}, got ${typeof value === 'string' ? `'${value}'` : describeValue(value)}`,
+    );
+  }
+}
+
+/** A step path at `obj[key]`: a non-empty array of non-negative integers. */
+function pathAt(obj: JsonObject, key: string, path: string, required: boolean): void {
+  const value = obj[key];
+  const at = `${path}.${key}`;
+  if (value === undefined && !required) return;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new MutationsFileError(
+      at,
+      value === undefined ? 'required path is missing' : `expected a path: a non-empty array of non-negative integers, got ${describeValue(value)}`,
+    );
+  }
+  value.forEach((item, i) => {
+    if (!isIndex(item)) {
+      throw new MutationsFileError(`${at}[${i}]`, `expected a non-negative integer, got ${typeof item === 'number' ? item : describeValue(item)}`);
+    }
+  });
+}
+
+/** The object at `obj[key]`; a missing one only when not required. */
+function objectAt(obj: JsonObject, key: string, path: string, shape: string, required: boolean): JsonObject | undefined {
+  const value = obj[key];
+  if (value === undefined && !required) return undefined;
+  if (!isObject(value)) {
+    throw new MutationsFileError(
+      `${path}.${key}`,
+      value === undefined ? `required ${shape} is missing` : `expected ${shape}, got ${describeValue(value)}`,
+    );
+  }
+  return value;
+}
+
+const RULE_FIELDS = ['kind', 'expression'] as const satisfies ReadonlyArray<keyof ViewRuleText>;
+const RULE_ADDRESS_FIELDS = ['index', 'text'] as const satisfies ReadonlyArray<keyof ViewRuleAddress>;
+const STEP_ADDRESS_FIELDS = ['path', 'segment', 'text'] as const satisfies ReadonlyArray<keyof ViewStepAddress>;
+const STEP_STRING_FIELDS = [
+  'title',
+  'description',
+  'technology',
+  'notes',
+  'notation',
+  'navigateTo',
+  'color',
+  'line',
+  'head',
+  'tail',
+] as const satisfies ReadonlyArray<keyof ViewStepSpec>;
+const STEP_FIELDS = [
+  'source',
+  'target',
+  'direction',
+  'kind',
+  'kindForm',
+  ...STEP_STRING_FIELDS,
+] as const satisfies ReadonlyArray<keyof ViewStepSpec>;
+const DIRECTIONS = ['forward', 'backward'] as const;
+const KIND_FORMS = ['bracket', 'dot'] as const;
+
+/** A rule `{ kind, expression }` at `obj[key]` (required). */
+function requireRule(obj: JsonObject, key: string, path: string): void {
+  const rule = objectAt(obj, key, path, 'a rule { kind, expression }', true)!;
+  const at = `${path}.${key}`;
+  rejectUnknownFields(rule, RULE_FIELDS, at, 'a rule');
+  if (rule.kind !== 'include' && rule.kind !== 'exclude') {
+    throw new MutationsFileError(
+      `${at}.kind`,
+      rule.kind === undefined ? 'required rule kind is missing' : `expected 'include' or 'exclude', got ${typeof rule.kind === 'string' ? `'${rule.kind}'` : describeValue(rule.kind)}`,
+    );
+  }
+  if (typeof rule.expression !== 'string') {
+    throw new MutationsFileError(
+      `${at}.expression`,
+      rule.expression === undefined ? 'required rule expression is missing' : `expected a string, got ${describeValue(rule.expression)}`,
+    );
+  }
+}
+
+/** A rule address `{ index, text? }` at `obj[key]`. */
+function ruleAddressAt(obj: JsonObject, key: string, path: string, required: boolean): void {
+  const address = objectAt(obj, key, path, 'a rule address { index, text? }', required);
+  if (!address) return;
+  const at = `${path}.${key}`;
+  rejectUnknownFields(address, RULE_ADDRESS_FIELDS, at, 'a rule address');
+  if (!isIndex(address.index)) {
+    throw new MutationsFileError(
+      `${at}.index`,
+      address.index === undefined ? 'required rule index is missing' : `expected a non-negative integer, got ${typeof address.index === 'number' ? address.index : describeValue(address.index)}`,
+    );
+  }
+  optionalString(address, 'text', at);
+}
+
+/** A step address `{ path, segment?, text? }` at `obj[key]` (required). */
+function requireStepAddress(obj: JsonObject, key: string, path: string): void {
+  const address = objectAt(obj, key, path, 'a step address { path, segment?, text? }', true)!;
+  const at = `${path}.${key}`;
+  rejectUnknownFields(address, STEP_ADDRESS_FIELDS, at, 'a step address');
+  pathAt(address, 'path', at, true);
+  if (address.segment !== undefined && !isIndex(address.segment)) {
+    throw new MutationsFileError(
+      `${at}.segment`,
+      `expected a non-negative integer, got ${typeof address.segment === 'number' ? address.segment : describeValue(address.segment)}`,
+    );
+  }
+  optionalString(address, 'text', at);
+}
+
+/** A step object at `at`: `source` and `target` strings, enums, optional strings. */
+function checkStepObject(step: unknown, at: string): void {
+  if (!isObject(step)) {
+    throw new MutationsFileError(at, `expected a step { source, target, ... }, got ${describeValue(step)}`);
+  }
+  rejectUnknownFields(step, STEP_FIELDS, at, 'a step');
+  requireString(step, 'source', at);
+  requireString(step, 'target', at);
+  optionalEnum(step, 'direction', at, DIRECTIONS);
+  optionalEnum(step, 'kindForm', at, KIND_FORMS);
+  optionalString(step, 'kind', at);
+  for (const key of STEP_STRING_FIELDS) optionalString(step, key, at);
+}
+
+/** A step patch at `obj[key]` (required): the step fields, `null` removing the optional ones. */
+function requireStepPatch(obj: JsonObject, key: string, path: string): void {
+  const patch = objectAt(obj, key, path, 'a step patch object', true)!;
+  const at = `${path}.${key}`;
+  rejectUnknownFields(patch, STEP_FIELDS, at, 'a step patch');
+  optionalString(patch, 'source', at);
+  optionalString(patch, 'target', at);
+  optionalEnum(patch, 'direction', at, DIRECTIONS);
+  optionalEnum(patch, 'kindForm', at, KIND_FORMS);
+  optionalNullableString(patch, 'kind', at);
+  for (const k of STEP_STRING_FIELDS) optionalNullableString(patch, k, at);
+}
+
+/** The new steps at `obj.steps`: an array of step objects. */
+function optionalSteps(obj: JsonObject, path: string): void {
+  const value = obj.steps;
+  if (value === undefined) return;
+  if (!Array.isArray(value)) throw new MutationsFileError(`${path}.steps`, `expected an array of steps, got ${describeValue(value)}`);
+  value.forEach((step, i) => checkStepObject(step, `${path}.steps[${i}]`));
+}
+
+/** The statements at `obj.statements`: an array of paths. */
+function optionalStatements(obj: JsonObject, path: string): void {
+  const value = obj.statements;
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new MutationsFileError(`${path}.statements`, `expected an array of paths, got ${describeValue(value)}`);
+  }
+  value.forEach((item, i) => {
+    const at = `${path}.statements[${i}]`;
+    if (!Array.isArray(item) || item.length === 0) {
+      throw new MutationsFileError(at, `expected a path: a non-empty array of non-negative integers, got ${describeValue(item)}`);
+    }
+    item.forEach((index, k) => {
+      if (!isIndex(index)) {
+        throw new MutationsFileError(`${at}[${k}]`, `expected a non-negative integer, got ${typeof index === 'number' ? index : describeValue(index)}`);
+      }
+    });
+  });
+}
+
 const VIEW_TYPES: ReadonlyArray<AddViewMutation['type']> = ['element', 'dynamic', 'deployment'];
 
 /**
@@ -568,7 +852,7 @@ const MUTATION_FIELDS = {
     'style',
   ],
   removeRelationship: ['op', 'source', 'target'],
-  addView: ['op', 'id', 'type', 'target', 'title', 'includes'],
+  addView: ['op', 'id', 'type', 'target', 'title', 'includes', 'autoLayout', 'description', 'extends', 'file'],
   addDeploymentNode: [
     'op',
     'parent',
@@ -656,6 +940,16 @@ const MUTATION_FIELDS = {
   removeDeploymentRelationship: ['op', 'source', 'target', 'matchKind', 'matchTitle'],
   addDeploymentExtend: ['op', 'node', 'file', 'tags', 'links', 'metadata'],
   removeDeploymentExtend: ['op', 'node', 'file', 'occurrence'],
+  updateView: ['op', 'id', 'title', 'description', 'tags', 'links', 'autoLayout'],
+  addViewRule: ['op', 'id', 'rule', 'before'],
+  replaceViewRule: ['op', 'id', 'address', 'rule'],
+  removeViewRule: ['op', 'id', 'address'],
+  removeView: ['op', 'id'],
+  addViewStep: ['op', 'id', 'step', 'path'],
+  updateViewStep: ['op', 'id', 'address', 'patch'],
+  moveViewStep: ['op', 'id', 'from', 'to'],
+  removeViewStep: ['op', 'id', 'address'],
+  addViewParallel: ['op', 'id', 'path', 'statements', 'steps'],
 } as const satisfies { [Op in Mutation['op']]: ReadonlyArray<keyof Extract<Mutation, { op: Op }>> };
 
 /** Interface fields absent from {@link MUTATION_FIELDS}; must be `never`. */
@@ -789,13 +1083,75 @@ function validateMutation(m: JsonObject, path: string): void {
       optionalString(m, 'target', path);
       optionalString(m, 'title', path);
       optionalStringArray(m, 'includes', path);
+      optionalNullableString(m, 'autoLayout', path);
+      for (const key of ['description', 'extends', 'file']) optionalString(m, key, path);
       formChecks('addView', path, () => {
         checkViewId(m.id as string);
         if (m.type === 'element' && typeof m.target === 'string' && m.target !== '') {
           checkReferenceForm(m.target, 'target');
         }
+        if (typeof m.extends === 'string' && m.extends !== '') checkViewId(m.extends, 'extends');
         checkViewIncludes(m.includes as string[] | undefined, m.type as AddViewMutation['type']);
+        checkAutoLayout(m.autoLayout as string | null | undefined);
       });
+      return;
+    case 'updateView':
+      requireString(m, 'id', path);
+      optionalNullableString(m, 'title', path);
+      optionalNullableString(m, 'description', path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalNullableString(m, 'autoLayout', path);
+      formChecks('updateView', path, () => {
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkLinks(m.links as LinkSpec[] | undefined);
+        if (typeof m.autoLayout === 'string' && m.autoLayout !== '') checkAutoLayout(m.autoLayout);
+      });
+      return;
+    case 'addViewRule':
+      requireString(m, 'id', path);
+      requireRule(m, 'rule', path);
+      ruleAddressAt(m, 'before', path, false);
+      return;
+    case 'replaceViewRule':
+      requireString(m, 'id', path);
+      ruleAddressAt(m, 'address', path, true);
+      requireRule(m, 'rule', path);
+      return;
+    case 'removeViewRule':
+      requireString(m, 'id', path);
+      ruleAddressAt(m, 'address', path, true);
+      return;
+    case 'removeView':
+      requireString(m, 'id', path);
+      return;
+    case 'addViewStep':
+      requireString(m, 'id', path);
+      checkStepObject(m.step, `${path}.step`);
+      pathAt(m, 'path', path, false);
+      return;
+    case 'updateViewStep':
+      requireString(m, 'id', path);
+      requireStepAddress(m, 'address', path);
+      requireStepPatch(m, 'patch', path);
+      return;
+    case 'moveViewStep':
+      requireString(m, 'id', path);
+      requireStepAddress(m, 'from', path);
+      pathAt(m, 'to', path, true);
+      return;
+    case 'removeViewStep':
+      requireString(m, 'id', path);
+      requireStepAddress(m, 'address', path);
+      return;
+    case 'addViewParallel':
+      requireString(m, 'id', path);
+      pathAt(m, 'path', path, false);
+      optionalStatements(m, path);
+      optionalSteps(m, path);
+      if (m.statements === undefined && m.steps === undefined) {
+        throw new MutationsFileError(`${path}.statements`, 'addViewParallel requires statements, steps or both');
+      }
       return;
     case 'addDeploymentNode':
       optionalString(m, 'parent', path);

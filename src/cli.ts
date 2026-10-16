@@ -479,6 +479,12 @@ program
         process.stdout.write('\n');
       }
 
+      /** A result line naming the `par` blocks a step move or removal emptied (pre-write paths). */
+      function writeRemovedBlocks(op: Mutation['op'], paths: number[][]): void {
+        if (paths.length === 0) return;
+        process.stdout.write(`  ${op}: removed the emptied par block(s) ${paths.map((p) => JSON.stringify(p)).join(', ')}\n`);
+      }
+
       function applyMutation(mutation: Mutation): void {
         switch (mutation.op) {
           case 'addElement': {
@@ -520,6 +526,76 @@ program
               target: m.target,
               title: m.title,
               includes: m.includes,
+              ...(m.autoLayout !== undefined && { autoLayout: m.autoLayout }),
+              ...(m.description !== undefined && { description: m.description }),
+              ...(m.extends !== undefined && { extends: m.extends }),
+              ...(m.file !== undefined && { file: m.file }),
+            });
+            applied++;
+            break;
+          }
+          case 'updateView': {
+            const { op: _op, id, ...patch } = mutation;
+            mutator.updateView(id, patch);
+            applied++;
+            break;
+          }
+          case 'addViewRule': {
+            const m = mutation;
+            mutator.addViewRule(m.id, m.rule, m.before !== undefined ? { before: m.before } : {});
+            applied++;
+            break;
+          }
+          case 'replaceViewRule': {
+            const m = mutation;
+            mutator.replaceViewRule(m.id, m.address, m.rule);
+            applied++;
+            break;
+          }
+          case 'removeViewRule': {
+            const m = mutation;
+            mutator.removeViewRule(m.id, m.address);
+            applied++;
+            break;
+          }
+          case 'removeView': {
+            mutator.removeView(mutation.id);
+            process.stdout.write(`  removeView: removed '${mutation.id}'\n`);
+            applied++;
+            break;
+          }
+          case 'addViewStep': {
+            const m = mutation;
+            mutator.addViewStep(m.id, m.step, m.path !== undefined ? { path: m.path } : {});
+            applied++;
+            break;
+          }
+          case 'updateViewStep': {
+            const m = mutation;
+            mutator.updateViewStep(m.id, m.address, m.patch);
+            applied++;
+            break;
+          }
+          case 'moveViewStep': {
+            const m = mutation;
+            const { removedParallelBlocks } = mutator.moveViewStep(m.id, m.from, m.to);
+            writeRemovedBlocks(m.op, removedParallelBlocks);
+            applied++;
+            break;
+          }
+          case 'removeViewStep': {
+            const m = mutation;
+            const { removedParallelBlocks } = mutator.removeViewStep(m.id, m.address);
+            writeRemovedBlocks(m.op, removedParallelBlocks);
+            applied++;
+            break;
+          }
+          case 'addViewParallel': {
+            const m = mutation;
+            mutator.addViewParallel(m.id, {
+              ...(m.path !== undefined && { path: m.path }),
+              ...(m.statements !== undefined && { statements: m.statements }),
+              ...(m.steps !== undefined && { steps: m.steps }),
             });
             applied++;
             break;
