@@ -9,9 +9,9 @@
 import { C4Parser } from '../parser/parser.js';
 import { C4Query } from '../query/query.js';
 import { DeploymentIndex, type DeploymentExtendRef, type DeploymentRelationRef } from '../query/deployment-index.js';
-import { ViewIndex, type ViewDeclaration } from '../query/view-index.js';
+import { ViewIndex, type ViewDeclaration, type ViewStepStatementEntry } from '../query/view-index.js';
 import { buildViewInfo } from '../query/view-query.js';
-import { ViewReferenceResolver } from '../query/view-resolver.js';
+import { contributesSteps, ViewReferenceResolver } from '../query/view-resolver.js';
 import {
   DeploymentQuery,
   type DeploymentElementSource,
@@ -52,6 +52,7 @@ import type {
   ViewInfo,
   ViewRuleAddress,
   ViewStepAddress,
+  ViewStepWriteResult,
   ViewType,
   ViewWriteResult,
 } from '../query/types.js';
@@ -76,6 +77,8 @@ import {
   generateDeploymentExtend,
   generateDeploymentNode,
   generateDeploymentRelationship,
+  generateParallel,
+  generateStep,
   viewIncludeExpression,
   type ElementStyle,
   type RelationshipStyle,
@@ -137,7 +140,13 @@ import {
 import { namedView, ruleAt, stepAt } from './view-address.js';
 import {
   checkViewStep,
+  indentedText,
   insertStepEdits,
+  isOwnBoundary,
+  leaveParallel,
+  removeStatementEdit,
+  statementText,
+  topLevelInsertion,
   stepInsertion,
   stepText,
   updateStepEdits,
@@ -1377,6 +1386,163 @@ export class LikeC4Mutator {
     if (update.edits.length === 0) return { changedFiles: [] };
     this.writeViewEdits(file, update.edits, update.removed, 'patch');
     return { changedFiles: [file] };
+  }
+
+  /**
+   * Move the step statement at `from` — a single step, a whole chain, a
+   * `par` block or a stage-6 block — to the boundary `to` of the named
+   * dynamic view `id` (US-11, D37).  Both are paths in the view as it is
+   * before the move: `to` is "before the statement at this path" (`[n]`
+   * after the last top-level statement, `[i, n]` at the end of the `par`
+   * block at `i`).  A move to the statement's own boundary (`to` equal to
+   * `from` or to the next path at its level) changes nothing.
+   *
+   * Leaving a `par` block (D40): a block the move empties is removed in the
+   * same write and its pre-write path reported in `removedParallelBlocks`; a
+   * move that would leave it holding only statements LikeC4 discards (such
+   * as an empty `opt { }`) is rejected on `from`, naming the block.
+   *
+   * Rejected, with nothing changed: `id` as for the other view writes; a
+   * `from` that does not exist or a `text` that does not match (`from`,
+   * `text`); a single segment of a chain (`segment`); a `to` that does not
+   * exist, lies inside the moved statement, or puts a `par` block into a
+   * `par` block (`to`; LikeC4: Nested parallel blocks are not allowed).
+   */
+  moveViewStep(id: string, from: ViewStepAddress, to: number[]): ViewStepWriteResult {
+    const view = namedView(this.views, id);
+    const source = this.statementAddress(view, from, 'from');
+    const insertion = stepInsertion(view, to, 'to');
+    const fromPath = source.statement.path!;
+    if (isOwnBoundary(fromPath, to)) return { changedFiles: [], removedParallelBlocks: [] };
+    if (insertion.parallel === source.statement) {
+      throw new InvalidWriteError('to', `${JSON.stringify(to)} lies inside the moved statement at ${JSON.stringify(fromPath)}`);
+    }
+    if (source.statement.form === 'parallel' && insertion.parallel) {
+      throw new InvalidWriteError('to', `${JSON.stringify(to)} is inside a par block: a par block cannot go into a par block (LikeC4: Nested parallel blocks are not allowed)`);
+    }
+    const file = this.viewFile(view);
+    const doc = this.document(file);
+    const removedParallelBlocks: number[][] = [];
+    let removedNode = source.statement.node;
+    let target = insertion;
+    if (source.parent && insertion.parallel !== source.parent) {
+      if (leaveParallel(view, source.parent, source.statement, this.viewResolver(), 'from') === 'remove') {
+        removedNode = source.parent.node;
+        removedParallelBlocks.push(source.parent.path!);
+        if (target.before === source.parent) {
+          const next = view.steps[view.steps.indexOf(source.parent) + 1];
+          target = next ? { before: next } : {};
+        }
+      }
+    }
+    const edits = insertStepEdits(doc, view, target, indentedText(statementText(doc, source.statement)), [removeStatementEdit(doc, removedNode)]);
+    this.writeViewEdits(file, edits, new Set(), 'to');
+    return { changedFiles: [file], removedParallelBlocks };
+  }
+
+  /**
+   * Remove the step statement at `address` of the named dynamic view `id`
+   * (US-11): a single step, a whole chain, a `par` block with its contents
+   * or a stage-6 block, with the lines it fills.  A `par` block the removal
+   * empties goes with it and is reported in `removedParallelBlocks` (its
+   * pre-write path); a removal that would leave the block holding only
+   * statements LikeC4 discards is rejected on `address`, naming the block
+   * (D40).
+   *
+   * Rejected, with nothing changed: `id` as for the other view writes; an
+   * `address` that does not exist or a `text` that does not match
+   * (`address`, `text`); a single segment of a chain (`segment`, D31).
+   */
+  removeViewStep(id: string, address: ViewStepAddress): ViewStepWriteResult {
+    const view = namedView(this.views, id);
+    const target = this.statementAddress(view, address, 'address');
+    const removedParallelBlocks: number[][] = [];
+    let node = target.statement.node;
+    if (target.parent && leaveParallel(view, target.parent, target.statement, this.viewResolver(), 'address') === 'remove') {
+      node = target.parent.node;
+      removedParallelBlocks.push(target.parent.path!);
+    }
+    const file = this.viewFile(view);
+    this.writeViewEdits(file, [removeStatementEdit(this.document(file), node)], new Set([node]), 'address');
+    return { changedFiles: [file], removedParallelBlocks };
+  }
+
+  /**
+   * Write a new `par` block into the named dynamic view `id` (US-11, D40) at
+   * the top-level boundary `opts.path` (a pre-move path; by default after
+   * the last top-level statement).  The block holds the existing top-level
+   * statements at `opts.statements` (pre-move paths), moved in the order
+   * given, then the new steps `opts.steps` (each as `addViewStep` takes and
+   * checks it), in the order given.  Rules between moved statements stay
+   * where they are.
+   *
+   * Rejected, with nothing changed: `id` as for the other view writes; no
+   * statement and no step, or a block that would contribute no step to
+   * LikeC4, which drops such a block (`statements`); a statement path that
+   * is not top-level, does not exist, repeats one before it or addresses a
+   * `par` block (`statements[i]`); an invalid step (`steps[i].<field>`); a
+   * `path` that is not a top-level boundary (`path`).
+   */
+  addViewParallel(
+    id: string,
+    opts: { path?: number[]; statements?: number[][]; steps?: ViewStepSpec[] } = {},
+  ): ViewWriteResult {
+    const view = namedView(this.views, id);
+    stepInsertion(view, undefined, 'path');
+    const statements = opts.statements ?? [];
+    const steps = opts.steps ?? [];
+    if (!Array.isArray(statements)) throw new InvalidWriteError('statements', `expected a list of top-level paths, got ${JSON.stringify(statements)}`);
+    if (!Array.isArray(steps)) throw new InvalidWriteError('steps', `expected a list of steps, got ${JSON.stringify(steps)}`);
+    if (statements.length + steps.length === 0) {
+      throw new InvalidWriteError('statements', 'a par block needs at least one statement or step: LikeC4 drops an empty block');
+    }
+    const moved: ViewStepStatementEntry[] = [];
+    statements.forEach((path, i) => {
+      const field = `statements[${i}]`;
+      if (!Array.isArray(path) || path.length !== 1 || !Number.isInteger(path[0]) || path[0]! < 0) {
+        throw new InvalidWriteError(field, `${JSON.stringify(path)} is not a top-level path [i]: only top-level statements go into a new par block`);
+      }
+      const entry = view.steps[path[0]!];
+      if (!entry) throw new InvalidWriteError(field, `${JSON.stringify(path)}: view '${id}' has ${view.steps.length} top-level step statement(s)`);
+      if (entry.form === 'parallel') {
+        throw new InvalidWriteError(field, `${JSON.stringify(path)} is a par block: a par block cannot go into a par block (LikeC4: Nested parallel blocks are not allowed)`);
+      }
+      if (moved.includes(entry)) throw new InvalidWriteError(field, `${JSON.stringify(path)} is given twice`);
+      moved.push(entry);
+    });
+    const resolver = this.viewResolver();
+    const fields = steps.map((step, i) => checkViewStep(view, step, resolver, this.workspace, `steps[${i}]`));
+    if (fields.length === 0 && !moved.some((entry) => contributesSteps(entry, view, resolver))) {
+      throw new InvalidWriteError(
+        'statements',
+        'the new par block would contribute no step: none of its statements gives LikeC4 a step, so LikeC4 would drop the block',
+      );
+    }
+    const insertion = topLevelInsertion(view, opts.path, new Set(moved), 'path');
+    const file = this.viewFile(view);
+    const doc = this.document(file);
+    const texts = [...moved.map((entry) => statementText(doc, entry)), ...fields.map((f) => generateStep({ indent: '', ...f }))];
+    const edits = insertStepEdits(doc, view, insertion, (indent) => generateParallel(indent, texts), moved.map((entry) => removeStatementEdit(doc, entry.node)));
+    this.writeViewEdits(file, edits, new Set(), 'statements');
+    return { changedFiles: [file] };
+  }
+
+  /**
+   * The statement at a step address of a move or removal: a statement, not a
+   * chain segment (D31); path errors are reported on `field`.
+   */
+  private statementAddress(view: ViewDeclaration, address: ViewStepAddress, field: string): ReturnType<typeof stepAt> {
+    let found: ReturnType<typeof stepAt>;
+    try {
+      found = stepAt(view, address, '');
+    } catch (err) {
+      if (err instanceof InvalidWriteError && err.field === 'path') throw new InvalidWriteError(field, err.detail);
+      throw err;
+    }
+    if (found.segment) {
+      throw new InvalidWriteError('segment', `segment ${found.segment.segment} belongs to the chain at ${JSON.stringify(address.path)}: a chain is moved or removed whole`);
+    }
+    return found;
   }
 
   /** `checkViewRule` of `rule` in the body of `view`, with the rule writers' fields. */

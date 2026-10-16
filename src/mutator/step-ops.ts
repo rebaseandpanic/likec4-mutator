@@ -4,7 +4,7 @@
 import { isLikeC4Id, isReferenceForm } from '../parser/grammar.js';
 import type { ParsedDocument } from '../parser/types.js';
 import type { ViewAstNode, ViewDeclaration, ViewStepStatementEntry } from '../query/view-index.js';
-import type { ViewReferenceResolver } from '../query/view-resolver.js';
+import { contributesSteps, type ViewReferenceResolver } from '../query/view-resolver.js';
 import type { WorkspaceIndex } from '../query/workspace-index.js';
 import { BodyInsertions } from './body-layout.js';
 import { escapeString, generateStep, type GenerateStepOpts } from './codegen.js';
@@ -202,13 +202,15 @@ export function stepInsertion(view: ViewDeclaration, path: readonly number[] | u
  * the top level, appending puts it right after the last step statement
  * (before whatever body item follows it); with no step statement, after the
  * last body item, or before it when that is an `autoLayout` rule.  A
- * declaration without a body gets one.
+ * declaration without a body gets one.  `others` are the operation's other
+ * edits of the same document (see `BodyInsertions.apply`).
  */
 export function insertStepEdits(
   doc: ParsedDocument,
   view: ViewDeclaration,
   insertion: StepInsertion,
   text: (indent: string) => string,
+  others: readonly TextEdit[] = [],
 ): TextEdit[] {
   const { fullText } = doc;
   const indent = getNodeIndent(view.node, fullText);
@@ -226,7 +228,7 @@ export function insertStepEdits(
     const anchor = insertion.before?.node.$cstNode?.offset;
     if (anchor === undefined) inserts.append(line);
     else inserts.before(anchor, line);
-    return inserts.apply([]);
+    return inserts.apply(others);
   }
   const inserts = BodyInsertions.forViewBody(view.body as Parameters<typeof BodyInsertions.forViewBody>[0], fullText, indent);
   const line = text(inserts.innerIndent) + '\n';
@@ -245,7 +247,7 @@ export function insertStepEdits(
   }
   if (anchor === undefined) inserts.append(line);
   else inserts.before(anchor, line);
-  return inserts.apply([]);
+  return inserts.apply(others);
 }
 
 /** The text of a single step statement at `indent`. */
@@ -460,4 +462,99 @@ function mergeAtSameOffset(edits: TextEdit[]): TextEdit[] {
     else result.push({ ...edit });
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Moving and removing step statements; par blocks (US-11, D37, D40)
+// ---------------------------------------------------------------------------
+
+/**
+ * The text of the statement `entry` with the indentation of its first line
+ * taken off its further lines, so that it can be written at another level
+ * (see {@link indentedText}).
+ */
+export function statementText(doc: ParsedDocument, entry: ViewStepStatementEntry): string {
+  const cst = entry.node.$cstNode;
+  if (!cst) throw new Error('internal: step statement without a CST node');
+  const indent = getNodeIndent(entry.node, doc.fullText);
+  return doc.fullText
+    .slice(cst.offset, cst.end)
+    .split(/\r?\n/)
+    .map((line, i) => (i === 0 || !line.startsWith(indent) ? (i === 0 ? line : line.trimStart()) : line.slice(indent.length)))
+    .join('\n');
+}
+
+/** `text` (see {@link statementText}) written at `indent`: every line indented, empty lines kept empty. */
+export function indentedText(text: string): (indent: string) => string {
+  return (indent) =>
+    text
+      .split('\n')
+      .map((line) => (line === '' ? '' : indent + line))
+      .join('\n');
+}
+
+/** The edit that removes the statement or block `node` with the lines it fills. */
+export function removeStatementEdit(doc: ParsedDocument, node: ViewAstNode): TextEdit {
+  const cst = node.$cstNode;
+  if (!cst) throw new Error('internal: step statement without a CST node');
+  const { offset, end, newText } = buildRemovalEdit(doc.fullText, cst.offset, cst.end);
+  return { offset, end, newText };
+}
+
+/**
+ * What leaving the `par` block `block` (taking away its statement `leaving`)
+ * does to it (D40): `remove` when nothing is left, so the block goes with it;
+ * `keep` when a remaining statement still contributes a step to LikeC4.
+ *
+ * @throws {InvalidWriteError} on `field` when only statements LikeC4
+ *   discards would be left: LikeC4 would drop the block silently, and its
+ *   remaining text is not deleted for the caller
+ */
+export function leaveParallel(
+  view: ViewDeclaration,
+  block: ViewStepStatementEntry,
+  leaving: ViewStepStatementEntry,
+  resolver: ViewReferenceResolver,
+  field: string,
+): 'remove' | 'keep' {
+  const rest = block.statements.filter((s) => s !== leaving);
+  if (rest.length === 0) return 'remove';
+  if (rest.some((s) => contributesSteps(s, view, resolver))) return 'keep';
+  throw new InvalidWriteError(
+    field,
+    `the par block at ${JSON.stringify(block.path)} would hold only statements LikeC4 discards (${rest.map((s) => s.keyword ?? s.form).join(', ')}), and LikeC4 would drop the block; remove or fill those first`,
+  );
+}
+
+/** The top-level index and, inside a `par` block, the inner index of `path`. */
+function levelOf(path: readonly number[]): { top: number; inner?: number } {
+  return path.length === 2 ? { top: path[0]!, inner: path[1]! } : { top: path[0]! };
+}
+
+/**
+ * The top-level boundary `path` (`[i]`, `[n]` to append) as an insertion,
+ * skipping the statements in `moved`: a boundary at a statement that leaves
+ * goes before the next one that stays.
+ */
+export function topLevelInsertion(
+  view: ViewDeclaration,
+  path: readonly number[] | undefined,
+  moved: ReadonlySet<ViewStepStatementEntry>,
+  field: string,
+): StepInsertion {
+  const insertion = stepInsertion(view, path, field);
+  if (insertion.parallel) throw new InvalidWriteError(field, `${JSON.stringify(path)}: expected a top-level boundary [i]`);
+  if (!insertion.before) return insertion;
+  const from = view.steps.indexOf(insertion.before);
+  const next = view.steps.slice(from).find((s) => !moved.has(s));
+  return next ? { before: next } : {};
+}
+
+/** Whether moving the statement at `from` to the boundary `to` leaves it where it is. */
+export function isOwnBoundary(from: readonly number[], to: readonly number[]): boolean {
+  if (from.length !== to.length) return false;
+  const a = levelOf(from);
+  const b = levelOf(to);
+  if (a.inner === undefined) return b.top === a.top || b.top === a.top + 1;
+  return a.top === b.top && (b.inner === a.inner || b.inner === a.inner! + 1);
 }

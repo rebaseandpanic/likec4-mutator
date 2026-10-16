@@ -1440,6 +1440,20 @@ mutator.updateViewStep('checkout', { path: [1] }, { direction: 'backward', kind:
 - A step that would end up backward with a kind is rejected (`patch.kind`, or `patch.direction` when the patch turns a kind-bearing step backward) unless the same patch removes the kind or makes the step forward.
 - The patched values are checked as `addViewStep` checks them, on `patch.<field>`; a chain addressed without a segment is rejected on `segment`, a `text` that does not match on `text`, a path to something other than a step or chain on `path`.
 
+`moveViewStep(id, from, to)`, `removeViewStep(id, address)` and `addViewParallel(id, opts)` move, remove and group whole step statements — a single step, a chain, a `par` block, a block such as `opt` or `alt`:
+
+```typescript
+// statements [A, B, C] at the top level
+mutator.moveViewStep('checkout', { path: [0] }, [2]);    // [B, A, C]
+mutator.moveViewStep('checkout', { path: [0] }, [3]);    // [B, C, A]
+mutator.removeViewStep('checkout', { path: [1, 0] });    // { changedFiles, removedParallelBlocks }
+mutator.addViewParallel('checkout', { statements: [[0], [2]], steps: [{ source: 'web', target: 'cache' }], path: [3] });
+```
+
+- **Addresses.** `from` and `to` are paths in the view as it is before the move; `to` is the boundary "before the statement at this path" (`[n]` after the last top-level statement, `[i, n]` at the end of the `par` block at `i`), so `[0] → [2]` puts the first statement after the second. A move to the statement's own boundary changes nothing and writes nothing. A chain is moved or removed whole; one of its segments is rejected (`segment`).
+- **`par` blocks.** LikeC4 drops a `par` block that gives it no step — an empty one, or one holding only blocks it discards, such as `opt { }` — without an error. So a block a move or removal empties is removed in the same write, and its pre-write path is reported in `removedParallelBlocks`; a move or removal that would leave the block with only such statements is rejected (`from`, `address`), naming the block. `addViewParallel` writes `par { … }` at the top-level boundary `opts.path` (by default after the last top-level statement): the top-level statements at `opts.statements`, moved in the order given, then the new `opts.steps`; rules between moved statements stay where they are. A block that would give LikeC4 no step is rejected (`statements`); so are nested blocks — a `par` moved into a `par` (`to`, `statements[i]`).
+- **Rejected** as well, with nothing changed: a path that does not exist (`from`, `address`, `to`, `statements[i]`), a destination inside the moved statement (`to`), a duplicate statement (`statements[i]`), an invalid new step (`steps[i].<field>`), a `text` that does not match (`text`).
+
 #### Removing views
 
 `removeView(id)` removes the declaration of the named view `id` and nothing else, and returns `{ changedFiles }`. A manual layout snapshot of the view (a file kept by LikeC4's layout tooling) is not touched.
