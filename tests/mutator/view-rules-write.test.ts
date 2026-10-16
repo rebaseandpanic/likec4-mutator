@@ -485,3 +485,29 @@ describe('an expression that leaves its rule is rejected (review C2)', () => {
     expectRejected(m, () => m.updateView('main', { autoLayout: 'LeftRight\n}\nstyle * {\ncolor red' }), 'autoLayout');
   });
 });
+
+// ---------------------------------------------------------------------------
+// D51: bare wildcard, kind and tag predicates in a dynamic view are accepted
+// ---------------------------------------------------------------------------
+
+describe('bare predicates in a dynamic include have a computed effect (D51)', SLOW, () => {
+  const DYNAMIC = (include: string) => ({
+    'm.c4': `specification {\n  element system\n  element store\n  tag lonely\n}\nmodel {\n  a = system\n  b = system\n  extra = store {\n    #lonely\n  }\n}\nviews {\n  dynamic view d {\n${include}    a -> b\n  }\n}\n`,
+  });
+
+  it.each(['*', 'element.kind = store', 'element.tag = #lonely'])('include %s adds an element that no step names', async (expression) => {
+    const before = DYNAMIC('');
+    await expectValidLikeC4(before);
+    // OP: no step names `extra`, so LikeC4 computes it only through the include.
+    expect((await computedViews(before)).d!.nodes).not.toContain('extra');
+    const m = LikeC4Mutator.fromFiles(before);
+    m.addViewRule('d', { kind: 'include', expression });
+    const after = m.serialize();
+    const written = { 'm.c4': before['m.c4']!.replace('    a -> b\n  }\n}\n', `    a -> b\n    include ${expression}\n  }\n}\n`) };
+    expect(after).toEqual(written);
+    await expectValidViewWrite(m, before);
+    await expectSameComputedView(after, written, 'd');
+    await expectSameStepSequence(before, after, 'd');
+    expect((await computedViews(after)).d!.nodes).toContain('extra');
+  });
+});
