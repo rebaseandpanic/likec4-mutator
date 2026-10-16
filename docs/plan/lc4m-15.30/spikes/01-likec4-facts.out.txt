@@ -1,0 +1,80 @@
+
+=== bidirectional
+diagnostics: []
+validate: []
+pick: [{"s":{"model":"a"},"t":{"model":"b"},"bi":true,"tail":"normal"},{"s":{"model":"a"},"t":{"model":"b"},"k":"async","bi":true,"head":"diamond","tail":"diamond","line":"dotted","color":"red"}]
+
+=== element style
+diagnostics: ["warn a.c4:23: Redundant as icon defined on element"]
+validate: []
+pick: {"s1":{"shape":"browser","color":"amber"},"s2":{"shape":"browser","color":"green","opacity":40,"multiple":true},"s3":{"shape":"browser","color":"amber","icon":"tech:go"},"s4":{"shape":"browser","color":"amber","icon":"tech:go"}}
+
+=== relationship style
+diagnostics: []
+validate: []
+pick: [{"t":"k","k":"async","line":"dotted","color":"red","head":"diamond"},{"t":"own","line":"solid","color":"blue","tail":"open"},{"t":"kindAndOwn","k":"async","line":"dotted","color":"green","head":"diamond"}]
+
+=== bodiless parent made a body
+diagnostics: []
+validate: []
+pick: [{"id":"a","title":"A","summary":{"txt":"sum"},"technology":"tech"},{"id":"c","title":"C"},{"id":"a.b","title":"B"},{"id":"c.d","title":"D"}]
+
+=== two specification blocks
+diagnostics: []
+validate: []
+
+=== duplicate kind across files
+diagnostics: ["ERROR a.c4:2: Duplicate element kind 'system'","ERROR b.c4:1: Duplicate element kind 'system'"]
+validate: ["a.c4:2: Duplicate element kind 'system'","b.c4:1: Duplicate element kind 'system'"]
+
+=== duplicate tag in one file
+diagnostics: ["ERROR a.c4:1: Duplicate tag 'x'","ERROR a.c4:2: Duplicate tag 'x'"]
+validate: ["a.c4:1: Duplicate tag 'x'","a.c4:2: Duplicate tag 'x'"]
+
+=== extend relation matching nothing
+diagnostics: ["warn a.c4:17: This extend does not match any relation (by source, kind, target, title, and directionality)"]
+validate: []
+
+=== extend relation matching two
+diagnostics: []
+validate: []
+pick: [{"t":"x","tags":["next"]},{"t":"x","tags":["next"]}]
+
+=== extend bidirectional matched in reverse order
+diagnostics: []
+validate: []
+pick: [{"t":"x","tags":["next"]}]
+
+=== extend directed does not match bidirectional
+diagnostics: ["warn a.c4:17: This extend does not match any relation (by source, kind, target, title, and directionality)"]
+validate: []
+
+=== extend element undeclared tag
+diagnostics: ["ERROR a.c4:15: Could not resolve reference to Tag named '#nope'."]
+validate: ["a.c4:15: Could not resolve reference to Tag named '#nope'."]
+
+=== extend unresolved element
+diagnostics: ["ERROR a.c4:15: Could not resolve reference to Element named 'zz'."]
+validate: ["a.c4:15: Could not resolve reference to Element named 'zz'."]
+
+=== nested relationship forms
+diagnostics: []
+validate: []
+pick: [{"s":{"model":"a"},"t":{"model":"b"},"title":"sourceless"},{"s":{"model":"a"},"t":{"model":"b"},"title":"this"},{"s":{"model":"a"},"t":{"model":"b"},"title":"it","k":"async"},{"s":{"model":"a"},"t":{"model":"b"},"title":"dot","k":"async"}]
+
+=== kind and tag references in view predicates
+diagnostics: []
+validate: []
+
+=== undeclared kind in view predicate
+diagnostics: ["ERROR a.c4:14: Could not resolve reference to DeploymentNodeOrElementKind named 'gone'."]
+validate: ["a.c4:14: Could not resolve reference to DeploymentNodeOrElementKind named 'gone'."]
+
+=== redundant icon
+diagnostics: ["warn a.c4:16: Redundant as icon defined on element"]
+validate: []
+
+=== relationship kind multiple
+diagnostics: []
+validate: []
+pick: {"spec":{"r":{"style":{"multiple":true}}},"rel":[{"title":"","source":{"model":"a"},"target":{"model":"b"},"kind":"r","id":"1iou4hm"}]}
