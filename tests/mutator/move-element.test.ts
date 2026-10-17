@@ -403,6 +403,60 @@ describe('leading comments, indentation and line endings (row 99)', () => {
   });
 });
 
+describe('what counts as a leading comment (row 99)', () => {
+  it('leaves a sibling above that ends with a comment in place', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `${SPEC}model {
+  app = system 'App' {
+    db = service 'DB' /* database */
+    api = service 'API'
+  }
+  core = system 'Core'
+}
+`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      replaced(before['m.c4']!, [
+        ["    api = service 'API'\n", ''],
+        ["  core = system 'Core'\n", "  core = system 'Core' {\n    api = service 'API'\n  }\n"],
+      ]),
+    );
+    await expectSigmaImage(before, after, { 'app.api': 'core.api' });
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('moves a multi-line block comment whose inner lines do not start with *', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `${SPEC}model {
+  app = system 'App' {
+    db = service 'DB'
+    /* the API,
+       which serves requests */
+    api = service 'API'
+  }
+  core = system 'Core'
+}
+`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      replaced(before['m.c4']!, [
+        ["    /* the API,\n       which serves requests */\n    api = service 'API'\n", ''],
+        ["  core = system 'Core'\n", "  core = system 'Core' {\n    /* the API,\n       which serves requests */\n    api = service 'API'\n  }\n"],
+      ]),
+    );
+    await expectSigmaImage(before, after, { 'app.api': 'core.api' });
+    await expectAcceptedWrite(before, after);
+  });
+});
+
 describe('references inside the moved body (row 100)', () => {
   it('keeps a relative text between two children and rewrites one that would link elsewhere', SLOW, async () => {
     const before: Files = {
