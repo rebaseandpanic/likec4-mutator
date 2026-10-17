@@ -143,6 +143,35 @@ export function buildRemovalEdit(fullText: string, offset: number, end: number):
 }
 
 /**
+ * The edits that delete the constructs at `ranges` of `fullText` together,
+ * one {@link buildRemovalEdit} per span: ranges inside another are dropped,
+ * and ranges separated only by horizontal whitespace (constructs on one
+ * line) are joined into one span first, so that two neighbours never claim
+ * the same separator.  The edits are sorted and do not overlap.
+ */
+export function removalEditsForRanges(fullText: string, ranges: ReadonlyArray<{ offset: number; end: number }>): TextEdit[] {
+  const sorted = [...ranges].sort((a, b) => a.offset - b.offset || b.end - a.end);
+  const spans: Array<{ offset: number; end: number }> = [];
+  for (const range of sorted) {
+    const last = spans[spans.length - 1];
+    if (last && range.end <= last.end) continue; // inside the previous span
+    if (last && range.offset >= last.end && /^[ \t]*$/.test(fullText.substring(last.end, range.offset))) {
+      last.end = range.end;
+      continue;
+    }
+    if (last && range.offset < last.end) {
+      last.end = Math.max(last.end, range.end);
+      continue;
+    }
+    spans.push({ offset: range.offset, end: range.end });
+  }
+  return spans.map((span) => {
+    const { offset, end, newText } = buildRemovalEdit(fullText, span.offset, span.end);
+    return { offset, end, newText };
+  });
+}
+
+/**
  * The first leaf token of `node` that is not hidden (comment or whitespace)
  * and starts at or after `from`; undefined when there is none.
  */

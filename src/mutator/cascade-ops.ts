@@ -24,7 +24,7 @@ import type { ParsedDocument } from '../parser/types.js';
 import type { CatalogueEntry } from '../query/reference-catalogue.js';
 import type { ViewAstNode, ViewDeclaration, ViewStepStatementEntry } from '../query/view-index.js';
 import type { ViewReferenceResolver } from '../query/view-resolver.js';
-import { buildRemovalEdit } from './cst-helpers.js';
+import { buildRemovalEdit, removalEditsForRanges } from './cst-helpers.js';
 import { leaveParallel } from './step-ops.js';
 import type { TextEdit } from './text-edit.js';
 
@@ -148,8 +148,10 @@ function removalEdits(
     if (list) list.push(edit);
     else edits.set(file, [edit]);
   };
-  // Items of lists that keep other items, grouped by their list's rule.
+  // Items of lists that keep other items, grouped by their list's rule;
+  // whole constructs, by file (removed together, see removalEditsForRanges).
   const partial = new Map<ViewAstNode, ViewAstNode[]>();
+  const whole = new Map<string, Array<{ offset: number; end: number }>>();
   for (const node of removed as ReadonlySet<ViewAstNode>) {
     if (!isTopmost(node)) continue;
     const file = fileOf.get(node)!;
@@ -161,8 +163,10 @@ function removalEdits(
     }
     const cst = node.$cstNode;
     if (!cst) throw new Error(`Internal error: a removed ${node.$type} has no position`);
-    const { offset, end, newText } = buildRemovalEdit(documentOf(file).fullText, cst.offset, cst.end);
-    add(file, { offset, end, newText });
+    whole.set(file, [...(whole.get(file) ?? []), { offset: cst.offset, end: cst.end }]);
+  }
+  for (const [file, ranges] of whole) {
+    for (const edit of removalEditsForRanges(documentOf(file).fullText, ranges)) add(file, edit);
   }
   for (const [rule, gone] of partial) {
     const file = fileOf.get(rule)!;
