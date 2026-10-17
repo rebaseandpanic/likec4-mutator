@@ -156,18 +156,18 @@ describe('Mutation error cases', () => {
       ).toThrow(/does\.not\.exist/);
     });
 
-    it('should throw when model block does not exist and parentFqn is null', () => {
+    // US-5, INV-8: without a model block one is created at the end of the
+    // first file in LikeC4's document order (FR-021, D62).
+    it.each([
+      { parent: null, label: 'null' },
+      { parent: '', label: 'empty string' },
+    ])('should create a model block when none exists and parentFqn is $label', async ({ parent }) => {
       const mutator = LikeC4Mutator.fromFiles({ 'model.c4': SPEC_ONLY });
-      expect(() =>
-        mutator.addElement(null, { name: 'newEl', kind: 'service' }),
-      ).toThrow(/model block/i);
-    });
-
-    it('should throw when model block does not exist and parentFqn is empty string', () => {
-      const mutator = LikeC4Mutator.fromFiles({ 'model.c4': SPEC_ONLY });
-      expect(() =>
-        mutator.addElement('', { name: 'newEl', kind: 'service' }),
-      ).toThrow(/model block/i);
+      expect(mutator.addElement(parent, { name: 'newEl', kind: 'service' })).toBe('newEl');
+      const after = mutator.serialize();
+      expect(after['model.c4']).toBe(`${SPEC_ONLY}\nmodel {\n  newEl = service\n}\n`);
+      expect(mutator.getElement('newEl')).toMatchObject({ fqn: 'newEl', kind: 'service' });
+      await expectValidLikeC4(after);
     });
 
     it('should add element to empty model block without throwing', () => {
@@ -593,14 +593,18 @@ describe('Minimal input variations', () => {
     expect(app!.children).toHaveLength(0);
   });
 
-  it('should throw when adding a child to a body-less parent element', () => {
-    // `app = system 'App'` has no `{ }` body block.
-    // addElement requires the parent to have a body CST node so it knows where
-    // to insert — this is a known v0.1 limitation documented here.
+  it('should add a child to a body-less parent element', async () => {
+    // `app = system 'App'` has no `{ }` body block: it is given one after its
+    // declaration, which keeps its form and inline title (D64).
     const mutator = LikeC4Mutator.fromFiles({ 'model.c4': MODEL_NO_CHILDREN });
-    expect(() =>
-      mutator.addElement('app', { name: 'svc', kind: 'service', title: 'Service' }),
-    ).toThrow(/has no body/i);
+    expect(mutator.addElement('app', { name: 'svc', kind: 'service', title: 'Service' })).toBe('app.svc');
+    const after = mutator.serialize();
+    expect(after['model.c4']).toBe(
+      MODEL_NO_CHILDREN.replace("  app = system 'App'\n", "  app = system 'App' {\n    svc = service 'Service'\n  }\n"),
+    );
+    expect(mutator.getElement('app')).toMatchObject({ title: 'App', children: ['app.svc'] });
+    expect(mutator.getElement('app.svc')).toMatchObject({ kind: 'service', title: 'Service' });
+    await expectValidLikeC4(after);
   });
 
   it('should list zero relationships when none are defined', () => {
