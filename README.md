@@ -653,6 +653,30 @@ Values are checked before writing (see [Rejected writes](#rejected-writes)); the
 | metadata | `Record<string, string \| string[]>` | yes | yes (merge, `null` deletes a key) | `metadata { key 'val' }` or `metadata { key ['v1', 'v2'] }` |
 | style | RelationshipStyle | yes | yes (merge per-field) | `style { line ... }` |
 
+### Relationship forms and placement
+
+`addRelationship(source, target, label?, opts)` also takes the kind, the direction and the place of the new relationship:
+
+```typescript
+mutator.addRelationship('app.api', 'app.db', 'reads', { kind: 'calls' });                     // app.api -[calls]-> app.db 'reads'
+mutator.addRelationship('app.api', 'app.db', 'reads', { kind: 'calls', kindForm: 'dot' });    // app.api .calls app.db 'reads'
+mutator.addRelationship('app.api', 'ext', 'syncs', { bidirectional: true });                  // app.api <-> ext 'syncs'
+mutator.addRelationship('app.api', 'ext', 'syncs', { kind: 'calls', bidirectional: true });   // app.api -[calls]<-> ext 'syncs'
+mutator.addRelationship('app.api', 'app.db', 'reads', { placement: 'nested' });               // inside app.api: -> db 'reads'
+mutator.addRelationship('app', 'ext', 'uses', { file: 'model/app.c4' });                      // top level of that file
+```
+
+- **`kind`.** A declared relationship kind, written `-[kind]->` by default or `.kind` with `kindForm: 'dot'`. The dot form has no bidirectional spelling, so `bidirectional` with `kindForm: 'dot'` is rejected.
+- **`bidirectional`.** Writes `<->`, or `-[kind]<->` with a kind.
+- **`placement: 'nested'`.** Writes the relationship without a source inside the body of the source element's declaration: `-> target`, `<-> target`, `-[kind]-> target`, `-[kind]<-> target` or `.kind target`.
+  - A source without a body is given one, keeping its declaration form.
+  - The target is written in the shortest form that resolves there to the requested element: its name (a sibling), else a longer tail of its FQN (`other.api`), else the FQN.
+  - `file` is rejected with `nested`: the source's declaration decides the file.
+- **`file`.** Places a top-level relationship at the end of the first `model` block of that loaded file. A `model` block is created when the file has none. Without `file`, the default file is used (see [Rejected writes](#rejected-writes)).
+- **`shared`.** When an `extend a -> b` block already has the identity of the new relationship — endpoints, kind, title (the kind's title when it has none), direction — LikeC4 would apply the block's tags, links and metadata to it. Such a write is rejected on `shared`, with `related` listing the blocks (`construct: 'extend-block'`). With `shared: true` it is written, and the blocks apply.
+
+The endpoints are resolved from the first `model` block of the chosen (top-level) or default (nested) file, as for a top-level relationship.
+
 ### Relationship style properties
 
 | Property | Values |
@@ -1763,7 +1787,7 @@ Writes LikeC4 would reject are refused the same way:
 | --- | --- |
 | `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`); the new name would change what an existing reference links to (field `name`, see below). |
 | `updateElement`, `updateRelationship`, `updateDeploymentRelationship` | a tag of `tags` is not declared. |
-| `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag is not declared. |
+| `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag or `kind` is not declared; `kindForm: 'dot'` without a kind or with `bidirectional`; `file` with `placement: 'nested'`, or a file that is not loaded; an `extend a -> b` block with the new relationship's identity without `shared` (field `shared`, see [Relationship forms and placement](#relationship-forms-and-placement)). |
 | `addView` | an element view's `target` does not resolve to an element; an `includes` item LikeC4 would not accept, resolve or would drop; `extends` with `target`, on a dynamic or deployment view, to no element view with a body, or closing an `extends` cycle (see [Adding views](#adding-views)). |
 | `updateView` | `id` names no view, an unnamed view or a view declared more than once; a tag is not declared; a link URL or `autoLayout` is invalid (see [Updating views](#updating-views)). |
 | `addViewRule`, `replaceViewRule`, `removeViewRule` | `id` as for `updateView`; the address names no rule or its `text` does not match; the view type has no such rule kind; the expression is not exactly one rule that LikeC4 resolves at its place and keeps (see [Writing rules](#writing-rules)). |
@@ -1785,7 +1809,7 @@ Writes LikeC4 would reject are refused the same way:
 | `addDeploymentExtend` | `node` is not one declared node, or is an instance (LikeC4: `ExtendDeployment allows only DeploymentNode`); nothing to contribute (`tags`); a tag is not declared; `file` is missing or not loaded. |
 | `removeDeploymentExtend` | the file has no such block, or a rule of a deployment view refers to something declared in it, or the removal would change what a surviving reference links to (`node`); several blocks of the node in the file and no valid `occurrence` (`occurrence`). |
 
-A child element goes at the end of its parent's body; a parent written without one (`app = system 'App'`) is given a body right after its declaration, which keeps its form and inline strings. A model-level element (`addElement` without a parent) and a relationship (`addRelationship`) go to the end of the first `model` block of the first file, in LikeC4's document order, that has one; when no loaded file has a `model` block, a new one is appended to the first file in that order. LikeC4's document order is not the order the files were loaded in. `addElement(null, { …, file })` writes a model-level element into that loaded file instead (its first `model` block, else a new one at its end); a `file` that is not loaded (exact name; no file is created) or given together with a parent is rejected on `file`.
+A child element goes at the end of its parent's body; a parent written without one (`app = system 'App'`) is given a body right after its declaration, which keeps its form and inline strings. A model-level element (`addElement` without a parent) and a relationship (`addRelationship`) go to the end of the first `model` block of the first file, in LikeC4's document order, that has one; when no loaded file has a `model` block, a new one is appended to the first file in that order. LikeC4's document order is not the order the files were loaded in. `addElement(null, { …, file })` and `addRelationship(…, { file })` write a model-level element or relationship into that loaded file instead (its first `model` block, else a new one at its end); a `file` that is not loaded (exact name; no file is created) or given together with a parent is rejected on `file`.
 
 Endpoints are resolved the way LikeC4 links them from the place they are written — that first `model` block: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
 

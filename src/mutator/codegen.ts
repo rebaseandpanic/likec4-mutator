@@ -170,10 +170,16 @@ export interface RelationshipStyle {
 export interface GenerateRelationshipOpts {
   /** Leading whitespace for the relationship line */
   indent: string;
-  /** Source element identifier (local name or FQN) */
+  /** Source element identifier (local name or FQN); `''` for a relationship written without a source inside its source's body */
   source: string;
   /** Target element identifier (local name or FQN) */
   target: string;
+  /** Relationship kind: `-[kind]->` (bracket form, the default) or `.kind` (dot form) */
+  kind?: string;
+  /** How a `kind` is written: `bracket` (default) or `dot` */
+  kindForm?: 'bracket' | 'dot';
+  /** Written `<->` (`-[kind]<->` with a kind); never with the dot form */
+  bidirectional?: boolean;
   /** Optional relationship label */
   label?: string;
   /** Optional technology label */
@@ -220,7 +226,8 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
   const { indent, source, target, label, technology, description, tags, links, metadata, style } =
     opts;
 
-  let result = `${indent}${source} -> ${target}`;
+  const connector = relationshipConnector(opts.kind, opts.kindForm, opts.bidirectional);
+  let result = `${indent}${source === '' ? '' : `${source} `}${connector} ${target}`;
   if (label) result += ` '${escapeString(label)}'`;
   result += generateBody(indent, {
     tags,
@@ -233,6 +240,20 @@ export function generateRelationship(opts: GenerateRelationshipOpts): string {
     metadata,
   });
   return result;
+}
+
+/**
+ * The connector of a model relationship: `->`, `<->`, `-[kind]->`,
+ * `-[kind]<->` or `.kind` (the dot form has no bidirectional spelling).
+ */
+export function relationshipConnector(kind: string | undefined, kindForm: 'bracket' | 'dot' | undefined, bidirectional: boolean | undefined): string {
+  const arrow = bidirectional ? '<->' : '->';
+  if (kind === undefined) return arrow;
+  if (kindForm === 'dot') {
+    if (bidirectional) throw new Error('internal: the dot form has no bidirectional connector');
+    return `.${kind}`;
+  }
+  return `-[${kind}]${arrow}`;
 }
 
 // ---------------------------------------------------------------------------

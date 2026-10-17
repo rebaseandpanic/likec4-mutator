@@ -60,6 +60,9 @@ export function addRelationshipEdit(
     links?: Array<{ url: string; label?: string }>;
     metadata?: Record<string, string | string[]>;
     style?: RelationshipStyle;
+    kind?: string;
+    kindForm?: 'bracket' | 'dot';
+    bidirectional?: boolean;
   },
   placement?: Pick<BlockPlacement, 'block'>,
 ): TextEdit {
@@ -68,6 +71,9 @@ export function addRelationshipEdit(
       indent,
       source,
       target,
+      kind: opts?.kind,
+      kindForm: opts?.kindForm,
+      bidirectional: opts?.bidirectional,
       label,
       description: opts?.description,
       technology: opts?.technology,

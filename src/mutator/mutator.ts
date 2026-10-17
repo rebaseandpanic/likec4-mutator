@@ -35,6 +35,7 @@ import { isSameHierarchy } from '@likec4/core/utils';
 import { GrammarUtils, type CstNode } from 'langium';
 import { kindPlaces, type KindPlace } from '../query/kind-places.js';
 import {
+  DocumentReferenceResolver,
   WorkspaceIndex,
   resolveReferenceText,
   resolveRelations,
@@ -95,6 +96,7 @@ import {
   generateDeploymentNode,
   generateDeploymentRelationship,
   generateParallel,
+  generateRelationship,
   generateStep,
   viewIncludeExpression,
   type ElementStyle,
@@ -1735,11 +1737,43 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Add a new relationship at model level.
+   * Add a new relationship (lc4m-15.30 US-5, US-8).
    *
-   * It goes to the default file (FR-021, D62): the first file, in LikeC4's
-   * document order, with a `model` block — at the end of its first `model`
-   * block — else a new `model` block at the end of the first file.
+   * Placement (`opts.placement`):
+   *  - `top` (default): at model level, written `source <connector> target`
+   *    with `source` and `target` as given, at the end of the first `model`
+   *    block of `opts.file`, else of the default file (FR-021, D62): the
+   *    first file, in LikeC4's document order, with a `model` block — else a
+   *    new `model` block at the end of the first file.  Created when the
+   *    chosen file has none.
+   *  - `nested`: inside the body of the source element's declaration
+   *    (created when absent, keeping the declaration's form), without a
+   *    source (`-> target`, D68).  The target is written in the shortest
+   *    form that resolves there to the requested element: its name, else a
+   *    longer tail of its FQN, else the FQN (FR-011).
+   *
+   * The connector: `->`; `<->` with `bidirectional`; `-[kind]->` /
+   * `-[kind]<->` with a `kind`; `.kind` with `kindForm: 'dot'` (D68).  The
+   * endpoints are resolved as LikeC4 links them from the first `model`
+   * block of the chosen (top) or default (nested) file.
+   *
+   * Rejected, with nothing changed (`InvalidWriteError`):
+   *  - on `source` / `target`: not a reference, or one that does not resolve
+   *    to an element; on `target`: the source itself, its parent or child;
+   *    for `nested`, no tail of the target's FQN resolving to it in the
+   *    source's body;
+   *  - on `kind`: a relationship kind no specification declares;
+   *  - on `kindForm`: not `bracket` or `dot`, the dot form without a kind or
+   *    with `bidirectional` (the grammar has no such connector);
+   *  - on `placement`: not `top` or `nested`;
+   *  - on `file`: a file that is not loaded, or a `file` with `nested`
+   *    (the source's declaration decides the file);
+   *  - on `tags[i]` / `style.*`: an undeclared tag, an invalid style value;
+   *  - on `shared`: without `shared`, an `extend a -> b` block exists whose
+   *    identity — endpoints, kind, title, direction — the new relationship
+   *    would have: it would silently take the block's values (D83).
+   *    `related` lists the blocks (`construct: 'extend-block'`).  With
+   *    `shared: true` the relationship is written and the blocks apply.
    *
    * @param source - Source element identifier
    * @param target - Target element identifier
@@ -1757,20 +1791,46 @@ export class LikeC4Mutator {
       links?: Array<{ url: string; label?: string }>;
       metadata?: Record<string, string | string[]>;
       style?: RelationshipStyle;
+      /** A declared relationship kind */
+      kind?: string;
+      /** How `kind` is written: `-[kind]->` (`bracket`, default) or `.kind` (`dot`) */
+      kindForm?: 'bracket' | 'dot';
+      /** Written `<->` */
+      bidirectional?: boolean;
+      /** `top` (default) or `nested` in the source's declaration body */
+      placement?: 'top' | 'nested';
+      /** The loaded file of a `top` relationship (FR-021 default when absent) */
+      file?: string;
+      /** Accept that an existing `extend a -> b` block of the same identity applies to the new relationship (D83) */
+      shared?: boolean;
     },
   ): void {
     checkReferenceForm(source, 'source');
     checkReferenceForm(target, 'target');
+    const placementKind = opts?.placement ?? 'top';
+    if (placementKind !== 'top' && placementKind !== 'nested') {
+      throw new InvalidWriteError('placement', `${JSON.stringify(placementKind)} is not 'top' or 'nested'`);
+    }
+    if (opts?.kindForm !== undefined && opts.kindForm !== 'bracket' && opts.kindForm !== 'dot') {
+      throw new InvalidWriteError('kindForm', `${JSON.stringify(opts.kindForm)} is not 'bracket' or 'dot'`);
+    }
+    if (opts?.kind !== undefined) checkKind(opts.kind, 'relationship', this.workspace);
+    if (opts?.kindForm === 'dot' && opts.kind === undefined) {
+      throw new InvalidWriteError('kindForm', "the dot form '.kind' needs a kind");
+    }
+    if (opts?.kindForm === 'dot' && opts.bidirectional) {
+      throw new InvalidWriteError('kindForm', "LikeC4's grammar has no bidirectional dot connector: write it as '-[kind]<->' (kindForm 'bracket')");
+    }
+    if (placementKind === 'nested' && opts?.file !== undefined) {
+      throw new InvalidWriteError('file', "'file' is accepted for a top-level relationship only; a nested one goes into the file of its source's declaration");
+    }
     checkTags(opts?.tags, this.workspace);
     checkStyle(opts?.style, 'relationship', this.workspace);
-    // The default file (FR-021, D62): its first `model` block, else a new one.
-    const placement = chooseBlockPlacement('model', this.documents, undefined);
+    // `file`, else the default file (FR-021, D62): its first `model` block, else a new one.
+    const placement = chooseBlockPlacement('model', this.documents, placementKind === 'top' ? opts?.file : undefined);
     const filename = placement.file;
-    const doc = this.documents.get(filename);
-    if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    // The relationship is written at the top level of the chosen (first)
-    // model block of `filename`; its endpoints link from there as LikeC4
-    // links them.
+    const doc = this.document(filename);
+    // The endpoints link from the top level of the chosen model block, as LikeC4 links them.
     const sourceFqn = this.resolveWritten(doc, filename, source, 'source', { model: 0 });
     const targetFqn = this.resolveWritten(doc, filename, target, 'target', { model: 0 });
     // LikeC4 rejects a relationship between an element and itself or one of
@@ -1785,8 +1845,59 @@ export class LikeC4Mutator {
           : `'${source}' (${sourceFqn}) and '${target}' (${targetFqn}) are parent and child: LikeC4 rejects such a relationship`,
       );
     }
-    const edit = addRelationshipEdit(doc, source, target, label, opts, placement);
-    this.applyEdit(filename, edit);
+    if (!opts?.shared) this.rejectExtendedIdentity(sourceFqn, targetFqn, label, opts?.kind, opts?.bidirectional === true);
+
+    const { placement: _placement, file: _file, shared: _shared, ...written } = opts ?? {};
+    if (placementKind === 'top') {
+      this.applyEdit(filename, addRelationshipEdit(doc, source, target, label, written, placement));
+      return;
+    }
+    const sourceFile = this.findFileContaining(sourceFqn);
+    const sourceDoc = sourceFile ? this.document(sourceFile) : undefined;
+    const sourceNode = sourceDoc && buildFqnIndex(sourceDoc.ast).get(sourceFqn)?.node;
+    if (!sourceFile || !sourceDoc || !sourceNode) throw new Error(`Internal error: no declaration of '${sourceFqn}'`);
+    const resolver = new DocumentReferenceResolver(sourceDoc.ast, this.workspace);
+    const segments = targetFqn.split('.');
+    const text = segments
+      .map((_, i) => segments.slice(segments.length - 1 - i).join('.'))
+      .find((candidate) => resolver.resolveInModel(candidate, sourceNode) === targetFqn);
+    if (text === undefined) {
+      throw new InvalidWriteError('target', `no form of '${targetFqn}' resolves to it inside the body of '${sourceFqn}'`);
+    }
+    const inserts = BodyInsertions.forDeclaration(sourceNode, sourceDoc.fullText, getNodeIndent(sourceNode, sourceDoc.fullText));
+    inserts.append(generateRelationship({ indent: inserts.innerIndent, source: '', target: text, label, ...written }) + '\n');
+    const [edit] = inserts.apply([]);
+    if (!edit) throw new Error('Internal error: no edit for the nested relationship');
+    this.applyEdit(sourceFile, edit);
+  }
+
+  /**
+   * Throw when an `extend a -> b` block exists with the identity a new
+   * relationship would have — endpoints, kind, title (its kind's title when
+   * it has none), direction — so it would silently take the block's values
+   * (D83).
+   *
+   * @throws {InvalidWriteError} on `shared`, `related` listing the blocks
+   */
+  private rejectExtendedIdentity(sourceFqn: string, targetFqn: string, label: string | undefined, kind: string | undefined, bidirectional: boolean): void {
+    const blocks = this.workspace.extendRelationBlocks({
+      sourceFqn,
+      targetFqn,
+      ...(kind !== undefined && { kind }),
+      title: removeIndent(label ?? ''),
+      isBidirectional: bidirectional,
+    });
+    if (blocks.length === 0) return;
+    const related: RelatedConstruct[] = blocks.map((block) => ({
+      ...this.position(block.file ?? '', block.node.$cstNode?.offset ?? 0),
+      construct: 'extend-block',
+    }));
+    throw new InvalidWriteError(
+      'shared',
+      `the new relationship would have the identity of the extend blocks ${related.map((r) => `at '${r.file}:${r.line}:${r.column}'`).join(', ')}, ` +
+        `and LikeC4 would apply their tags, links and metadata to it: pass 'shared: true' to accept that`,
+      related,
+    );
   }
 
   /**
