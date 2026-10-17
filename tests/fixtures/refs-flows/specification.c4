@@ -1,0 +1,49 @@
+specification {
+  element person
+  element app {
+    #edge
+  }
+  element component
+  element database
+  element cluster
+
+  deploymentNode cluster {
+    #edge
+  }
+  deploymentNode pod
+
+  relationship calls {
+    #beta
+  }
+  relationship emits
+
+  tag edge
+  tag beta
+}
+
+global {
+  predicateGroup edgeSet {
+    include platform.* where tag is #edge
+    exclude platform.store
+  }
+
+  dynamicPredicateGroup flowSet {
+    include platform.api with {
+      navigateTo checkout
+    }
+  }
+
+  style accentApi platform.api {
+    color indigo
+  }
+
+  style databaseIcon element.kind = database {
+    icon tech:go
+  }
+
+  styleGroup quiet {
+    style platform.worker, element.tag != #beta {
+      opacity 40%
+    }
+  }
+}

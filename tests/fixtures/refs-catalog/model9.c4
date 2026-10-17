@@ -1,0 +1,28 @@
+model {
+  customer = actor 'Customer' {
+    #core
+  }
+
+  shop = system 'Shop' {
+    #core, #legacy
+    web = service 'Web'
+    api = service 'API' {
+      handler = service 'Handler'
+      handler -> db 'loads'
+      -> web 'notifies'
+    }
+    db = store 'DB'
+
+    web -> api 'calls'
+    web -[sync]<-> api 'syncs'
+  }
+
+  box = host 'Box'
+
+  customer -> shop.web 'visits' #core
+  shop.api -[async]-> shop.db 'writes' {
+    #legacy
+  }
+  shop.web .sync shop.api 'pushes'
+  customer -> box 'owns'
+}

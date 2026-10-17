@@ -1,0 +1,33 @@
+deployment {
+  extend prod.primary {
+    #core
+    instanceOf shop.api.handler
+    worker1 = instanceOf shop.api.worker
+    worker1 -> handler 'hands over'
+  }
+}
+
+views {
+  deployment view prodView {
+    #core
+    include prod.**
+    include prod.primary.api1
+    include prod.secondary -> prod.primary
+    include prod.secondary.web -[sync]-> prod.primary.api1, prod.secondary.web .async prod.primary.db
+    include * where kind is host and tag is #core
+    exclude prod.primary.db where tag is not #legacy
+    exclude * -> * where kind is not async and source.kind is zone and target.tag is not #legacy
+    style prod.primary {
+      color red
+    }
+  }
+
+  deployment view prodKinds {
+    include prod.**
+    include element.kind = service, element.kind != store, element.tag = #core, element.tag != #legacy
+    exclude element.kind != host, element.tag = #legacy
+    style element.kind = service, element.kind != store, element.tag = #core, element.tag != #legacy {
+      color sky
+    }
+  }
+}

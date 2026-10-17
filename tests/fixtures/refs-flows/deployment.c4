@@ -1,0 +1,20 @@
+deployment {
+  cluster main {
+    pod front {
+      instanceOf platform.api
+      wk = instanceOf platform.worker {
+        #beta
+      }
+    }
+    pod back {
+      instanceOf platform.store
+    }
+  }
+
+  main.front.api -> main.back.store 'reads' {
+    #edge
+    navigateTo checkout
+  }
+  main.front.wk -[calls]-> main.front.api 'reports'
+  main.front.wk .emits main.back.store 'logs'
+}

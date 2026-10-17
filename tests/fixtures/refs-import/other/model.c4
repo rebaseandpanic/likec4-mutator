@@ -1,0 +1,11 @@
+specification {
+  element unit
+}
+
+model {
+  shared = unit 'Shared' {
+    part = unit 'Part'
+  }
+  peer = unit 'Peer'
+  solo = unit 'Solo'
+}

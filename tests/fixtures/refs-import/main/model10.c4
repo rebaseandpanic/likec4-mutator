@@ -1,0 +1,11 @@
+import solo from 'other'
+
+model {
+  solo -> local 'calls'
+}
+
+views {
+  view index {
+    include local, solo
+  }
+}

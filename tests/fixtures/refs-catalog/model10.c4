@@ -1,0 +1,26 @@
+model {
+  extend shop.api {
+    #legacy
+    link https://example.com/api
+    worker = service 'Worker'
+    worker -> handler 'feeds'
+  }
+
+  extend shop {
+    #core
+  }
+
+  extend shop.api -[async]-> shop.db 'writes' {
+    #core
+  }
+
+  extend shop.web .sync shop.api 'pushes' {
+    #legacy
+  }
+
+  extend customer -> shop.web 'visits' {
+    link https://example.com/visits
+  }
+
+  shop.api.worker -[async]-> shop.db 'flushes'
+}

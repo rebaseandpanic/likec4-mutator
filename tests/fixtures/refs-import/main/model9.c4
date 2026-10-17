@@ -1,0 +1,12 @@
+import { shared, peer } from 'other'
+
+specification {
+  element module
+}
+
+model {
+  local = module 'Local'
+  local -> shared 'uses'
+  local -> shared.part 'reads'
+  local -> peer 'pings'
+}

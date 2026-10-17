@@ -1,0 +1,66 @@
+views {
+  dynamic view checkout {
+    #edge
+    title 'Checkout'
+    include client, platform.* where tag is #edge
+    include platform.api with {
+      navigateTo pipeline
+    }
+    include element.kind = component, element.kind != database, element.tag = #beta, element.tag != #edge
+    include * where kind is cluster or kind is not person
+    include client -[calls]-> rack, platform.worker .emits platform.api
+    client -> platform.api 'request' {
+      navigateTo pipeline
+    }
+    platform.api -[calls]-> platform.worker -> platform.store
+    platform.worker .emits platform.api
+    par {
+      platform.api -> platform.store
+      platform.worker -> platform.store
+    }
+    parallel 'Fan-out' {
+      platform.api -[calls]-> platform.worker
+    }
+    opt 'Maybe' {
+      platform.api -[calls]-> platform.worker 'optional' {
+        navigateTo pipeline
+      }
+    }
+    loop {
+      platform.worker -> platform.store
+    }
+    alt 'Outcome' {
+      if 'ok' {
+        platform.api -> platform.worker
+      }
+      when 'retry' {
+        platform.worker .emits platform.api
+      }
+      else {
+        platform.worker -> platform.store
+      }
+    }
+    try {
+      platform.api -> platform.store
+    } catch 'error' {
+      platform.worker -> platform.store
+    } finally {
+      client -> platform.api
+    }
+    break 'Stop' {
+      platform.api -> platform.worker
+    }
+    style platform.api, element.kind = database, element.kind != person, element.tag = #edge, element.tag != #beta {
+      color amber
+    }
+    global predicate flowSet
+    global style accentApi
+  }
+
+  dynamic view pipeline {
+    title 'Pipeline'
+    include client -> platform.api where kind is calls and source.kind is person and target.tag is #beta
+    include client -> platform.api where kind is not emits and source.kind is not cluster and target.tag is not #edge
+    platform.worker -> platform.store
+  }
+}

@@ -1,0 +1,25 @@
+model {
+  client = person 'Client' {
+    #edge
+  }
+
+  platform = app 'Platform' {
+    api = component 'API' {
+      #beta
+    }
+    worker = component 'Worker'
+    store = database 'Store'
+
+    api -[calls]-> worker 'dispatches'
+    worker -> store 'persists'
+  }
+
+  rack = cluster 'Rack'
+
+  client -> platform.api 'requests'
+  platform.worker .emits platform.api 'reports'
+  platform.api -> platform.store 'reads' {
+    navigateTo checkout
+  }
+  client -[calls]-> rack 'monitors'
+}

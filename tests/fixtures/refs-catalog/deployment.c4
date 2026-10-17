@@ -1,0 +1,19 @@
+deployment {
+  zone prod {
+    #core
+    host primary {
+      api1 = instanceOf shop.api {
+        #legacy
+      }
+      instanceOf shop.db
+      api1 -[async]-> db 'stores'
+    }
+    host secondary {
+      instanceOf shop.web
+    }
+  }
+
+  prod.secondary.web -> prod.primary.api1 'routes' #core
+  prod.secondary.web -[sync]-> prod.primary.api1.handler 'reaches'
+  prod.secondary.web .async prod.primary.db 'caches'
+}

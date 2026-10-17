@@ -1,0 +1,29 @@
+specification {
+  element actor
+  element system
+  element service {
+    #core
+    style {
+      shape rectangle
+    }
+  }
+  element store {
+    style {
+      shape cylinder
+    }
+  }
+  element host
+
+  deploymentNode zone {
+    #core
+  }
+  deploymentNode host
+
+  relationship sync {
+    #core
+  }
+  relationship async
+
+  tag core
+  tag legacy
+}

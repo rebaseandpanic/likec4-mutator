@@ -139,8 +139,17 @@ const PROJECT = 'test';
 const WORKSPACE = 'file:///test/workspace';
 const SOURCES = '/test/workspace/src/';
 
-/** LikeC4 language services with `files` loaded and built, validation included. */
-async function buildWorkspace(files: Record<string, string>, project?: LikeC4ProjectOptions) {
+/**
+ * LikeC4 language services with `files` loaded and built, validation included.
+ * Each name of `projects` is a top-level folder of `files` registered as a
+ * project of that name (as a `likec4.config.json` in it would), so that its
+ * files form that project and can `import` from the others.
+ */
+async function buildWorkspace(
+  files: Record<string, string>,
+  project?: LikeC4ProjectOptions,
+  projects: readonly string[] = [],
+) {
   const services = createLanguageServices({ ...NoFileSystem, ...NoLikeC4ManualLayouts }).likec4;
   const folder = { name: 'test', uri: WORKSPACE };
   services.shared.workspace.WorkspaceManager.initialize({
@@ -154,6 +163,12 @@ async function buildWorkspace(files: Record<string, string>, project?: LikeC4Pro
     await services.shared.workspace.ProjectsManager.registerProject({
       config: { name: PROJECT, ...project },
       folderUri: URI.parse(WORKSPACE),
+    });
+  }
+  for (const name of projects) {
+    await services.shared.workspace.ProjectsManager.registerProject({
+      config: { name },
+      folderUri: URI.parse(`${WORKSPACE}/src/${name}`),
     });
   }
 
@@ -261,22 +276,34 @@ function getterValues(source: DeploymentGetterSource): LikeC4DeploymentGetters {
  *
  * Limits.  The sources are one in-memory workspace folder, so there is one
  * project and no project configuration (`likec4.config.json`, its `include` /
- * `exclude`, multi-project `import`); `--project` and `--file` are not
+ * `exclude`, multi-project `import` — except as below); `--project` and `--file` are not
  * implemented.  The two layout branches are not exercised by any test: the
  * language services are built with `NoLikeC4ManualLayouts`, so a drift cannot
  * occur, and no fixture is known that makes `diagrams()` throw (a view that
  * fails to lay out, e.g. a sequence view with nested actors, is only logged by
  * both the command and this function).
+ *
+ * With `options.projects`, each named top-level folder of `files` is
+ * registered as a project (see {@link buildWorkspace}), so `import` between
+ * them resolves, and the layout of every named project is checked.  This
+ * multi-project form has not been compared with the command's output.
  */
-export async function validateLikeC4(files: Record<string, string>): Promise<string[]> {
-  const { services } = await buildWorkspace(files);
+export async function validateLikeC4(
+  files: Record<string, string>,
+  options: { projects?: readonly string[] } = {},
+): Promise<string[]> {
+  const { services } = await buildWorkspace(files, undefined, options.projects);
+  type ProjectId = Parameters<typeof services.likec4.LanguageServices.diagrams>[0];
   const errors = services.likec4.LanguageServices.getErrors().map(
     (e) => `${e.sourceFsPath.slice(SOURCES.length)}:${e.line + 1}: ${e.message}`,
   );
   const layout: string[] = [];
+  const projectIds: ProjectId[] = options.projects?.length ? options.projects.map((p) => p as ProjectId) : [undefined];
   try {
-    for (const view of await services.likec4.LanguageServices.diagrams()) {
-      if (view.drifts && view.drifts.length > 0) layout.push(`Layout drift detected on view '${view.id}'`);
+    for (const projectId of projectIds) {
+      for (const view of await services.likec4.LanguageServices.diagrams(projectId)) {
+        if (view.drifts && view.drifts.length > 0) layout.push(`Layout drift detected on view '${view.id}'`);
+      }
     }
   } catch (e) {
     layout.push(`Layout validation failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -285,8 +312,11 @@ export async function validateLikeC4(files: Record<string, string>): Promise<str
 }
 
 /** Assert that `files` pass `likec4 validate` of LikeC4 1.59.4 — see {@link validateLikeC4}. */
-export async function expectValidLikeC4(files: Record<string, string>): Promise<void> {
-  expect(await validateLikeC4(files)).toEqual([]);
+export async function expectValidLikeC4(
+  files: Record<string, string>,
+  options: { projects?: readonly string[] } = {},
+): Promise<void> {
+  expect(await validateLikeC4(files, options)).toEqual([]);
 }
 
 /** Effective values of an element as the library reports them. */

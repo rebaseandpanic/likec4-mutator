@@ -15,6 +15,8 @@
  * warnings only, syntax errors, unresolved references, duplicates, view
  * predicates and `navigateTo`, dynamic and deployment views.
  */
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { expectValidLikeC4, validateLikeC4 } from './helpers/likec4-model.js';
 
@@ -327,5 +329,33 @@ describe('validateLikeC4 agrees with likec4 validate', () => {
   it('expectValidLikeC4 passes valid sources and fails invalid ones', async () => {
     await expect(expectValidLikeC4(samples['extend-relation-kind-title-warning']!)).resolves.toBeUndefined();
     await expect(expectValidLikeC4(samples['self-relation']!)).rejects.toThrow();
+  });
+});
+
+/** Every `.c4` file of a fixture workspace, keyed by its path relative to the workspace, in lexical walk order. */
+function readWorkspace(name: string): Record<string, string> {
+  const root = join(import.meta.dirname, 'fixtures', name);
+  const files: Record<string, string> = {};
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir).sort()) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (path.endsWith('.c4')) files[relative(root, path)] = readFileSync(path, 'utf8');
+    }
+  };
+  walk(root);
+  return files;
+}
+
+// Precondition of every test built on the reference fixtures: they are valid
+// LikeC4, so a write checked against them starts from a clean state.
+// `refs-import` holds two projects, `main` importing from `other` (D116).
+describe('reference fixtures pass likec4 validate', () => {
+  it.each(['refs-catalog', 'refs-flows'])('%s', async (fixture) => {
+    await expectValidLikeC4(readWorkspace(fixture));
+  });
+
+  it('refs-import, with its folders as projects', async () => {
+    await expectValidLikeC4(readWorkspace('refs-import'), { projects: ['main', 'other'] });
   });
 });

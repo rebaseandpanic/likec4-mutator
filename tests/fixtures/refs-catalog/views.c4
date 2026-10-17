@@ -1,0 +1,59 @@
+views {
+  style element.kind = store {
+    color amber
+  }
+  style shop.db, element.kind != actor, element.tag = #core, element.tag != #legacy {
+    border dotted
+  }
+
+  view index {
+    #core
+    title 'Index'
+    include *
+    include shop.*, shop.api.**, shop._
+    include shop.web with {
+      title 'Web'
+      navigateTo shopView
+    }
+    include customer -> shop.web where kind is sync and source.kind is actor and target.tag is #core
+    include -> shop.db, shop.api ->, shop.web <-> shop.api
+    include shop.web -[sync]-> shop.api, shop.web .async shop.db
+    include customer -> shop.web where kind is not async and source.kind is not host and target.tag is not #legacy
+    include * where kind is host and tag is #core
+    include * where kind is not service or tag is not #legacy
+    include element.kind = service, element.kind != store, element.tag = #core, element.tag != #legacy
+    exclude shop.db where tag is not #core
+    exclude * where kind != store and tag != #legacy
+    exclude element.kind = host, element.kind != service, element.tag = #legacy, element.tag != #core
+    exclude * -> * where not (kind is async or tag is #legacy)
+    exclude customer -> shop.web where tag is not #core and source.tag != #legacy and target.kind != host
+    group 'Outer' {
+      include shop.web
+      group 'Inner' {
+        include shop.api.handler, shop.api -[async]-> shop.db
+        exclude element.tag != #core
+      }
+    }
+    style shop.web, element.kind = actor, element.kind != host, element.tag = #core, element.tag != #legacy {
+      color green
+    }
+    rank same {
+      shop.web, shop.api, element.kind = service, element.kind != store, element.tag = #core, element.tag != #legacy
+    }
+    autoLayout LeftRight
+  }
+
+  view shopView of shop {
+    include *
+    include api.handler
+    exclude db
+  }
+
+  view shopWide extends shopView {
+    include customer
+  }
+
+  view of shop.api {
+    include *
+  }
+}

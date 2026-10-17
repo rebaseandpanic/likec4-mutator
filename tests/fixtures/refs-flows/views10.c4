@@ -1,0 +1,45 @@
+views 'Flows' {
+  style element.kind = component, element.tag != #edge {
+    color slate
+  }
+  style platform.store {
+    shape storage
+  }
+
+  view overview {
+    #beta
+    include *
+    include platform.api -> platform.store with {
+      navigateTo checkout
+    }
+    include client -[calls]-> rack, platform.worker .emits platform.api
+    include * where kind is cluster
+    group 'Core' {
+      include platform.** where tag is not #beta
+      include platform.api -> platform.worker where kind is calls and target.kind is component and source.tag is not #edge
+    }
+    global predicate edgeSet
+    global style databaseIcon
+    global style quiet
+  }
+
+  view platformView of platform {
+    include *
+    include api -> worker
+    style worker {
+      color muted
+    }
+  }
+
+  deployment view mainView {
+    include main.**
+    include main.front.api -> main.back.store
+    include main.front.wk -[calls]-> main.front.api
+    include * where kind is cluster or tag is #edge
+    exclude * -> * where kind is emits and source.kind is pod and target.tag is #beta
+    exclude main.back where not tag is #beta
+    style main.front.wk {
+      color red
+    }
+  }
+}

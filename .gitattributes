@@ -72,3 +72,6 @@
 ###############################################################################
 tests/fixtures/views-catalog/operations.c4 -text
 tests/fixtures/views-flows/platform.c4 -text
+tests/fixtures/refs-catalog/extensions.c4 -text
+tests/fixtures/refs-flows/views10.c4 -text
+tests/fixtures/refs-import/main/model10.c4 -text
