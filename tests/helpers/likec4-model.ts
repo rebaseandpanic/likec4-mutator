@@ -1304,6 +1304,8 @@ function catalogueEntries(
   const fqn = (node: AstNode): string => fqnIndex.resolve(node as Parameters<typeof fqnIndex.resolve>[0]);
   const chainTarget = (resolved: AstNode | undefined, parents: Array<AstNode | undefined>): LinkedTarget | null => {
     if (!resolved) return null;
+    // A name an `import` brings in links to its `Imported` node, which leads nowhere when the import does not resolve.
+    if (resolved.$type === 'Imported' && !(resolved as AstNode & { imported: LinkedRef }).imported.ref) return null;
     if (resolved.$type === 'DeploymentNode' || resolved.$type === 'DeployedInstance') return { deployment: fqn(resolved) };
     const via = parents.find((p) => p?.$type === 'DeployedInstance');
     return via ? { deployment: fqn(via), element: fqn(resolved) } : { model: fqn(resolved) };
