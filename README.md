@@ -1509,9 +1509,14 @@ mutator.addViewParallel('checkout', { statements: [[0], [2]], steps: [{ source: 
 
 #### Removing views
 
-`removeView(id)` removes the declaration of the named view `id` and nothing else, and returns `{ changedFiles }`. A manual layout snapshot of the view (a file kept by LikeC4's layout tooling) is not touched.
+`removeView(id, { cascade? })` removes the declaration of the named view `id` and returns `{ changedFiles }` — with `cascade: true` also `cascaded`, the references the cascade removed (see [Removing referenced elements](#removing-referenced-elements) for the shapes). A manual layout snapshot of the view (a file kept by LikeC4's layout tooling) is not touched.
 
-A view that something else refers to is not removed: the call is rejected on `id`, with nothing changed, while LikeC4 links a reference outside the declaration to the view — `extends` of an element view; a `navigateTo` in an element predicate's `with` (any view); a `navigateTo` in a relation predicate's `with`, in a dynamic step, or in the body of a relationship or a deployment relationship (a dynamic view). The error lists each reference with its file and line. References inside the removed declaration itself (a view that navigates to itself) go with it and do not block. A view declared more than once, or not at all, is rejected on `id` too.
+References to the view from outside its declaration follow the reference policy:
+- a `navigateTo` in an element predicate's `with` (any view), or in a relation predicate's `with`, a dynamic step, the body of a relationship or a deployment relationship (a dynamic view) rejects the removal by default; with `cascade: true` the `navigateTo` property is removed, and a predicate's `with { … }` it leaves empty goes with it (a step or relationship body keeps its braces);
+- `extends` of an element view rejects the removal in both modes, listing every view of the `extends` chain;
+- a `navigateTo` in an opaque flow block (`opt`, `alt`, …) or a `global` block, and the view id written there or in text the parser could not recover, reject it in both modes.
+
+A rejection is a `ReferencedRemovalError` on `id` listing each reference with its file, line, column, role, whether `cascade` removes it, and the view it is written in. References inside the removed declaration itself (a view that navigates to itself) go with it and do not block. A view declared more than once, or not at all, is a plain `InvalidWriteError` on `id`.
 
 ## Slashes in titles
 
@@ -1576,7 +1581,7 @@ Writes LikeC4 would reject are refused the same way:
 | `addViewRule`, `replaceViewRule`, `removeViewRule` | `id` as for `updateView`; the address names no rule or its `text` does not match; the view type has no such rule kind; the expression is not exactly one rule that LikeC4 resolves at its place and keeps (see [Writing rules](#writing-rules)). |
 | `addViewStep`, `updateViewStep` | `id` as for `updateView`, or a view that is not a dynamic view; an endpoint does not resolve in the view's document; a parent and its descendant; an undeclared kind, or a kind on a backward step; an endpoint or direction change of a chain segment; an invalid path or style value (see [Dynamic view steps](#dynamic-view-steps)). |
 | `moveViewStep`, `removeViewStep`, `addViewParallel` | `id` as for `updateView`, or a view that is not a dynamic view; a path that does not exist, a chain segment, a destination inside the moved statement, a nested `par`; a `par` block left giving LikeC4 no step (see [Dynamic view steps](#dynamic-view-steps)). |
-| `removeView` | another view, a step or a relationship refers to the view; `id` names no view or a view declared more than once (see [Removing views](#removing-views)). |
+| `removeView` | `id` names no view or a view declared more than once (`InvalidWriteError`); a reference to the view that the mode does not remove (`ReferencedRemovalError`, see [Removing views](#removing-views)). |
 | every view write | the edited file would not parse; a surviving reference would link to something else (see [Views › Writing](#writing-3)). |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |

@@ -244,3 +244,64 @@ function contentCount(view: ViewDeclaration, removed: ReadonlySet<object>): numb
 function distinct<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
 }
+
+/** Wrappers whose `with { … }` holds custom properties: removed when the properties are all gone. */
+const WITH_WRAPPERS: ReadonlySet<string> = new Set(['FqnExprWith', 'RelationExprWith']);
+
+/**
+ * Plan the removal of the `navigateTo` properties of `entries` — view
+ * references at modelled places (FR-001, `removeView`): each property goes
+ * with the lines it fills; a `with { … }` of a predicate item whose every
+ * property goes is removed with them (the item stays).  A step or
+ * relationship body keeps its braces.
+ *
+ * @param documentOf - The parsed document of a file
+ * @throws {Error} (internal) for an entry that is not a `navigateTo` value
+ */
+export function planNavigateToCascade(entries: readonly CatalogueEntry[], documentOf: (file: string) => ParsedDocument): CascadePlan {
+  const removed = new Set<object>();
+  const edits = new Map<string, TextEdit[]>();
+  const add = (file: string, edit: TextEdit): void => {
+    const list = edits.get(file);
+    if (list) list.push(edit);
+    else edits.set(file, [edit]);
+  };
+  const byContainer = new Map<ViewAstNode, { file: string; properties: Set<ViewAstNode> }>();
+  for (const entry of entries) {
+    const property = entry.node.$container;
+    const container = property?.$container;
+    if (entry.unmodelled || entry.role !== 'navigate-to' || !property || !container) {
+      throw new Error(`Internal error: the ${entry.role} '${entry.text}' in '${entry.file}' is not a removable navigateTo`);
+    }
+    const group = byContainer.get(container) ?? { file: entry.file, properties: new Set<ViewAstNode>() };
+    group.properties.add(property);
+    byContainer.set(container, group);
+  }
+  for (const [container, { file, properties }] of byContainer) {
+    const wrapper = container.$container;
+    const all = ((container['props'] as ViewAstNode[] | undefined) ?? []).every((prop) => properties.has(prop));
+    if (all && wrapper && WITH_WRAPPERS.has(wrapper.$type ?? '') && wrapper['custom'] === container) {
+      // `subject with { … }` becomes `subject`.
+      const subject = (wrapper['subject'] as ViewAstNode | undefined)?.$cstNode;
+      const end = wrapper.$cstNode?.end;
+      if (!subject || end === undefined) throw new Error('Internal error: a with block without a position');
+      add(file, { offset: subject.end, end, newText: '' });
+      removed.add(container);
+      continue;
+    }
+    for (const property of properties) {
+      const cst = property.$cstNode;
+      if (!cst) throw new Error('Internal error: a navigateTo without a position');
+      const { offset, end, newText } = buildRemovalEdit(documentOf(file).fullText, cst.offset, cst.end);
+      add(file, { offset, end, newText });
+      removed.add(property);
+    }
+  }
+  for (const [file, list] of edits) {
+    list.sort((a, b) => a.offset - b.offset);
+    for (let i = 1; i < list.length; i++) {
+      if (list[i]!.offset < list[i - 1]!.end) throw new Error(`Internal error: overlapping cascade edits in '${file}'`);
+    }
+  }
+  return { edits, removed, emptied: [] };
+}

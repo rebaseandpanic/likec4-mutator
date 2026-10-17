@@ -135,9 +135,7 @@ import {
   addViewRuleEdits,
   removeViewRuleEdit,
   replaceViewRuleEdit,
-  describeReferrer,
   extendsParent,
-  outsideReferrers,
   removeViewEdit,
   updateViewEdits,
   type GenerateViewOpts,
@@ -163,7 +161,7 @@ import {
 import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
-import { planCascade, type CascadePlan } from './cascade-ops.js';
+import { planCascade, planNavigateToCascade, type CascadePlan } from './cascade-ops.js';
 import {
   InvalidWriteError,
   ReferencedRemovalError,
@@ -1279,42 +1277,78 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Remove the declaration of the named view `id` and nothing else (US-8).
-   * A manual layout snapshot of the view, if one exists, is not touched.
+   * Remove the declaration of the named view `id` (US-8) and, by the
+   * reference policy of FR-001 (lc4m-15.30 US-2), reject or cascade the
+   * references to it from outside the declaration.  A manual layout
+   * snapshot of the view, if one exists, is not touched.
    *
-   * Rejected on `id`, with nothing changed, when `id` is not exactly one
-   * named view, or while LikeC4 links a reference outside the declaration to
-   * the view (D26): `extends` of an element view, a `navigateTo` in an
-   * element predicate's `with` (any view), or in a relation predicate's
-   * `with`, a dynamic step, a relationship or deployment relationship body
-   * (a dynamic view).  The error lists every such reference with its file
-   * and line.  References inside the declaration itself — a view navigating
-   * to itself — are removed with it and do not block (D43).
+   * References inside the declaration itself — a view navigating to itself
+   * — are removed with it and do not block (D43).  Outside it:
+   *  - `extends` of an element view rejects the removal in both modes (D56),
+   *    naming every view of the `extends` chain;
+   *  - a `navigateTo` in an element predicate's `with` (any view), or in a
+   *    relation predicate's `with`, a dynamic step, a relationship or
+   *    deployment relationship body (a dynamic view) rejects the removal by
+   *    default; with `cascade: true` the `navigateTo` property is removed,
+   *    and a predicate's `with { … }` it empties goes with it;
+   *  - a `navigateTo` at a place the library does not model (an opaque flow
+   *    block, a `global` block), and the view id written there or in
+   *    unparsed text, reject the removal in both modes (D61, D92).
+   * Rejections are a {@link ReferencedRemovalError} on `id` listing every
+   * reference.  The operation is atomic.
    *
-   * @returns `{ changedFiles }`: the view's file
+   * @param id      - Id of the view
+   * @param options - `cascade`: remove the referring `navigateTo` properties
+   * @returns `{ changedFiles }` — the view's file and the files the cascade
+   *   edited, in load order — and, with `cascade`, the references the
+   *   cascade removed
+   * @throws {ReferencedRemovalError} on `id` for a removal the references
+   *   reject
+   * @throws {InvalidWriteError} on `id` when `id` is not exactly one named
+   *   view, or when an edit would leave a file that does not parse
    */
-  removeView(id: string): ViewWriteResult {
+  removeView(id: string, options: RemoveOptions = {}): ViewWriteResult & { cascaded?: CascadedReference[] } {
     const view = namedView(this.views, id);
-    const referrers = outsideReferrers(this.views, view);
-    if (referrers.length > 0) {
-      throw new InvalidWriteError(
-        'id',
-        `view '${id}' is referenced, and LikeC4 would no longer resolve these references: ${referrers.map(describeReferrer).join(', ')}`,
-      );
+    const cascade = options.cascade === true;
+    const catalogue = this.referenceCatalogue();
+    const own = new Set<object>([view.node]);
+    const listed = new Map<CatalogueEntry, boolean>();
+    for (const entry of catalogue.toView(id)) {
+      if (isInsideAny(entry.node, own)) continue; // removed with the view (D43)
+      if (entry.role === 'view-extends') {
+        listed.set(entry, false);
+        if (entry.view?.id !== undefined) {
+          for (const extension of extendsChain(catalogue, entry.view.id)) if (!listed.has(extension)) listed.set(extension, false);
+        }
+        continue;
+      }
+      listed.set(entry, entry.role === 'navigate-to' && !entry.unmodelled);
     }
+    const { plan, cascaded } = this.settleRemoval(listed, new Set([id]), {
+      field: 'id',
+      subject: `view '${id}'`,
+      cascade,
+      instanceIds: new Map(),
+      nameClass: 'view',
+      plan: (entries) => planNavigateToCascade(entries, (file) => this.document(file)),
+    });
+
     const file = view.file;
     if (file === undefined) throw new Error(`Internal error: view '${id}' has no file`);
-    const edit = removeViewEdit(this.document(file), view);
-    const before = this.referenceSnapshot(new Set([view.node]));
+    const before = this.referenceSnapshot(new Set([view.node, ...(plan?.removed ?? [])]));
     const snapshot = this.snapshot();
     try {
-      refusedOn('id', () => this.applyEdit(file, edit));
+      refusedOn('id', () => {
+        if (plan) this.applyEditGroups(plan.edits);
+        this.applyEdit(file, removeViewEdit(this.document(file), this.views.declarations().find((d) => d.file === file && d.id === id)!));
+      });
       this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing the view' });
     } catch (err) {
       this.restore(snapshot);
       throw err;
     }
-    return { changedFiles: [file] };
+    const changedFiles = [...this.sources.keys()].filter((name) => this.sources.get(name) !== snapshot.sources.get(name));
+    return cascade ? { changedFiles, cascaded } : { changedFiles };
   }
 
   /**
@@ -2795,12 +2829,23 @@ export class LikeC4Mutator {
   private settleRemoval(
     listed: ReadonlyMap<CatalogueEntry, boolean>,
     names: ReadonlySet<string>,
-    options: { field: string; subject: string; cascade: boolean; instanceIds: ReadonlyMap<object, string> },
+    options: {
+      field: string;
+      subject: string;
+      cascade: boolean;
+      instanceIds: ReadonlyMap<object, string>;
+      /** The class of `names` in the inventory (default: element, which deployment ids share) */
+      nameClass?: UnmodelledNameClass;
+      /** Plans the cascade of the cascadable entries (default: their view statements, {@link planCascade}) */
+      plan?: (entries: CatalogueEntry[]) => CascadePlan;
+    },
   ): { plan: CascadePlan | undefined; cascaded: CascadedReference[] } {
     const { field, subject, cascade } = options;
     this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
     const at = new Set([...listed.keys()].map((entry) => `${entry.file}:${entry.offset}`));
-    const hits = affectedNameHits(this.unmodelled, names, 'element').filter((hit) => !at.has(`${hit.file}:${hit.segments[0]!.offset}`));
+    const hits = affectedNameHits(this.unmodelled, names, options.nameClass ?? 'element').filter(
+      (hit) => !at.has(`${hit.file}:${hit.segments[0]!.offset}`),
+    );
 
     const documentOrder = new Map(this.referenceCatalogue().documents.map(({ file }, i) => [file, i]));
     const references = [
@@ -2834,8 +2879,10 @@ export class LikeC4Mutator {
     }
     if (!cascade) return { plan: undefined, cascaded: [] };
 
-    const statements = [...listed.keys()].filter((entry) => entry.statementClass === 'rule' || entry.statementClass === 'step');
-    const plan = planCascade(statements, (file) => this.document(file), this.viewResolver(), field);
+    const cascadable = [...listed].filter(([, removable]) => removable).map(([entry]) => entry);
+    const plan = options.plan
+      ? options.plan(cascadable)
+      : planCascade(cascadable.filter(isCascadableStatement), (file) => this.document(file), this.viewResolver(), field);
     if (plan.emptied.length > 0) {
       const views = plan.emptied.map((view) => `'${view.id ?? 'unnamed view'}'`).join(', ');
       throw new ReferencedRemovalError(
