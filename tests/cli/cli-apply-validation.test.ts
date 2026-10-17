@@ -228,7 +228,7 @@ describe('CLI apply validates the mutations file shape', () => {
           metadata: { sla: '99.99%', owners: null },
           style: { line: 'dotted', color: 'red' },
         },
-        { op: 'addView', id: 'apiView', type: 'element', target: 'app.api', title: 'API Overview', includes: ['*'] },
+        { op: 'addView', id: 'apiView', type: 'element', target: 'app', title: 'API Overview', includes: ['*'] },
         { op: 'removeRelationship', source: 'ext', target: 'app.db' },
         { op: 'removeElement', fqn: 'app.api' },
       ],
