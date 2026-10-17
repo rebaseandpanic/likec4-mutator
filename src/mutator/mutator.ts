@@ -304,6 +304,12 @@ export interface UpdateDeploymentRelationshipResult {
  */
 export interface RemoveDeploymentNodeResult {
   removedRelationships: Array<{ source: DeploymentEndpoint; target: DeploymentEndpoint; title?: string }>;
+  /**
+   * Only with `cascade: true` (D112): every reference the cascade removed
+   * with its construct, as {@link RemoveElementResult.cascaded}.  Absent
+   * without `cascade`.
+   */
+  cascaded?: CascadedReference[];
 }
 
 /**
@@ -1866,23 +1872,35 @@ export class LikeC4Mutator {
    *    element stepped into through an instance of it).
    *
    * The node must be declared exactly once; a node declared in an `extend`
-   * block is addressed by its id like any other.  The removal is rejected,
-   * with no file changed, while a rule of a deployment view refers to the
-   * node or anything in its subtree (the view is not edited), and when the
-   * removal would change what a surviving reference links to (a name that
-   * becomes unique can re-target a reference written elsewhere).  The
-   * operation is atomic.
+   * block is addressed by its id like any other.
    *
-   * @param id - Deployment id of the node
-   * @returns The deployment relationships that were removed.
+   * A deployment-view include / exclude item or style target that refers
+   * into the subtree rejects the removal by default
+   * ({@link ReferencedRemovalError} on `id`, listing every reference); with
+   * `cascade: true` it is removed as for {@link removeElement} (an emptied
+   * rule goes too), and the removed references are listed in `cascaded`.
+   * Rejected in both modes: a reference at a place the library does not
+   * model (an opaque flow block, a `global` block), an id of the subtree
+   * written there or in unparsed text as a whole identifier or any dotted
+   * segment, and — with `cascade` — a deployment view that would lose its
+   * last `include` (D77).  The removal is rejected as well when it would
+   * change what a surviving reference links to (a name that becomes unique
+   * can re-target a reference written elsewhere).  The operation is atomic.
+   *
+   * @param id      - Deployment id of the node
+   * @param options - `cascade`: remove the referencing view items (FR-001)
+   * @returns The deployment relationships that were removed and, with
+   *   `cascade`, the references the cascade removed.
+   * @throws {ReferencedRemovalError} on `id` for a removal the references
+   *   reject
    * @throws {InvalidWriteError} on `id` when no node has the id, it is an
-   *   instance or it is declared more than once; when a deployment view
-   *   refers to the subtree (listing the references); when a surviving
-   *   reference would link to another target
+   *   instance or it is declared more than once; when an edit would leave a
+   *   file that does not parse; when a surviving reference would link to
+   *   another target
    */
-  removeDeploymentNode(id: string): RemoveDeploymentNodeResult {
+  removeDeploymentNode(id: string, options: RemoveOptions = {}): RemoveDeploymentNodeResult {
     const declaration = nodeDeclaration(this.deployments, id, 'id');
-    return this.removeDeploymentSubtree(id, declaration, { extendBlocks: true, scope: 'it or its subtree' });
+    return this.removeDeploymentSubtree(id, declaration, { extendBlocks: true, cascade: options.cascade === true });
   }
 
   /**
@@ -1893,22 +1911,28 @@ export class LikeC4Mutator {
    *
    * The instance must be declared exactly once; an instance declared in an
    * `extend` block is addressed by its id like any other.  The element it
-   * deploys is not touched.  The removal is rejected, with no file changed,
-   * while a rule of a deployment view refers to the instance or to an
-   * element through it (the view is not edited), and when the removal would
-   * change what a surviving reference links to (a name that becomes unique
-   * can re-target a reference written elsewhere).  The operation is atomic.
+   * deploys is not touched.  References from deployment views and from
+   * unmodelled places are handled as for {@link removeDeploymentNode}: by
+   * default a {@link ReferencedRemovalError} on `id`, with `cascade: true`
+   * the view items go (listed in `cascaded`).  The removal is rejected when
+   * it would change what a surviving reference links to (a name that
+   * becomes unique can re-target a reference written elsewhere).  The
+   * operation is atomic.
    *
-   * @param id - Deployment id of the instance
-   * @returns The deployment relationships that were removed.
+   * @param id      - Deployment id of the instance
+   * @param options - `cascade`: remove the referencing view items (FR-001)
+   * @returns The deployment relationships that were removed and, with
+   *   `cascade`, the references the cascade removed.
+   * @throws {ReferencedRemovalError} on `id` for a removal the references
+   *   reject
    * @throws {InvalidWriteError} on `id` when no instance has the id, it is a
-   *   node or it is declared more than once; when a deployment view refers
-   *   to it (listing the references); when a surviving reference would link
-   *   to another target
+   *   node or it is declared more than once; when an edit would leave a
+   *   file that does not parse; when a surviving reference would link to
+   *   another target
    */
-  removeDeploymentInstance(id: string): RemoveDeploymentInstanceResult {
+  removeDeploymentInstance(id: string, options: RemoveOptions = {}): RemoveDeploymentInstanceResult {
     const declaration = instanceDeclaration(this.deployments, id, 'id');
-    return this.removeDeploymentSubtree(id, declaration, { extendBlocks: false, scope: 'it or an element through it' });
+    return this.removeDeploymentSubtree(id, declaration, { extendBlocks: false, cascade: options.cascade === true });
   }
 
   /**
@@ -2744,58 +2768,86 @@ export class LikeC4Mutator {
 
     // Names of the subtree at unmodelled places and in unrecovered text (affected mode, D92).
     const names = new Set([...this.subtreeFqns(fqn), ...instances].map((name) => name.slice(name.lastIndexOf('.') + 1)));
-    this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
-    const at = new Set([...listed.keys()].map((entry) => `${entry.file}:${entry.offset}`));
-    const hits = affectedNameHits(this.unmodelled, names, 'element').filter((hit) => !at.has(`${hit.file}:${hit.segments[0]!.offset}`));
-
-    const documentOrder = new Map(catalogue.documents.map(({ file }, i) => [file, i]));
-    const references = [
-      ...[...listed].map(([entry, cascadable]) => ({ offset: entry.offset, reference: this.removalReference(entry, cascadable) })),
-      ...hits.map((hit) => ({
-        offset: hit.segments[0]!.offset,
-        reference: this.unmodelledReference(hit),
-      })),
-    ]
-      .sort((a, b) => (documentOrder.get(a.reference.file) ?? 0) - (documentOrder.get(b.reference.file) ?? 0) || a.offset - b.offset)
-      .map(({ reference }) => reference);
-    const texts = new Map([...listed].map(([entry]) => [`${entry.file}:${entry.line}:${this.position(entry.file, entry.offset).column}`, describeEntry(entry, instanceIds)]));
-    const describeAll = (list: readonly RemovalReference[]): string =>
-      list.map((ref) => `${texts.get(`${ref.file}:${ref.line}:${ref.column}`) ?? `the name in ${ref.role === 'unrecovered' ? 'unparsed text' : `a ${ref.role} place`}`} at ${ref.file}:${ref.line}:${ref.column}`).join('; ');
-
-    const blocking = references.filter((ref) => !ref.cascadable);
-    if (references.length > 0 && (!cascade || blocking.length > 0)) {
-      const cascadable = references.filter((ref) => ref.cascadable);
-      throw new ReferencedRemovalError(
-        'fqn',
-        cascade
-          ? `'${fqn}' cannot be removed even with cascade: blocking — ${describeAll(blocking)}` +
-              (cascadable.length > 0 ? `; cascade would remove — ${describeAll(cascadable)}` : '')
-          : `'${fqn}' cannot be removed while references to it or its descendants remain (cascade removes those marked cascadable): ${describeAll(references)}`,
-        references,
-      );
-    }
-    if (!cascade) return { instances: [], plan: undefined, cascaded: [], deleted: new Set() };
-
-    const statements = [...listed.keys()].filter((entry) => entry.statementClass === 'rule' || entry.statementClass === 'step');
-    const plan = planCascade(statements, (file) => this.document(file), this.viewResolver(), 'fqn');
-    if (plan.emptied.length > 0) {
-      const views = plan.emptied.map((view) => `'${view.id ?? 'unnamed view'}'`).join(', ');
-      throw new ReferencedRemovalError(
-        'fqn',
-        `'${fqn}' cannot be removed with cascade: views ${views} would lose their last content-producing statement (LikeC4 would show other content): ${describeAll(references)}`,
-        references,
-      );
-    }
+    const { plan, cascaded } = this.settleRemoval(listed, names, { field: 'fqn', subject: `'${fqn}'`, cascade, instanceIds });
+    if (!plan) return { instances: [], plan: undefined, cascaded: [], deleted: new Set() };
 
     const deleted = new Set<object>([...plan.removed, ...instanceDeclarations]);
     const resolver = new DeploymentResolver(this.deployments, this.workspace);
     for (const relation of this.deployments.relations()) {
       if (this.closureRelation(relation, fqn, instances, resolver)) deleted.add(relation.node);
     }
+    return { instances, plan, cascaded, deleted };
+  }
+
+  /**
+   * The common end of a removal's reference policy: add the names `names`
+   * of what is removed found at unmodelled places and in unrecovered text
+   * (affected mode, D92; never cascadable) to the references `listed` (each
+   * with whether a cascade removes it), reject the removal when one is left
+   * that the mode does not remove, and plan the cascade.
+   *
+   * @returns Without `cascade`, no plan (nothing was listed); with it, the
+   *   plan and the references it removes in LikeC4's document order
+   * @throws {ReferencedRemovalError} on `options.field` listing every
+   *   reference, when a reference is left that the mode does not remove or
+   *   the cascade would empty a view (D77)
+   */
+  private settleRemoval(
+    listed: ReadonlyMap<CatalogueEntry, boolean>,
+    names: ReadonlySet<string>,
+    options: { field: string; subject: string; cascade: boolean; instanceIds: ReadonlyMap<object, string> },
+  ): { plan: CascadePlan | undefined; cascaded: CascadedReference[] } {
+    const { field, subject, cascade } = options;
+    this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
+    const at = new Set([...listed.keys()].map((entry) => `${entry.file}:${entry.offset}`));
+    const hits = affectedNameHits(this.unmodelled, names, 'element').filter((hit) => !at.has(`${hit.file}:${hit.segments[0]!.offset}`));
+
+    const documentOrder = new Map(this.referenceCatalogue().documents.map(({ file }, i) => [file, i]));
+    const references = [
+      ...[...listed].map(([entry, cascadable]) => ({ offset: entry.offset, reference: this.removalReference(entry, cascadable) })),
+      ...hits.map((hit) => ({ offset: hit.segments[0]!.offset, reference: this.unmodelledReference(hit) })),
+    ]
+      .sort((a, b) => (documentOrder.get(a.reference.file) ?? 0) - (documentOrder.get(b.reference.file) ?? 0) || a.offset - b.offset)
+      .map(({ reference }) => reference);
+    const texts = new Map(
+      [...listed].map(([entry]) => [`${entry.file}:${entry.line}:${this.position(entry.file, entry.offset).column}`, describeEntry(entry, options.instanceIds)]),
+    );
+    const describeAll = (list: readonly RemovalReference[]): string =>
+      list
+        .map(
+          (ref) =>
+            `${texts.get(`${ref.file}:${ref.line}:${ref.column}`) ?? `the name in ${ref.role === 'unrecovered' ? 'unparsed text' : `a ${ref.role} place`}`} at ${ref.file}:${ref.line}:${ref.column}`,
+        )
+        .join('; ');
+
+    const blocking = references.filter((ref) => !ref.cascadable);
+    if (references.length > 0 && (!cascade || blocking.length > 0)) {
+      const cascadable = references.filter((ref) => ref.cascadable);
+      throw new ReferencedRemovalError(
+        field,
+        cascade
+          ? `${subject} cannot be removed even with cascade: blocking — ${describeAll(blocking)}` +
+              (cascadable.length > 0 ? `; cascade would remove — ${describeAll(cascadable)}` : '')
+          : `${subject} cannot be removed while references to it or what it holds remain (cascade removes those marked cascadable): ${describeAll(references)}`,
+        references,
+      );
+    }
+    if (!cascade) return { plan: undefined, cascaded: [] };
+
+    const statements = [...listed.keys()].filter((entry) => entry.statementClass === 'rule' || entry.statementClass === 'step');
+    const plan = planCascade(statements, (file) => this.document(file), this.viewResolver(), field);
+    if (plan.emptied.length > 0) {
+      const views = plan.emptied.map((view) => `'${view.id ?? 'unnamed view'}'`).join(', ');
+      throw new ReferencedRemovalError(
+        field,
+        `${subject} cannot be removed with cascade: views ${views} would lose their last content-producing statement (LikeC4 would show other content): ${describeAll(references)}`,
+        references,
+      );
+    }
     const cascaded = references
       .filter((ref) => ref.cascadable)
       .map(({ file, line, column, role }) => ({ file, line, column, role: role as CatalogueRole }));
-    return { instances, plan, cascaded, deleted };
+    return { plan, cascaded };
   }
 
   /**
@@ -2970,9 +3022,10 @@ export class LikeC4Mutator {
   private removeDeploymentSubtree(
     id: string,
     declaration: { node: object },
-    options: { extendBlocks: boolean; scope: string },
+    options: { extendBlocks: boolean; cascade: boolean },
   ): RemoveDeploymentNodeResult {
-    return this.removeDeploymentPart({
+    const { plan, cascaded } = this.deploymentRemovalPolicy(id, declaration.node, options);
+    const result = this.removeDeploymentPart({
       roots: [id],
       extendBlocks: options.extendBlocks,
       construct: declaration.node,
@@ -2984,9 +3037,53 @@ export class LikeC4Mutator {
       },
       field: 'id',
       subject: id,
-      viewMessage: (references) =>
-        `'${id}' cannot be removed while deployment views refer to ${options.scope}: ${references.join(', ')}`,
+      cascade: plan,
     });
+    return options.cascade ? { ...result, cascaded } : result;
+  }
+
+  /**
+   * The reference policy of removing deployment node or instance `id`
+   * (declared by `construct`; FR-001, lc4m-15.30 US-1): deployment
+   * relationships with an endpoint in the subtree and — with
+   * `options.extendBlocks` — the `extend <node>` blocks of the subtree are
+   * owned (D57); deployment-view items and style targets are cascadable;
+   * references at unmodelled places, and the ids of the subtree written
+   * there or in unrecovered text (affected mode, D92), block in both modes.
+   *
+   * @throws {ReferencedRemovalError} on `id` (see {@link settleRemoval})
+   */
+  private deploymentRemovalPolicy(
+    id: string,
+    construct: object,
+    options: { extendBlocks: boolean; cascade: boolean },
+  ): { plan: CascadePlan | undefined; cascaded: CascadedReference[] } {
+    const subtree = this.deploymentSubtree(id);
+    const removed = new Set<object>([construct]);
+    if (options.extendBlocks) {
+      for (const extend of this.deployments.allExtendBlocks()) {
+        if (subtree.some((member) => member === extend.target)) removed.add(extend.node);
+      }
+    }
+    const instanceIds = new Map<object, string>();
+    for (const member of this.deployments.ids()) {
+      for (const declaration of this.deployments.declarations(member)) {
+        if (declaration.type === 'instance') instanceIds.set(declaration.node, member);
+      }
+    }
+    const listed = new Map<CatalogueEntry, boolean>();
+    for (const entry of this.referenceCatalogue().intoDeployment(id)) {
+      if (isInsideAny(entry.node, removed)) continue;
+      if (entry.role === 'deployment-relationship-endpoint' || entry.role === 'extend-node-target') continue; // owned (D57)
+      listed.set(entry, isCascadableStatement(entry));
+    }
+    const names = new Set(subtree.map((member) => member.slice(member.lastIndexOf('.') + 1)));
+    return this.settleRemoval(listed, names, { field: 'id', subject: `'${id}'`, cascade: options.cascade, instanceIds });
+  }
+
+  /** The deployment id `id` and the ids below it. */
+  private deploymentSubtree(id: string): string[] {
+    return [id, ...this.deployments.children(id).flatMap((child) => this.deploymentSubtree(child))];
   }
 
   /**
@@ -3016,12 +3113,17 @@ export class LikeC4Mutator {
     locate: () => { file?: string; node: object };
     field: string;
     subject: string;
-    viewMessage: (references: string[]) => string;
+    /** Rejects a part deployment views refer into, listing the references (when the policy is not applied) */
+    viewMessage?: (references: string[]) => string;
+    /** The planned cascade of the reference policy, applied first; undefined when nothing is cascaded */
+    cascade?: CascadePlan;
   }): RemoveDeploymentNodeResult {
     const { roots } = part;
     const resolver = new DeploymentResolver(this.deployments, this.workspace);
-    const viewReferences = roots.flatMap((root) => viewReferencesIntoSubtree(this.deployments, resolver, root));
-    if (viewReferences.length > 0) throw new InvalidWriteError(part.field, part.viewMessage(viewReferences));
+    if (part.viewMessage) {
+      const viewReferences = roots.flatMap((root) => viewReferencesIntoSubtree(this.deployments, resolver, root));
+      if (viewReferences.length > 0) throw new InvalidWriteError(part.field, part.viewMessage(viewReferences));
+    }
 
     const targetsSubtree = (target: string): boolean => roots.some((root) => isInSubtree(target, root));
     const cascades = (relation: DeploymentRelationRef, current: DeploymentResolver): boolean =>
@@ -3048,24 +3150,29 @@ export class LikeC4Mutator {
       .filter((r) => removedRelations.has(`${r.file ?? ''}:${r.sourceRange.offset}`))
       .map(({ source, target, title }) => ({ source, target, ...(title !== undefined && { title }) }));
 
+    for (const node of part.cascade?.removed ?? []) removed.add(node);
     const before = this.referenceSnapshot(removed);
     const snapshot = this.snapshot();
     try {
-      // One construct at a time (each removal reparses its file): the
-      // relationships outside the construct, the extend blocks, the construct.
-      for (;;) {
-        const current = new DeploymentResolver(this.deployments, this.workspace);
-        const next = this.deployments.relations().find((relation) => cascades(relation, current));
-        if (!next) break;
-        this.removeDeploymentConstruct(next.file, next.node);
-      }
-      while (part.extendBlocks) {
-        const next = this.deployments.allExtendBlocks().find((extend) => targetsSubtree(extend.target));
-        if (!next) break;
-        this.removeDeploymentConstruct(next.file, next.node);
-      }
-      const construct = part.locate();
-      this.removeDeploymentConstruct(construct.file, construct.node);
+      refusedOn(part.field, () => {
+        // The cascaded view statements first, then one construct at a time
+        // (each removal reparses its file): the relationships outside the
+        // construct, the extend blocks, the construct.
+        if (part.cascade) this.applyEditGroups(part.cascade.edits);
+        for (;;) {
+          const current = new DeploymentResolver(this.deployments, this.workspace);
+          const next = this.deployments.relations().find((relation) => cascades(relation, current));
+          if (!next) break;
+          this.removeDeploymentConstruct(next.file, next.node);
+        }
+        while (part.extendBlocks) {
+          const next = this.deployments.allExtendBlocks().find((extend) => targetsSubtree(extend.target));
+          if (!next) break;
+          this.removeDeploymentConstruct(next.file, next.node);
+        }
+        const construct = part.locate();
+        this.removeDeploymentConstruct(construct.file, construct.node);
+      });
       this.rejectChangedReferences(before, new Map(), part.subject, { field: part.field, action: 'removing' });
     } catch (err) {
       this.restore(snapshot);
