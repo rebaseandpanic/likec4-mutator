@@ -1219,7 +1219,7 @@ Rejected, with nothing changed: an `id` no instance has, that is a node or that 
 
 #### Removing instances
 
-`removeDeploymentInstance(id)` removes an instance with the relationships declared in its body, and every deployment relationship in any file whose source or target is the instance or an element stepped into through it (`prod.eu.vm1.api.handler`). The element it deploys is not touched. It returns `{ removedRelationships }`, listed as for [removing nodes](#removing-nodes).
+`removeDeploymentInstance(id, { cascade? })` removes an instance with the relationships declared in its body, and every deployment relationship in any file whose source or target is the instance or an element stepped into through it (`prod.eu.vm1.api.handler`). The element it deploys is not touched. It returns `{ removedRelationships }`, listed as for [removing nodes](#removing-nodes), and with `cascade: true` also `cascaded`, the references the cascade removed.
 
 ```typescript
 mutator.removeDeploymentInstance('prod.eu.vm1.db');
@@ -1232,7 +1232,8 @@ mutator.removeDeploymentInstance('prod.eu.vm1.db');
 Rejected, with nothing changed (field `id`):
 
 - an `id` no instance has, that is a node or that is declared more than once — two unnamed instances of one element in one node share an id, and the error names both;
-- a rule of a deployment view refers to the instance or to an element through it (`style prod.eu.vm1.api.handler`) — the error lists the references; views are never edited;
+- without `cascade`, a rule of a deployment view refers to the instance or to an element through it (`style prod.eu.vm1.api.handler`) — a `ReferencedRemovalError` lists the references; with `cascade` the item or target is removed (an emptied rule too), unless that removes a deployment view's last `include`;
+- in both modes, a reference to the instance in a `global` block, or its id written there or in text the parser could not recover (a whole identifier or any dotted segment);
 - the removal would change what a surviving reference links to. With `outer { n = instanceOf app.db  prod { a { n = ... }  b { n = ... }  c { -> n } } }`, `-> n` links to `outer.n` while `n` is ambiguous below `prod`; removing `outer.prod.b.n` would make it link to `outer.prod.a.n`. A removal that only makes an ambiguous reference resolve — one that did not resolve before — is accepted.
 
 #### Adding deployment relationships
