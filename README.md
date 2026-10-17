@@ -370,6 +370,31 @@ Removes an element and all its children. With `"cascade": true` the constructs t
 
 The four remove ops (`removeElement`, `removeDeploymentNode`, `removeDeploymentInstance`, `removeView`) take `cascade` (a boolean). A cascade prints one more line listing the references it removed, as `file:line:column (role)` at their positions before the op.
 
+#### renameElement
+
+Renames an element and rewrites the references to it and to its subtree, as the library's `renameElement(fqn, newName)` does (see [Renaming elements](#renaming-elements)). A rejection fails on `mutations[i].newName` or `mutations[i].fqn` and nothing is written.
+
+```json
+{
+  "op": "renameElement",
+  "fqn": "app.api",
+  "newName": "gateway"
+}
+```
+
+#### moveElement
+
+Moves an element under `parent` (an element FQN), or with `"parent": null` to the top level of `file` (a loaded file; the element's current file when absent), as the library's `moveElement(fqn, { parent, file })` does (see [Moving elements](#moving-elements)). `parent` is required, a string or `null`. A rejection fails on `mutations[i].fqn`, `.parent` or `.file` and nothing is written.
+
+```json
+{
+  "op": "moveElement",
+  "fqn": "app.api",
+  "parent": null,
+  "file": "core.c4"
+}
+```
+
 #### addRelationship
 
 Adds a relationship between two elements. All fields except `op`, `source`, `target` are optional. It is written at the end of the first `model` block of the first file, in LikeC4's document order, that has one; else in a new `model` block at the end of the first file.

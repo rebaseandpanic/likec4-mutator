@@ -201,6 +201,23 @@ export interface RemoveElementMutation {
   cascade?: boolean;
 }
 
+/** `renameElement` (lc4m-15.30 US-3): the library's `renameElement(fqn, newName)`. */
+export interface RenameElementMutation {
+  op: 'renameElement';
+  fqn: string;
+  newName: string;
+}
+
+/** `moveElement` (lc4m-15.30 US-3): the library's `moveElement(fqn, { parent, file })`. */
+export interface MoveElementMutation {
+  op: 'moveElement';
+  fqn: string;
+  /** The new parent's FQN, or `null` for the top level of a `model` block */
+  parent: string | null;
+  /** With `parent: null`: the loaded file to move to; the element's current file when absent */
+  file?: string;
+}
+
 export interface RemoveRelationshipMutation {
   op: 'removeRelationship';
   source: string;
@@ -355,6 +372,8 @@ export type Mutation =
   | UpdateElementMutation
   | UpdateRelationshipMutation
   | RemoveElementMutation
+  | RenameElementMutation
+  | MoveElementMutation
   | RemoveRelationshipMutation
   | AddDeploymentNodeMutation
   | UpdateDeploymentNodeMutation
@@ -877,6 +896,8 @@ const MUTATION_FIELDS = {
     'metadata',
   ],
   removeElement: ['op', 'fqn', 'cascade'],
+  renameElement: ['op', 'fqn', 'newName'],
+  moveElement: ['op', 'fqn', 'parent', 'file'],
   addRelationship: [
     'op',
     'source',
@@ -1074,6 +1095,16 @@ function validateMutation(m: JsonObject, path: string): void {
     case 'removeElement':
       requireString(m, 'fqn', path);
       optionalBoolean(m, 'cascade', path);
+      return;
+    case 'renameElement':
+      requireString(m, 'fqn', path);
+      requireString(m, 'newName', path);
+      formChecks('renameElement', path, () => checkElementName(m.newName as string, 'newName'));
+      return;
+    case 'moveElement':
+      requireString(m, 'fqn', path);
+      if (m.parent !== null) requireString(m, 'parent', path);
+      optionalString(m, 'file', path);
       return;
     case 'addRelationship':
       requireString(m, 'source', path);

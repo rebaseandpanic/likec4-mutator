@@ -637,6 +637,20 @@ program
             applied++;
             break;
           }
+          case 'renameElement': {
+            const m = mutation;
+            const { fqn } = mutator.renameElement(m.fqn, m.newName);
+            process.stdout.write(`  renameElement: renamed '${m.fqn}' to '${fqn}'\n`);
+            applied++;
+            break;
+          }
+          case 'moveElement': {
+            const m = mutation;
+            const { fqn } = mutator.moveElement(m.fqn, { parent: m.parent, ...(m.file !== undefined && { file: m.file }) });
+            process.stdout.write(`  moveElement: moved '${m.fqn}' to '${fqn}'\n`);
+            applied++;
+            break;
+          }
           case 'removeRelationship': {
             const m = mutation;
             mutator.removeRelationship({
