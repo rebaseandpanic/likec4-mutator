@@ -38,6 +38,7 @@ views 'Flows' {
     include * where kind is cluster or tag is #edge
     exclude * -> * where kind is emits and source.kind is pod and target.tag is #beta
     exclude main.back where not tag is #beta
+    exclude * -> * where tag is #beta and tag != #edge
     style main.front.wk {
       color red
     }

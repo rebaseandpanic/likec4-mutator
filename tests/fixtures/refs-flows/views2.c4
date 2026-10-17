@@ -61,6 +61,8 @@ views {
     title 'Pipeline'
     include client -> platform.api where kind is calls and source.kind is person and target.tag is #beta
     include client -> platform.api where kind is not emits and source.kind is not cluster and target.tag is not #edge
+    include client -> platform.api where tag is #edge or tag is not #beta
+    include * where tag is not #beta
     platform.worker -> platform.store
   }
 }

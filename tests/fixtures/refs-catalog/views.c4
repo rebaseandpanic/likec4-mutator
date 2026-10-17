@@ -20,6 +20,7 @@ views {
     include shop.web -[sync]-> shop.api, shop.web .async shop.db
     include customer -> shop.web where kind is not async and source.kind is not host and target.tag is not #legacy
     include * where kind is host and tag is #core
+    include customer -> shop.web where tag is #core
     include * where kind is not service or tag is not #legacy
     include element.kind = service, element.kind != store, element.tag = #core, element.tag != #legacy
     exclude shop.db where tag is not #core
