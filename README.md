@@ -911,6 +911,8 @@ model {
 }
 ```
 
+Every relationship `getRelationships()` reports carries its direction: `bidirectional` is `true` for `a <-> b` and `a -[kind]<-> b`, `false` for `->`, `-[kind]->` and `.kind` — LikeC4's `isBidirectional`, the field deployment relationships report too. Each `extendedBy` entry of a relationship carries the direction of its block (`extend a <-> b` → `bidirectional: true`); entries of element and deployment node blocks have no such field.
+
 `getRelationships()` reports effective `tags`, `links` and `metadata`, `declared` and `extendedBy`, as for elements. LikeC4 1.59.4 decides which relationships a block applies to, and merges, as follows:
 
 - A block applies to every relationship with the same source and target (resolved to FQNs), kind, title and direction. No kind matches only relationships without a kind (`-[calls]->` and `.calls` are the same kind); a kind no specification declares counts as no kind, as LikeC4 resolves it (`kind` in `getRelationships()` still reports it as written). Titles are compared dedented and trimmed; the title may be written after the target or as a `title` body property, and a relationship without a title is compared with the `title` of its kind's specification when that declares one. A bidirectional block (`extend b <-> a`) matches `a <-> b`; a directed block never matches a bidirectional relationship.

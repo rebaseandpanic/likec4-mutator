@@ -41,6 +41,12 @@ export interface ExtendContribution extends ElementDecorations {
   file?: string;
   /** Position of the whole `extend` block in its file */
   sourceRange: SourceRange;
+  /**
+   * For the block of a relationship (`extend a -> b`, `extend a <-> b`):
+   * whether it is bidirectional, part of the identity it is matched by
+   * (D69).  Absent on the block of an element or deployment node.
+   */
+  bidirectional?: boolean;
 }
 
 /**
@@ -209,6 +215,12 @@ export interface RelationshipInfo {
   title?: string;
   /** Relationship kind as written: `app -[calls]-> api` or `app .calls api` */
   kind?: string;
+  /**
+   * Whether the relationship is bidirectional (`<->`, `-[k]<->`), as
+   * LikeC4's `isBidirectional` — the field deployment relationships report
+   * (D69)
+   */
+  bidirectional: boolean;
   /**
    * Technology: the one after the description
    * (`a -> b 'title' 'description' 'technology'`, an empty one included,

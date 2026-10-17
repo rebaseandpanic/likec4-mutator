@@ -300,6 +300,7 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
     ...(b.file !== undefined && { file: b.file }),
     sourceRange: toSourceRange(b.node.$cstNode),
     ...readDeclared(b.node.body),
+    bidirectional: b.node.isBidirectional === true,
   }));
 
   return {
@@ -307,6 +308,7 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
     targetFqn,
     title,
     kind,
+    bidirectional: (item as { isBidirectional?: boolean }).isBidirectional === true,
     technology,
     description,
     tags: effective.tags,

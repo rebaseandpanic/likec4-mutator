@@ -380,11 +380,13 @@ export interface ReportedRelationship extends EffectiveValues {
   sourceFqn: string;
   targetFqn: string;
   kind?: string;
+  /** Direction: compared with LikeC4's `isBidirectional` (D69) */
+  bidirectional: boolean;
 }
 
 /**
  * Assert that the library reports the same relationships — endpoints, kind,
- * effective title, description, technology, tags, links and metadata — as
+ * direction (`bidirectional` against LikeC4's `isBidirectional`), effective title, description, technology, tags, links and metadata — as
  * LikeC4 computes for `files`,
  * which must build without errors.  Warnings are allowed: LikeC4's validator
  * warns about an `extend a -> b` block whose relationship takes its title from
@@ -403,6 +405,7 @@ export async function expectRelationshipsAgreeWithLikeC4(
     source: string;
     target: string;
     kind?: string;
+    bidirectional: boolean;
     title?: string;
     description?: string;
     technology?: string;
@@ -414,6 +417,7 @@ export async function expectRelationshipsAgreeWithLikeC4(
       r.source,
       r.target,
       r.kind ?? null,
+      r.bidirectional,
       r.title ?? '',
       r.description ?? null,
       r.technology ?? null,
@@ -426,6 +430,7 @@ export async function expectRelationshipsAgreeWithLikeC4(
       source: r.source.model,
       target: r.target.model,
       kind: r.kind,
+      bidirectional: r.isBidirectional === true,
       title: r.title,
       description: plainText(r.description),
       technology: r.technology,
