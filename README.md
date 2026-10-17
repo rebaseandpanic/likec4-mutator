@@ -1138,7 +1138,7 @@ Rejected, with nothing changed: an `id` no node has, that is an instance or that
 
 #### Removing nodes
 
-`removeDeploymentNode(id)` removes a node with its whole subtree — child nodes, instances and the relationships declared in them — and returns `{ removedRelationships }`. Removed with it, in every file:
+`removeDeploymentNode(id, { cascade? })` removes a node with its whole subtree — child nodes, instances and the relationships declared in them — and returns `{ removedRelationships }` (with `cascade: true` also `cascaded`). Removed with it, in every file:
 
 - every `extend <node>` block of the node or of a node of its subtree, with what is declared in it;
 - every deployment relationship whose source or target is in the subtree — a node or instance of it, or an element stepped into through an instance of it.
@@ -1150,13 +1150,16 @@ mutator.removeDeploymentNode('prod.eu.vm3'); // declared in the extend block of 
 // { removedRelationships: [{ source: { id: 'prod.eu.vm3.web' }, target: { id: 'prod.eu.vm1.api' }, title: 'proxies' }] }
 
 mutator.removeDeploymentNode('prod.eu.vm1');
-// rejected on id: the deployment view refers to prod.eu.vm1 and to elements inside it
+// rejected on id (ReferencedRemovalError): the deployment view refers to prod.eu.vm1 and to elements inside it
+mutator.removeDeploymentNode('prod.eu.vm1', { cascade: true });
+// removes those view items too, unless one is the view's last include
 ```
 
 Rejected, with nothing changed (field `id`):
 
 - an `id` no node has, that is an instance or that is declared more than once;
-- a rule of a deployment view (`include`, `exclude`, a relationship predicate, `style`) refers to the node or anything in its subtree — the error lists the references; views are never edited;
+- without `cascade`, a rule of a deployment view (`include`, `exclude`, a relationship predicate, `style`) refers to the node or anything in its subtree — a `ReferencedRemovalError` lists the references; with `cascade` the item or target is removed (an emptied rule too), unless that removes a deployment view's last `include`;
+- in both modes, a reference to the subtree in a `global` block, or an id of the subtree written there or in text the parser could not recover (a whole identifier or any dotted segment);
 - the removal would change what a surviving reference links to. A name can become unique: with `vm n` at the root and `prod { a { n } b { n } c { -> n } }`, `-> n` links to the root `n` while `n` is ambiguous below `prod`; removing `prod.b` would make it link to `prod.a.n`.
 
 #### Adding instances
@@ -1588,7 +1591,7 @@ Writes LikeC4 would reject are refused the same way:
 | `removeElement` | `fqn` is not a declared element, or an edit would leave a file that does not parse (`InvalidWriteError`); a reference into the subtree that the mode does not remove (`ReferencedRemovalError`, see [Removing referenced elements](#removing-referenced-elements)). Field `fqn`. |
 | `updateDeploymentNode` | `id` is not one declared node; a tag is not declared; `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating nodes](#updating-nodes)). |
 | `updateDeploymentInstance` | `id` is not one declared instance; a tag is not declared; a patched metadata key would not read as requested, as LikeC4 cannot hold an empty own map (`metadata.<key>`); `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating instances](#updating-instances)). |
-| `removeDeploymentNode`, `removeDeploymentInstance` | `id` is not one declared node (instance); a rule of a deployment view refers to it or to something below it; the removal would change what a surviving reference links to (field `id`). |
+| `removeDeploymentNode`, `removeDeploymentInstance` | `id` is not one declared node (instance); the removal would change what a surviving reference links to (`InvalidWriteError`, field `id`); a reference into the subtree that the mode does not remove (`ReferencedRemovalError`, see [Removing referenced elements](#removing-referenced-elements)). |
 | `addDeploymentRelationship` | an endpoint does not resolve to a node or instance, or its element part to an element of that instance (LikeC4: `DeploymentRelation target '…' not resolved`); the endpoints are one node or instance, or a parent and its descendant (LikeC4: `Invalid parent-child relationship`); `kind` is not declared as a relationship kind; a tag is not declared (fields `source.id`, `source.element`, `target.id`, `target.element`, `target`, `kind`, `tags[i]`; see [Adding deployment relationships](#adding-deployment-relationships)). |
 | `updateDeploymentRelationship`, `removeDeploymentRelationship` | the selector matches no relationship or several (field `source`, naming the candidates); `tags`, `links` or `metadata` of an update while a loaded file has syntax errors. |
 | `addDeploymentExtend` | `node` is not one declared node, or is an instance (LikeC4: `ExtendDeployment allows only DeploymentNode`); nothing to contribute (`tags`); a tag is not declared; `file` is missing or not loaded. |
