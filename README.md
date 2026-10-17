@@ -808,6 +808,20 @@ mutator.updateElement('app', { tags: ['internal'], metadata: { owner: 'platform'
 - The update is atomic in memory: when any file's edit fails, all files are restored. Writing files to disk (e.g. the CLI's `--output` / `--in-place`) happens file by file and is not atomic.
 - `removeElement` deletes every `extend` block of the element's subtree; `addElement` and `generateElement` write only the new declaration — `extend` blocks that already target the new FQN start contributing once it exists.
 
+#### Creating blocks
+
+`addElementExtend(fqn, { file, tags?, links?, metadata? })` and `addRelationshipExtend(selector, { file, tags?, links?, metadata?, shared? })` contribute to an element or a model relationship through an `extend` block of the loaded `file` (required). Both return `{ changedFiles, merged }`.
+
+```typescript
+mutator.addElementExtend('app', { file: 'ext/ops.c4', tags: ['internal'], metadata: { runbook: 'ops-12' } });
+mutator.addRelationshipExtend({ source: 'app.api', target: 'app.db', matchTitle: 'reads' }, { file: 'ext/ops.c4', links: [{ url: 'https://runbooks.example.com/db' }] });
+// ext/ops.c4: extend app { #internal ... }  and  extend app.api -[jdbc]-> app.db 'reads' { link ... }
+```
+
+- **One block per target and file.** When `file` already has a block of the element (exactly its FQN), or one applying to the relationship, the contributions are merged into its first one: new tags after its tags, new links and metadata keys at its end (a `metadata { }` block is created when it has none). A tag or link the block already has is not repeated; the same link in a block of another file is kept, as LikeC4 keeps duplicates. Otherwise a new block goes to the end of the file's first `model` block, created when the file has none. `merged` tells which.
+- **The relationship block** is selected with the selector of `updateRelationship` (`source`, `target`, `matchKind`, `matchTitle`, `matchBidirectional`, `position`) and written with the relationship's identity: endpoints as absolute FQNs, the connector with its kind and direction (`-[kind]->`, `->`, or `<->` for a bidirectional one, which LikeC4's grammar writes without a kind), and its own title — so it also applies to a relationship written as `a .kind b`. LikeC4 applies a block to every relationship of its identity: when others share it, the call is rejected on `shared` with `related` listing them (`{ file, line, column, construct: 'relationship' }`), and with `shared: true` the block applies to all of them.
+- **Rejected** (`InvalidWriteError`, nothing changed): on `fqn`, an element no loaded file declares; on `source` / `position`, no relationship or several (`RelationshipAmbiguityError` on `source`), and a relationship whose only title is its kind's default title (LikeC4 1.59.4 ignores a block without that title and warns about one with it); on `file`, a missing or unloaded file; on `tags[i]`, `links[i].url`, `metadata.<key>`, an undeclared tag, an invalid link or metadata value, and a metadata key the element or relationship already has in its declaration or in any `extend` block of any file (a second value would turn LikeC4's value into an array — change it with an update); on `tags`, nothing to add.
+
 ### Relationships
 
 A relationship can get tags, links and metadata from `extend a -> b { ... }` blocks (only directly in a `model` block):

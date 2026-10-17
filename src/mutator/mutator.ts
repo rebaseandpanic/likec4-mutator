@@ -56,7 +56,7 @@ import {
 } from './rename-ops.js';
 import { relationFingerprint, relationIdentity, type RelationIdentity } from '../query/relation-extends.js';
 import { removeIndent } from '../query/likec4-text.js';
-import { readContribution, type Decorations } from '../query/extend-merge.js';
+import { readContribution, readDeclared, type Decorations } from '../query/extend-merge.js';
 import { specificationKinds } from '../query/kind-specs.js';
 import type {
   DeploymentEndpoint,
@@ -138,6 +138,7 @@ import {
 } from './relationship-ops.js';
 import {
   RelationshipAmbiguityError,
+  positionOf,
   selectRelationship,
   type RelationshipCandidate,
   type RelationshipPosition,
@@ -182,6 +183,16 @@ import {
   type UpdateKindPatch,
 } from './specification-ops.js';
 import { isSpecificationName } from '../parser/grammar.js';
+import {
+  contributesAnything,
+  generateElementExtend,
+  generateRelationExtend,
+  mergeIntoExtendEdits,
+  newContributions,
+  type AddElementExtendOpts,
+  type AddRelationshipExtendOpts,
+  type ExtendContributions,
+} from './extend-ops.js';
 import { BodyInsertions } from './body-layout.js';
 import { getNodeIndent } from './indent.js';
 import { checkBraceBalance } from './brace-balance.js';
@@ -273,6 +284,15 @@ export interface RenameElementResult {
 }
 
 export type { AddKindOpts, KindLink, KindType, UpdateKindPatch } from './specification-ops.js';
+export type { AddElementExtendOpts, AddRelationshipExtendOpts, ExtendContributions } from './extend-ops.js';
+
+/** Result of {@link LikeC4Mutator.addElementExtend} and {@link LikeC4Mutator.addRelationshipExtend}. */
+export interface AddExtendResult {
+  /** Files whose text changed, in the order the files were loaded; nothing is written to disk */
+  changedFiles: string[];
+  /** Whether the contributions were merged into an existing block of the file (FR-050) instead of a new block */
+  merged: boolean;
+}
 
 /** Result of a write of the specification ({@link LikeC4Mutator.addKind}, {@link LikeC4Mutator.updateKind}, {@link LikeC4Mutator.addTag}). */
 export interface SpecificationWriteResult {
@@ -1348,6 +1368,165 @@ export class LikeC4Mutator {
       changedFiles = this.applyEditGroups(edits);
     });
     return { changedFiles };
+  }
+
+  /**
+   * Contribute tags, links and metadata to the element `fqn` through an
+   * `extend <fqn> { … }` block in `opts.file` (required, D71; lc4m-15.30
+   * US-10).  When the file already has a block of exactly that target, the
+   * contributions are merged into the first one (FR-050): new tags after
+   * its tags, new links and metadata keys at its end, a tag or link it
+   * already has not repeated.  Otherwise a new block goes to the end of the
+   * file's first `model` block, created when the file has none.  The
+   * element's reads then include the contributions, merged as LikeC4 merges
+   * them (kind defaults, declaration, then blocks in document order).
+   *
+   * Rejected, with nothing changed (`InvalidWriteError`):
+   *  - on `fqn`: not an element declared in a loaded file (LikeC4 would not
+   *    resolve the block);
+   *  - on `file`: missing or not a loaded file;
+   *  - on `tags[i]`, `links[i].url`, `metadata.<key>`: an undeclared tag, an
+   *    invalid link or metadata value; a metadata key the element already
+   *    has, in its declaration or in any `extend` block of any loaded file
+   *    (D86: a second value would make LikeC4 read an array);
+   *  - on `tags`: nothing to add — no tag, link or metadata key, or only
+   *    tags and links the target block already has.
+   *
+   * @returns The changed files, and whether an existing block took the contributions.
+   */
+  addElementExtend(fqn: string, opts: AddElementExtendOpts): AddExtendResult {
+    checkReferenceForm(fqn, 'fqn');
+    if (!this.workspace.has(fqn)) {
+      throw new InvalidWriteError('fqn', `no element '${fqn}' is declared in a loaded file (LikeC4 would not resolve the extend block)`);
+    }
+    this.checkExtendFile(opts.file);
+    this.checkContributions(opts);
+    const declared = buildFqnIndex(this.document(this.findFileContaining(fqn)!).ast).get(fqn)?.node.body;
+    this.rejectPresentMetadata(opts.metadata, [declared, ...this.workspace.extendBlocks(fqn).map((block) => block.node.body)], `the element '${fqn}'`);
+    const target = this.workspace.extendBlocks(fqn).find((block) => block.file === opts.file);
+    return this.writeExtend(opts.file, opts, target, (indent, contributions) => generateElementExtend(indent, fqn, contributions));
+  }
+
+  /**
+   * Contribute tags, links and metadata to the model relationship
+   * `selector` addresses (the selector of {@link updateRelationship})
+   * through an `extend a -> b { … }` block in `opts.file` (required, D103;
+   * lc4m-15.30 US-10).  The block's identity is the relationship's: its
+   * endpoints as absolute FQNs, the bracket connector with its kind and
+   * direction, and its own title — so it also applies to a relationship
+   * written in the dot form.  When the file already has a block applying to
+   * that identity, the contributions are merged into the first one
+   * (FR-050); otherwise a new block goes to the end of the file's first
+   * `model` block, created when the file has none.
+   *
+   * LikeC4 applies a block to every relationship of its identity, so an
+   * identity other relationships share is rejected unless `shared` is set
+   * (D72); with `shared` the block applies to all of them.
+   *
+   * Rejected, with nothing changed (`InvalidWriteError`):
+   *  - on `source` / `position`: no relationship matches; on `source`, a
+   *    {@link RelationshipAmbiguityError} when several do;
+   *  - on `source`: the relationship has no title of its own but its kind
+   *    declares one (D82: LikeC4 1.59.4 ignores a block without that title
+   *    and warns about one with it);
+   *  - on `shared`: other relationships share the identity and `shared` is
+   *    not set; `related` lists them (`construct: 'relationship'`);
+   *  - on `file`, `tags[i]`, `links[i].url`, `metadata.<key>`, `tags`: as
+   *    {@link addElementExtend}, the metadata keys being those of the
+   *    relationship and of every block applying to it.
+   *
+   * @returns The changed files, and whether an existing block took the contributions.
+   */
+  addRelationshipExtend(selector: RelationshipSelector, opts: AddRelationshipExtendOpts): AddExtendResult {
+    const selected = this.selectRelationship(selector);
+    this.checkExtendFile(opts.file);
+    this.checkContributions(opts);
+    const own = relationIdentity(selected.relation);
+    const identity = this.workspace.effectiveIdentity(own);
+    if (own.title === '' && identity.title !== '') {
+      throw new InvalidWriteError(
+        'source',
+        `the relationship's only title is '${identity.title}', the default of its kind '${own.kind}': LikeC4 1.59.4 ignores an extend block ` +
+          `without that title and warns about one with it`,
+      );
+    }
+    const key = relationFingerprint(identity);
+    const others: RelatedConstruct[] = [];
+    for (const [file, doc] of this.documents) {
+      for (const relation of resolveRelations(doc.ast, this.workspace)) {
+        if (relation.node === selected.relation.node || !relation.resolved) continue;
+        if (relationFingerprint(this.workspace.effectiveIdentity(relationIdentity(relation))) !== key) continue;
+        others.push({ ...positionOf({ file, relation }), construct: 'relationship' });
+      }
+    }
+    if (others.length > 0 && opts.shared !== true) {
+      throw new InvalidWriteError(
+        'shared',
+        `LikeC4 would apply the block to every relationship of this identity, also ${others.map((r) => `${r.file}:${r.line}:${r.column}`).join(', ')}; ` +
+          `pass shared to accept that`,
+        others,
+      );
+    }
+    const blocks = this.workspace.extendRelationBlocks(own);
+    const relationBody = (selected.relation.node as { body?: unknown }).body;
+    this.rejectPresentMetadata(opts.metadata, [relationBody, ...blocks.map((block) => block.node.body)], 'the relationship');
+    const target = blocks.find((block) => block.file === opts.file);
+    // The kind is written only when LikeC4 resolves it; an undeclared kind is no kind in the identity.
+    return this.writeExtend(opts.file, opts, target, (indent, contributions) => generateRelationExtend(indent, identity, contributions));
+  }
+
+  /** Throw on `file` when the `file` of an `extend` creation is missing or not loaded. */
+  private checkExtendFile(file: string | undefined): asserts file is string {
+    if (file === undefined) throw new InvalidWriteError('file', 'the file of the extend block is required (one of the loaded files)');
+    checkFile(file, this.sources.keys());
+  }
+
+  /** Throw on the field of a contribution LikeC4 would not accept (tags, links, metadata values). */
+  private checkContributions(contributions: ExtendContributions): void {
+    checkTags(contributions.tags, this.workspace);
+    checkLinks(contributions.links);
+    checkMetadata(contributions.metadata);
+  }
+
+  /**
+   * Throw on `metadata.<key>` for the first key of `metadata` that one of
+   * `bodies` (a declaration body and the bodies of `extend` blocks) already
+   * declares (D86).
+   */
+  private rejectPresentMetadata(metadata: Record<string, unknown> | undefined, bodies: readonly unknown[], owner: string): void {
+    for (const key of Object.keys(metadata ?? {})) {
+      if (bodies.some((body) => body !== undefined && Object.hasOwn(readDeclared(body).metadata ?? {}, key))) {
+        throw new InvalidWriteError(
+          `metadata.${key}`,
+          `${owner} already has the metadata key '${key}'; a second value would make LikeC4 read an array (change it with an update instead)`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Write the contributions of an `extend` block in `file`: merged into
+   * `target`, a block of that file (FR-050), or as a new block made by
+   * `generate` in the file's first `model` block (created when absent).
+   *
+   * @throws {InvalidWriteError} on `tags` when there is nothing to add
+   */
+  private writeExtend(
+    file: string,
+    contributions: ExtendContributions,
+    target: { node: object } | undefined,
+    generate: (indent: string, contributions: ExtendContributions) => string,
+  ): AddExtendResult {
+    const added = newContributions(target ? readDeclared((target.node as { body?: unknown }).body) : undefined, contributions);
+    if (!contributesAnything(added)) {
+      throw new InvalidWriteError('tags', 'nothing to add: no tag, link or metadata key the extend block does not already have');
+    }
+    const doc = this.document(file);
+    const edits = target
+      ? mergeIntoExtendEdits(target.node as Parameters<typeof mergeIntoExtendEdits>[0], doc, added)
+      : [blockInsertEdit('model', doc, chooseBlockPlacement('model', this.documents, file), (indent) => generate(indent, added))];
+    const { changedFiles } = this.writeSpecification(new Map([[file, edits]]), 'file');
+    return { changedFiles, merged: target !== undefined };
   }
 
   /**
