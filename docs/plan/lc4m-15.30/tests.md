@@ -225,6 +225,7 @@ The library's own output is never the expected value. Rows assert the error type
 | 164 | D75: `updateElement({ style: { icon } })` on an element with a body `icon` rewrites the body `icon` and writes no `style { icon }`; the effective icon is compared with LikeC4. P (D115): spike 01's body-`icon` plus `style { icon }` input yields `Redundant as icon defined on element`, so AWB's warning part detects a redundant write | unit | `tests/mutator/style-body-icon.test.ts` | new | wave | T034 | T002 (AWB) |
 | 165 | A `style { icon }` already next to the body `icon` stays byte for byte (INV-5); an element without a body `icon` keeps today's behaviour (`tests/mutator/write-value-checks.test.ts:296-298` stay green) | unit | `tests/mutator/style-body-icon.test.ts` | new | wave | T034 | T002 (AWB) |
 | 166 | The four `LikeC4Mutator.addRelationship` tests of `tests/mutator/mutator.test.ts` (~545-600: "with a description", "technology and tags via opts object", "style properties", "full properties") read the file D62 names (`external.c4`, first in LikeC4 document order) instead of `model.c4`; assertions otherwise unchanged (INV-8, D62; added during wave 3, D121) — red if the default file still follows load order | unit | `tests/mutator/mutator.test.ts` | fix | wave | T008 | — |
+| 167 | `tests/cli/cli-apply-validation.test.ts` "accepts every field the README documents for each op" (~164): the batch's `addView` targets `app` instead of `app.api`, so the later `removeElement app.api` leaves no view `of` behind; assertions unchanged (INV-8, US-1, D56; added during wave 3, D122) — red if removal of a view's `of` target is still accepted | unit | `tests/cli/cli-apply-validation.test.ts` | fix | wave | T010 | — |
 
 ## Not tested (with reasons)
 
@@ -276,7 +277,7 @@ Ids from earlier rounds are kept. RES-T1 and RES-T2 were closed by D111 and D112
 - INV-5: 25, 37, 55, 79, 92, 99, 110, 119, 127, 165
 - INV-6: 2 (every fixture row uses both specifications)
 - INV-7: 109, 110, 114, 118, 119, 143, 144, 152, 153, 160–162
-- INV-8: 7–16, 21, 23, 166, 26, 53, 57, 64, 65, 71, 76, 134–136, 142, 149, 164
+- INV-8: 7–16, 21, 23, 166, 167, 26, 53, 57, 64, 65, 71, 76, 134–136, 142, 149, 164
 - INV-9: every AWB row; with `removedViewId`: 66, 70
 
 **Functional requirements**
@@ -308,7 +309,7 @@ Ids from earlier rounds are kept. RES-T1 and RES-T2 were closed by D111 and D112
 - D53: 8
 - D54: 33–44
 - D55: 38
-- D56: 35, 67
+- D56: 35, 67, 167
 - D57: 32, 60
 - D58: 79, 80
 - D60: 5, 10, 11
