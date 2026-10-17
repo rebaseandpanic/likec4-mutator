@@ -573,14 +573,7 @@ export function declarationBodyInsertEdit(
   snippet: (indent: string) => string,
 ): TextEdit {
   const { fullText } = doc;
-  const node = owner as BodyOwnerNode;
-  const indent = getNodeIndent(owner, fullText);
-  if (!node.body?.$cstNode) {
-    const cst = node.$cstNode;
-    if (!cst) throw new Error('internal: a deployment declaration without a position');
-    return { offset: cst.end, end: cst.end, newText: ` {\n${snippet(indent + '  ')}\n${indent}}` };
-  }
-  const inserts = BodyInsertions.forBody(node, fullText, indent);
+  const inserts = BodyInsertions.forDeclaration(owner as BodyOwnerNode, fullText, getNodeIndent(owner, fullText));
   inserts.append(snippet(inserts.innerIndent) + '\n');
   const [edit] = inserts.apply([]);
   if (!edit) throw new Error('internal: no edit for the body insertion');

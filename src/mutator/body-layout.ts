@@ -1,6 +1,7 @@
 /**
  * Placement of new lines inside a braced block — an element or relation
- * body, a `model { }` or a `views { }` block — so that the result is laid
+ * body, a `model { }` or a `views { }` block, or the body a declaration is
+ * given when it has none — so that the result is laid
  * out the way a person would write it: every inserted construct on its own
  * line, indented one level deeper than the block's owner, and the closing
  * `}` on its own line at the owner's indentation.
@@ -23,12 +24,19 @@
 import { applyEdits, type TextEdit } from './text-edit.js';
 import { findClosingBraceOffset, type BodyOwnerNode, type CstNodeLike } from './cst-helpers.js';
 
-/** Offsets of a braced block and the indentation of the line of its owner. */
+/**
+ * Offsets of a braced block and the indentation of the line of its owner.
+ * `open` and `close` are equal for a body that is not written yet (see
+ * {@link BodyInsertions.forDeclaration}): the offset after the declaration,
+ * where it is created.
+ */
 export interface BraceBlock {
   /** Offset of the opening `{` */
   open: number;
   /** Offset of the closing `}` */
   close: number;
+  /** True when the block does not exist yet and is created at `open` */
+  create?: boolean;
   /** Leading whitespace of the owner's line; the closing `}` gets it */
   indent: string;
   /** Offset of the first nested declaration, before which properties go */
@@ -73,6 +81,22 @@ export class BodyInsertions {
       indent,
       ...(firstChild !== undefined && { firstChild }),
     });
+  }
+
+  /**
+   * Insertions into the body of a declaration (an element, a deployment node
+   * or instance), creating the body when the declaration has none: ` {`, the
+   * new lines and `}` at the owner's indentation are written right after the
+   * declaration, so its form (`name = kind …` or `kind name …`) and inline
+   * strings are kept as written.
+   *
+   * @param indent - Leading whitespace of the owner's line
+   */
+  static forDeclaration(node: BodyOwnerNode, fullText: string, indent: string): BodyInsertions {
+    if (node.body?.$cstNode) return BodyInsertions.forBody(node, fullText, indent);
+    const cst = node.$cstNode;
+    if (!cst) throw new Error('internal: body creation for a declaration without a position');
+    return new BodyInsertions(fullText, { open: cst.end, close: cst.end, indent, create: true });
   }
 
   /**
@@ -178,6 +202,10 @@ export class BodyInsertions {
     if (this.start.length + this.properties.length + this.positioned.length + this.end.length === 0) return [...edits];
     const { fullText } = this;
     const { open, close } = this.block;
+    if (this.block.create) {
+      const lines = [...this.start, ...this.properties, ...this.positioned.map((p) => p.snippet), ...this.end].join('');
+      return [...edits, { offset: open, end: open, newText: ' {\n' + lines + this.block.indent + '}' }];
+    }
     const interior = fullText.substring(open + 1, close);
     if (/^\s*$/.test(interior)) {
       const lines = [...this.start, ...this.properties, ...this.positioned.map((p) => p.snippet), ...this.end].join('');

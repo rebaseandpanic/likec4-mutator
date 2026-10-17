@@ -574,10 +574,16 @@ export class LikeC4Mutator {
    * Add a new element as a child of `parentFqn`, or at model level when
    * `parentFqn` is null/empty.
    *
-   * A model-level element goes to the default file (FR-021, D62): the first
-   * file, in LikeC4's document order, with a `model` block — at the end of
-   * its first `model` block — else a new `model` block at the end of the
-   * first file.
+   * A child goes at the end of its parent's body; a parent without a body
+   * is given one right after its declaration, which keeps its form and
+   * inline strings (D64).  A model-level element goes into `opts.file` when
+   * given — its first `model` block, else a new `model` block at its end —
+   * otherwise into the default file (FR-021, D62): the first file, in
+   * LikeC4's document order, with a `model` block — at the end of its first
+   * `model` block — else a new `model` block at the end of the first file.
+   * `opts.file` must be a loaded file (exact name, D63) and is rejected
+   * together with a parent, whose file is the one written (`InvalidWriteError`
+   * on `file`, nothing changed).
    *
    * The file is automatically reparsed after the edit.
    *
@@ -596,8 +602,11 @@ export class LikeC4Mutator {
     checkKind(opts.kind, 'element', this.workspace);
     checkTags(opts.tags, this.workspace);
     checkStyle(opts.style, 'element', this.workspace);
-    // A root element goes to the default file (FR-021, D62).
-    const placement = parentFqn ? undefined : chooseBlockPlacement('model', this.documents, undefined);
+    if (parentFqn && opts.file !== undefined) {
+      throw new InvalidWriteError('file', `'file' is accepted for a model-level element only; a child goes into the file of its parent '${parentFqn}'`);
+    }
+    // A root element goes to `file`, else to the default file (FR-021, D62).
+    const placement = parentFqn ? undefined : chooseBlockPlacement('model', this.documents, opts.file);
     const filename = placement ? placement.file : this.findFileContaining(parentFqn!);
     if (!filename) throw new Error(`Parent element '${parentFqn}' not found in any file`);
 

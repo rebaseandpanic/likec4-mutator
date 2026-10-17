@@ -160,6 +160,12 @@ export interface AddElementOpts {
    * Empty arrays are not accepted by the LikeC4 grammar.
    */
   metadata?: Record<string, string | string[]>;
+  /**
+   * Model-level elements only: the loaded file to write into (its first
+   * `model` block, else a new one at its end).  Without it the default file
+   * is used (see {@link LikeC4Mutator.addElement}).  Not written as text.
+   */
+  file?: string;
 }
 
 /**
@@ -168,7 +174,8 @@ export interface AddElementOpts {
  *
  * The new element goes on its own line at the end of the target block (a
  * block written on one line is spread over several, see {@link BodyInsertions}).
- * At model level the target is `placement`: its `model` block, or a new
+ * A parent without a body is given one, after its declaration as written
+ * (D64).  At model level the target is `placement`: its `model` block, or a new
  * `model` block appended at the end of `doc` when it names none.
  *
  * @param doc       - Parsed document
@@ -185,10 +192,11 @@ export function addElementEdit(
   placement?: Pick<BlockPlacement, 'block'>,
 ): TextEdit {
   const { ast, fullText } = doc;
+  const { file: _file, ...element } = opts;
 
   if (!parentFqn) {
     return blockInsertEdit('model', doc, placement ?? firstModelBlock(doc), (indent) =>
-      generateElement({ indent, ...opts }),
+      generateElement({ indent, ...element }),
     );
   }
   const entry = buildFqnIndex(ast).get(parentFqn);
@@ -196,11 +204,8 @@ export function addElementEdit(
     throw new Error(`Parent element '${parentFqn}' not found`);
   }
   const parentNode = entry.node;
-  if (!parentNode.body?.$cstNode) {
-    throw new Error(`Parent element '${parentFqn}' has no body`);
-  }
-  const inserts = BodyInsertions.forBody(parentNode, fullText, getNodeIndent(parentNode, fullText));
-  inserts.append(generateElement({ indent: inserts.innerIndent, ...opts }) + '\n');
+  const inserts = BodyInsertions.forDeclaration(parentNode, fullText, getNodeIndent(parentNode, fullText));
+  inserts.append(generateElement({ indent: inserts.innerIndent, ...element }) + '\n');
   const [edit] = inserts.apply([]);
   if (!edit) throw new Error('internal: no edit for the new element');
   return edit;
@@ -435,8 +440,9 @@ function buildCombinedBodyInsertElement(
 
   if (body === '') return null;
 
-  const insertion = ' {\n' + body + `${indent}}`;
-  return { offset: cst.end, end: cst.end, newText: insertion };
+  const inserts = BodyInsertions.forDeclaration(node, fullText, indent);
+  inserts.addProperty(body);
+  return inserts.apply([])[0] ?? null;
 }
 
 /**
