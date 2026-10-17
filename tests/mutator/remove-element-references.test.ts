@@ -246,7 +246,12 @@ describe('instanceOf into the subtree (row 33)', SLOW, () => {
 
   it('with cascade removes the instance and its deployment relationships', async () => {
     const { result, after } = remove(files, 'app.api', true);
-    expect(result.cascaded).toEqual([casc(files, 'm.c4', 'app.api\n    o', 'instance-of')]);
+    // The instance's relationship is listed with the closure (D124).
+    expect(result).toEqual({
+      removedRelationships: [],
+      removedDeploymentRelationships: [{ source: { id: 'prod.api' }, target: { id: 'prod.o' }, title: 'calls' }],
+      cascaded: [casc(files, 'm.c4', 'app.api\n    o', 'instance-of')],
+    });
     expect(after['m.c4']).toBe(`${SPEC}${MODEL.replace('    api = service\n', '')}deployment {
   vm prod {
     o = instanceOf other
@@ -291,7 +296,11 @@ deployment {
 
   it('with cascade removes the relationship', async () => {
     const { result, after } = remove(files, 'app.gw.sub', true);
-    expect(result.cascaded).toEqual([casc(files, 'm.c4', 'prod.gw.sub', 'deployment-relationship-endpoint')]);
+    expect(result).toEqual({
+      removedRelationships: [],
+      removedDeploymentRelationships: [{ source: { id: 'prod.gw', element: 'app.gw.sub' }, target: { id: 'prod.o' }, title: 'R' }],
+      cascaded: [casc(files, 'm.c4', 'prod.gw.sub', 'deployment-relationship-endpoint')],
+    });
     expect(after['m.c4']).toBe(files['m.c4']!.replace("    gw = service {\n      sub = service\n    }\n", '    gw = service {\n    }\n').replace("  prod.gw.sub -> prod.o 'R'\n", ''));
     await expectGone(files, after, [
       ['m.c4', 'deployment-relationship-endpoint', 'prod.gw.sub'],
@@ -844,11 +853,15 @@ describe('the removal closure into deployment views (rows 49, 50)', SLOW, () => 
     files['m.c4'] = files['m.c4']!.replace('    o = instanceOf other\n  }\n', "    o = instanceOf other\n  }\n  prod.gw -> prod.o 'R'\n");
     await expectValidLikeC4(files);
     const { result, after } = remove(files, 'app.gw', true);
-    expect(result.cascaded).toEqual([
-      casc(files, 'm.c4', 'app.gw\n', 'instance-of'),
-      casc(files, 'm.c4', 'prod.gw\n', 'predicate-item'),
-      casc(files, 'm.c4', 'prod.gw {', 'style-target'),
-    ]);
+    expect(result).toEqual({
+      removedRelationships: [],
+      removedDeploymentRelationships: [{ source: { id: 'prod.gw' }, target: { id: 'prod.o' }, title: 'R' }],
+      cascaded: [
+        casc(files, 'm.c4', 'app.gw\n', 'instance-of'),
+        casc(files, 'm.c4', 'prod.gw\n', 'predicate-item'),
+        casc(files, 'm.c4', 'prod.gw {', 'style-target'),
+      ],
+    });
     expect(after['m.c4']).toBe(
       files['m.c4']!
         .replace('    gw = service {\n      sub = service\n    }\n', '')
