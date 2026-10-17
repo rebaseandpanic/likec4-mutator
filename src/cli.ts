@@ -489,10 +489,11 @@ program
         switch (mutation.op) {
           case 'addElement': {
             const m = mutation;
-            const createdFqn = mutator.addElement(m.parent, {
+            const createdFqn = mutator.addElement(m.parent ?? null, {
               name: m.id,
               kind: m.kind,
               title: m.title,
+              file: m.file,
               summary: m.summary,
               description: m.description,
               technology: m.technology,

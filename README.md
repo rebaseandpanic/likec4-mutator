@@ -253,7 +253,7 @@ The whole file is validated before any mutation is applied: a missing required f
 
 #### addElement
 
-Adds a new element inside a parent. All fields except `op`, `parent`, `kind`, `id`, `title` are optional.
+Adds a new element inside a parent, or at model level when `parent` is absent. All fields except `op`, `kind`, `id` are optional. Without `title`, LikeC4 shows the kind's title, else the name. `file` (a loaded file name, exactly as loaded) chooses the file of a model-level element — its first `model` block, else a new one at its end; without it the default file is used (see [Rejected writes](#rejected-writes)). `file` together with `parent` fails on `mutations[i].file`: a child goes into the file of its parent.
 
 ```json
 {

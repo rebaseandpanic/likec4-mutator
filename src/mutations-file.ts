@@ -36,10 +36,14 @@ export interface LinkSpec {
 
 export interface AddElementMutation {
   op: 'addElement';
-  parent: string;
+  /** FQN of the parent element; absent (or empty) adds a model-level element */
+  parent?: string;
   kind: string;
   id: string;
-  title: string;
+  /** Absent: LikeC4 shows the kind's title, else the name */
+  title?: string;
+  /** Model-level elements only: the loaded file to write into */
+  file?: string;
   summary?: string;
   description?: string;
   technology?: string;
@@ -843,6 +847,7 @@ const MUTATION_FIELDS = {
     'kind',
     'id',
     'title',
+    'file',
     'summary',
     'description',
     'technology',
@@ -1032,8 +1037,8 @@ function validateMutation(m: JsonObject, path: string): void {
   if (isKnownOp(m.op)) rejectUnknownFields(m, MUTATION_FIELDS[m.op], path, `op '${m.op}'`);
   switch (m.op) {
     case 'addElement':
-      for (const key of ['parent', 'kind', 'id', 'title']) requireString(m, key, path);
-      for (const key of ['summary', 'description', 'technology']) optionalString(m, key, path);
+      for (const key of ['kind', 'id']) requireString(m, key, path);
+      for (const key of ['parent', 'title', 'file', 'summary', 'description', 'technology']) optionalString(m, key, path);
       optionalStringArray(m, 'tags', path);
       optionalLinks(m, path);
       optionalStyle(m, path, 'element');
