@@ -37,7 +37,7 @@ import {
   type ExtendRelationBlockRef,
   type ResolvedRelation,
 } from '../query/workspace-index.js';
-import { buildRemovalEdit } from './cst-helpers.js';
+import { buildRemovalEdit, removalEditsForRanges } from './cst-helpers.js';
 import { relationFingerprint, relationIdentity, type RelationIdentity } from '../query/relation-extends.js';
 import { removeIndent } from '../query/likec4-text.js';
 import { readContribution, type Decorations } from '../query/extend-merge.js';
@@ -66,9 +66,7 @@ import {
   updateDeclarationEdits,
   deployedInstanceInlineAnchor,
   deploymentNodeInlineAnchor,
-  removeElementEdit,
   findExtendBlocks,
-  removeExtendBlockEdit,
   clearExtendContributionsEdits,
   type ExtendBlock,
   type AddElementOpts,
@@ -136,7 +134,6 @@ import {
   removeViewRuleEdit,
   replaceViewRuleEdit,
   extendsParent,
-  removeViewEdit,
   updateViewEdits,
   type GenerateViewOpts,
   type UpdateViewPatch,
@@ -828,60 +825,42 @@ export class LikeC4Mutator {
 
     // Fingerprints of the relationships that go and of those that stay, for
     // the `extend a -> b` blocks below.
+    // Every construct the removal deletes, by file, on the generation before the write.
+    const parts: Array<{ file: string | undefined; node: object }> = [];
     const removedNodes = new Set<unknown>();
     for (const [file, doc] of this.documents) {
       const ranges = this.removedRanges(fqn, filename, file);
       for (const rel of resolveRelations(doc.ast, this.workspace)) {
         const cst = (rel.node as { $cstNode?: { offset: number; end: number } }).$cstNode;
-        if (isDependent(rel) || (cst && ranges.some((range) => isWithin(cst, range)))) removedNodes.add(rel.node);
+        if (isDependent(rel) || (cst && ranges.some((range) => isWithin(cst, range)))) {
+          removedNodes.add(rel.node);
+          parts.push({ file, node: rel.node as object });
+        }
       }
     }
     const keys = this.relationKeys((rel) => removedNodes.has(rel.node));
     const endpointRemoved = (endpoint: string): boolean => isSameOrDescendant(endpoint, fqn);
 
-    // Every construct the write deletes, for the stability check of the survivors.
-    const deleted = new Set<object>([...(removedNodes as Set<object>), ...policy.deleted]);
     const element = buildFqnIndex(this.document(filename).ast).get(fqn)?.node;
-    if (element) deleted.add(element as object);
-    for (const doc of this.documents.values()) {
-      for (const node of extendElementNodes(doc, fqn)) deleted.add(node);
+    if (!element) throw new Error(`Internal error: the declaration of '${fqn}' is not in '${filename}'`);
+    parts.push({ file: filename, node: element as object });
+    for (const [file, doc] of this.documents) {
+      for (const node of extendElementNodes(doc, fqn)) parts.push({ file, node });
     }
     for (const { block } of this.workspace.extendRelationBlockList().filter(this.orphanedExtendRelation(keys, endpointRemoved))) {
-      deleted.add(block.node);
+      parts.push({ file: block.file, node: block.node as object });
     }
+    parts.push(...policy.closure);
+
+    // Every construct the write deletes, for the stability check of the survivors.
+    const deleted = new Set<object>([...parts.map((part) => part.node), ...(policy.plan?.removed ?? [])]);
     const before = this.referenceSnapshot(deleted);
 
     const snapshot = this.snapshot();
     try {
-      refusedOn('fqn', () => {
-        // The cascade first, while every reference still resolves: the view
-        // statements, then the deployment relationships and instances of the
-        // closure.  Then the owned constructs: dependent relationships
-        // declared outside the removed ranges one at a time (each removal
-        // reparses its file, so offsets stay valid), the `extend a -> b`
-        // blocks that lose their relationships or an endpoint (while the
-        // endpoints still resolve), the `extend` blocks of the subtree, and
-        // the element itself.  Relationships inside the element's body or an
-        // `extend` block go along with it.
-        if (policy.plan) this.applyEditGroups(policy.plan.edits);
-        this.removeInstanceClosure(fqn, policy.instances);
-
-        for (;;) {
-          const next = this.findRelationOutsideRemovedRanges(fqn, filename, isDependent);
-          if (!next) break;
-          this.applyEdit(next.filename, removeRelationNodeEdit(this.document(next.filename).fullText, next.node));
-        }
-        this.removeOrphanedExtendRelations(keys, endpointRemoved);
-
-        for (;;) {
-          const next = this.findExtendBlock(fqn);
-          if (!next) break;
-          const doc = this.document(next.filename);
-          this.applyEdit(next.filename, removeExtendBlockEdit(doc, next.block));
-        }
-
-        this.applyEdit(filename, removeElementEdit(this.document(filename), fqn));
-      });
+      // The owned constructs, the closure and the cascade, planned on this
+      // generation, are written as one group of edits per file.
+      refusedOn('fqn', () => this.applyRemovalGroups(parts, policy.plan));
       this.rejectChangedReferences(before, new Map(), fqn, { field: 'fqn', action: 'removing' });
     } catch (err) {
       this.restore(snapshot);
@@ -1345,7 +1324,7 @@ export class LikeC4Mutator {
       cascade,
       instanceIds: new Map(),
       nameClass: 'view',
-      plan: (entries) => planNavigateToCascade(entries, (file) => this.document(file)),
+      plan: (entries) => planNavigateToCascade(entries),
       owned: (file, offset, end) => file === view.file && within(view.node.$cstNode, offset, end),
     });
 
@@ -1354,10 +1333,7 @@ export class LikeC4Mutator {
     const before = this.referenceSnapshot(new Set([view.node, ...(plan?.removed ?? [])]));
     const snapshot = this.snapshot();
     try {
-      refusedOn('id', () => {
-        if (plan) this.applyEditGroups(plan.edits);
-        this.applyEdit(file, removeViewEdit(this.document(file), this.views.declarations().find((d) => d.file === file && d.id === id)!));
-      });
+      refusedOn('id', () => this.applyRemovalGroups([{ file, node: view.node }], plan));
       this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing the view' });
     } catch (err) {
       this.restore(snapshot);
@@ -2766,10 +2742,10 @@ export class LikeC4Mutator {
     elementFile: string,
     cascade: boolean,
   ): {
-    instances: string[];
     plan: CascadePlan | undefined;
     cascaded: CascadedReference[];
-    deleted: Set<object>;
+    /** The instances of the closure and the deployment relationships that go with them */
+    closure: Array<{ file: string | undefined; node: object }>;
     deploymentRelationships: NonNullable<RemoveElementResult['removedDeploymentRelationships']>;
   } {
     const catalogue = this.referenceCatalogue();
@@ -2828,23 +2804,51 @@ export class LikeC4Mutator {
       this.removedRanges(fqn, elementFile, file).some((range) => within(range, offset, end)) ||
       instances.some((id) => this.deployments.declarations(id).some((d) => d.file === file && within((d.node as { $cstNode?: TextRange }).$cstNode, offset, end)));
     const { plan, cascaded } = this.settleRemoval(listed, names, { field: 'fqn', subject: `'${fqn}'`, cascade, instanceIds, owned });
-    if (!plan) return { instances: [], plan: undefined, cascaded: [], deleted: new Set(), deploymentRelationships: [] };
+    if (!plan) return { plan: undefined, cascaded: [], closure: [], deploymentRelationships: [] };
 
-    const deleted = new Set<object>([...plan.removed, ...instanceDeclarations]);
+    const closure: Array<{ file: string | undefined; node: object }> = instances.flatMap((id) =>
+      this.deployments.declarations(id).map((d) => ({ file: d.file, node: d.node })),
+    );
     const resolver = new DeploymentResolver(this.deployments, this.workspace);
     const removedRelations = new Set<string>();
     for (const relation of this.deployments.relations()) {
       // Inside an instance of the closure (removed with it) or with an endpoint in the closure.
       const inside = instances.some((id) => isNestedInSubtree(relation.frames, id));
       if (!inside && !this.closureRelation(relation, fqn, instances, resolver)) continue;
-      deleted.add(relation.node);
+      closure.push({ file: relation.file, node: relation.node });
       const cst = (relation.node as { $cstNode?: { offset: number } }).$cstNode;
       if (cst) removedRelations.add(`${relation.file ?? ''}:${cst.offset}`);
     }
     const deploymentRelationships = this.listDeploymentRelationships()
       .filter((r) => removedRelations.has(`${r.file ?? ''}:${r.sourceRange.offset}`))
       .map(({ source, target, title }) => ({ source, target, ...(title !== undefined && { title }) }));
-    return { instances, plan, cascaded, deleted, deploymentRelationships };
+    return { plan, cascaded, closure, deploymentRelationships };
+  }
+
+  /**
+   * Write a removal as one group of edits per file (lc4m-15.30: a write
+   * edits each file once): the constructs `parts` and the whole constructs
+   * of the cascade `plan` are deleted together — ranges inside another are
+   * dropped and neighbours on one line joined (see
+   * {@link removalEditsForRanges}) — with the plan's edits inside the
+   * constructs that stay.  All positions are those of the current
+   * generation.
+   */
+  private applyRemovalGroups(parts: ReadonlyArray<{ file: string | undefined; node: object }>, plan: CascadePlan | undefined): void {
+    const ranges = new Map<string, Array<{ offset: number; end: number }>>();
+    for (const { file, node } of parts) {
+      const cst = (node as { $cstNode?: { offset: number; end: number } }).$cstNode;
+      if (file === undefined || !cst) throw new Error('Internal error: a removed construct without file or position');
+      ranges.set(file, [...(ranges.get(file) ?? []), { offset: cst.offset, end: cst.end }]);
+    }
+    for (const [file, list] of plan?.ranges ?? []) ranges.set(file, [...(ranges.get(file) ?? []), ...list]);
+    const groups = new Map<string, TextEdit[]>();
+    for (const file of new Set([...ranges.keys(), ...(plan?.partial.keys() ?? [])])) {
+      const whole = ranges.get(file) ?? [];
+      const inside = (edit: TextEdit): boolean => whole.some((range) => edit.offset >= range.offset && edit.end <= range.end);
+      groups.set(file, [...removalEditsForRanges(this.document(file).fullText, whole), ...(plan?.partial.get(file) ?? []).filter((edit) => !inside(edit))]);
+    }
+    this.applyEditGroups(groups);
   }
 
   /**
@@ -2925,7 +2929,7 @@ export class LikeC4Mutator {
     const cascadable = [...listed].filter(([, removable]) => removable).map(([entry]) => entry);
     const plan = options.plan
       ? options.plan(cascadable)
-      : planCascade(cascadable.filter(isCascadableStatement), (file) => this.document(file), this.viewResolver(), field);
+      : planCascade(cascadable.filter(isCascadableStatement), this.viewResolver(), field);
     const viewNames = (views: readonly ViewDeclaration[]): string => views.map((view) => `'${view.id ?? 'unnamed view'}'`).join(', ');
     if (plan.emptied.length > 0) {
       throw new ReferencedRemovalError(
@@ -2945,26 +2949,6 @@ export class LikeC4Mutator {
       .filter((ref) => ref.cascadable)
       .map(({ file, line, column, role }) => ({ file, line, column, role: role as CatalogueRole }));
     return { plan, cascaded };
-  }
-
-  /**
-   * Remove the instances `ids` of the removal closure of element `fqn`,
-   * with the deployment relationships whose endpoint is in one of them or
-   * steps through an instance into the subtree of `fqn` (one construct at a
-   * time: each removal reparses its file).
-   */
-  private removeInstanceClosure(fqn: string, ids: readonly string[]): void {
-    for (;;) {
-      const resolver = new DeploymentResolver(this.deployments, this.workspace);
-      const next = this.deployments.relations().find((relation) => this.closureRelation(relation, fqn, ids, resolver));
-      if (!next) break;
-      this.removeDeploymentConstruct(next.file, next.node);
-    }
-    for (const id of ids) {
-      const declaration = this.deployments.declarations(id).find((d) => d.type === 'instance');
-      if (!declaration) throw new Error(`Internal error: the instance '${id}' is gone before its removal`);
-      this.removeDeploymentConstruct(declaration.file, declaration.node);
-    }
   }
 
   /**
@@ -3219,7 +3203,11 @@ export class LikeC4Mutator {
     subject: string;
     /** Rejects a part deployment views refer into, listing the references (when the policy is not applied) */
     viewMessage?: (references: string[]) => string;
-    /** The planned cascade of the reference policy, applied first; undefined when nothing is cascaded */
+    /**
+     * The planned cascade of the reference policy, written with the removal;
+     * undefined when nothing is cascaded.  Without `viewMessage` the removal
+     * is written as one group of edits per file.
+     */
     cascade?: CascadePlan;
   }): RemoveDeploymentNodeResult {
     const { roots } = part;
@@ -3237,16 +3225,24 @@ export class LikeC4Mutator {
     // the relationships outside them with an endpoint in a subtree (the
     // relationships declared inside go along with their container).
     const removed = new Set<object>([part.construct]);
+    // The same constructs with their files, for the one-group write.
+    const located = part.locate();
+    const parts: Array<{ file: string | undefined; node: object }> = [{ file: located.file, node: located.node }];
     if (part.extendBlocks) {
       for (const extend of this.deployments.allExtendBlocks()) {
-        if (targetsSubtree(extend.target)) removed.add(extend.node);
+        if (!targetsSubtree(extend.target)) continue;
+        removed.add(extend.node);
+        parts.push({ file: extend.file, node: extend.node });
       }
     }
     const removedRelations = new Set<string>();
     for (const relation of this.deployments.relations()) {
       const nested = part.inside(relation);
       const cascaded = cascades(relation, resolver);
-      if (cascaded) removed.add(relation.node);
+      if (cascaded) {
+        removed.add(relation.node);
+        parts.push({ file: relation.file, node: relation.node });
+      }
       const cst = (relation.node as { $cstNode?: { offset: number } }).$cstNode;
       if ((nested || cascaded) && cst) removedRelations.add(`${relation.file ?? ''}:${cst.offset}`);
     }
@@ -3259,10 +3255,16 @@ export class LikeC4Mutator {
     const snapshot = this.snapshot();
     try {
       refusedOn(part.field, () => {
-        // The cascaded view statements first, then one construct at a time
-        // (each removal reparses its file): the relationships outside the
-        // construct, the extend blocks, the construct.
-        if (part.cascade) this.applyEditGroups(part.cascade.edits);
+        if (!part.viewMessage) {
+          // The reference policy's path (nodes and instances): every
+          // construct and the cascade, planned on this generation, in one
+          // group of edits per file.
+          this.applyRemovalGroups(parts, part.cascade);
+          return;
+        }
+        // `extend <node>` blocks: one construct at a time (each removal
+        // reparses its file): the relationships outside the construct, the
+        // extend blocks, the construct.
         for (;;) {
           const current = new DeploymentResolver(this.deployments, this.workspace);
           const next = this.deployments.relations().find((relation) => cascades(relation, current));
@@ -3333,39 +3335,6 @@ export class LikeC4Mutator {
       if (el) ranges.push({ offset: el.sourceRange.offset, end: el.sourceRange.end });
     }
     return ranges;
-  }
-
-  /**
-   * First relation (in file order) that satisfies `isDependent` and is not
-   * declared inside a range removed together with element `fqn` (see
-   * {@link removedRanges}).
-   */
-  private findRelationOutsideRemovedRanges(
-    fqn: string,
-    elementFile: string,
-    isDependent: (r: { sourceFqn: string; targetFqn: string }) => boolean,
-  ): { filename: string; node: unknown } | null {
-    for (const [file, doc] of this.documents) {
-      const ranges = this.removedRanges(fqn, elementFile, file);
-      for (const rel of resolveRelations(doc.ast, this.workspace)) {
-        if (!isDependent(rel)) continue;
-        const cst = (rel.node as { $cstNode?: { offset: number; end: number } }).$cstNode;
-        if (cst && ranges.some((range) => isWithin(cst, range))) continue;
-        return { filename: file, node: rel.node };
-      }
-    }
-    return null;
-  }
-
-  /** First `extend` block (in file order) targeting `fqn` or a descendant. */
-  private findExtendBlock(
-    fqn: string,
-  ): { filename: string; block: ExtendBlock } | null {
-    for (const [file, doc] of this.documents) {
-      const [block] = findExtendBlocks(doc, fqn);
-      if (block) return { filename: file, block };
-    }
-    return null;
   }
 
   /** Capture the mutable state so that a multi-step operation can roll back. */

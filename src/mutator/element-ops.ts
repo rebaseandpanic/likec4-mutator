@@ -495,16 +495,6 @@ export function findExtendBlocks(doc: ParsedDocument, fqn: string): ExtendBlock[
   return blocks;
 }
 
-/**
- * Build a TextEdit that removes a whole `extend` block (see
- * {@link findExtendBlocks}), with the same line handling as
- * {@link removeElementEdit}.
- */
-export function removeExtendBlockEdit(doc: ParsedDocument, block: ExtendBlock): TextEdit {
-  const { offset, end, newText } = buildRemovalEdit(doc.fullText, block.range.offset, block.range.end);
-  return { offset, end, newText };
-}
-
 /** What {@link clearExtendContributionsEdits} removes from an `extend` block. */
 export interface ExtendClearing {
   /** Remove the block's tags */

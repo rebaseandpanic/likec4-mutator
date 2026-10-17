@@ -184,14 +184,6 @@ export function updateViewEdits(doc: ParsedDocument, view: ViewDeclaration, patc
   return inserts.apply(edits);
 }
 
-/** The edit that removes the declaration of `view` with the lines it fills. */
-export function removeViewEdit(doc: ParsedDocument, view: ViewDeclaration): TextEdit {
-  const cst = view.node.$cstNode;
-  if (!cst) throw new Error(`internal: view '${view.id}' has no CST node`);
-  const { offset, end, newText } = buildRemovalEdit(doc.fullText, cst.offset, cst.end);
-  return { offset, end, newText };
-}
-
 /**
  * The edit that writes the rule line `text` (`<kind> <expression>`) into
  * the view `view`: before the body item starting at `before` when given;

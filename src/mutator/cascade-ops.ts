@@ -11,28 +11,41 @@
  *    repeatedly: a rule whose last item goes, a `group` whose last rule goes,
  *    a `par` / `parallel` block whose last statement goes.  An emptied view
  *    is never removed.
- *  - **Edits.**  One group of non-overlapping edits per file: items of a
- *    list that keeps other items are cut out with one separating comma;
- *    every other removed construct is removed with the lines it fills.
+ *  - **Edits.**  Items of a list that keeps other items are cut out with
+ *    one separating comma; every other removed construct is given as its
+ *    range, for the removal to delete together with its own constructs.
  *  - **Content check** (D77, D108).  A view that had a content-producing
  *    statement — an `include` rule of an element or deployment view (top
  *    level or in a `group`), a step statement or a dynamic `include` of a
  *    dynamic view — and would have none left is reported.  Content from
  *    `extends` or `global` predicates does not count.
  */
-import type { ParsedDocument } from '../parser/types.js';
 import type { CatalogueEntry } from '../query/reference-catalogue.js';
 import type { ViewAstNode, ViewDeclaration, ViewStepStatementEntry } from '../query/view-index.js';
 import type { ViewReferenceResolver } from '../query/view-resolver.js';
-import { buildRemovalEdit, removalEditsForRanges } from './cst-helpers.js';
 import { leaveParallel } from './step-ops.js';
 import { InvalidWriteError } from './write-checks.js';
 import type { TextEdit } from './text-edit.js';
 
-/** What a cascade removes and how. */
+/** A text range of a file. */
+export interface Range {
+  offset: number;
+  end: number;
+}
+
+/**
+ * What a cascade removes and how.  The removal applies it together with the
+ * rest of its edits, one group per file (see `removalEditsForRanges` in
+ * `cst-helpers.ts`).
+ */
 export interface CascadePlan {
-  /** Per file, the edits that remove the constructs, not overlapping */
-  edits: Map<string, TextEdit[]>;
+  /** Per file, the ranges of the constructs removed whole (statements, rules, groups, properties) */
+  ranges: Map<string, Range[]>;
+  /**
+   * Per file, the edits inside a construct that stays: list items cut out of
+   * a rule, a `with { … }` cut off its item; they do not overlap
+   */
+  partial: Map<string, TextEdit[]>;
   /** Every AST node the cascade removes: the items, statements and emptied containers */
   removed: Set<object>;
   /** The views that would lose their last content-producing statement (D77), in entry order */
@@ -63,14 +76,12 @@ const INCLUDE_RULES: ReadonlySet<string> = new Set(['ViewRulePredicate', 'Deploy
  * plan would empty (D77) or leave with a `par` block of discarded
  * statements only (D40) are reported, for the caller to reject.
  *
- * @param documentOf - The parsed document of a file
  * @param resolver   - Resolves view references, for the `par` check of D40
  * @param field      - The field of the D40 check
  * @throws {Error} (internal) for an entry that is not cascadable
  */
 export function planCascade(
   entries: readonly CatalogueEntry[],
-  documentOf: (file: string) => ParsedDocument,
   resolver: ViewReferenceResolver,
   field: string,
 ): CascadePlan {
@@ -119,7 +130,7 @@ export function planCascade(
   );
 
   const emptied = views.filter((view) => contentCount(view, new Set()) > 0 && contentCount(view, removed) === 0);
-  return { edits: removalEdits(removed, fileOf, documentOf), removed, emptied, stranded };
+  return { ...removalEdits(removed, fileOf), removed, emptied, stranded };
 }
 
 /**
@@ -145,53 +156,47 @@ function listItems(list: ViewAstNode | undefined): ViewAstNode[] {
   return items.reverse();
 }
 
-/** The edits that remove the topmost removed constructs, per file. */
+/**
+ * The ranges of the topmost removed constructs and the list-item edits of
+ * the rules that keep other items, per file.
+ */
 function removalEdits(
   removed: ReadonlySet<object>,
   fileOf: ReadonlyMap<object, string>,
-  documentOf: (file: string) => ParsedDocument,
-): Map<string, TextEdit[]> {
+): { ranges: Map<string, Range[]>; partial: Map<string, TextEdit[]> } {
   const isTopmost = (node: ViewAstNode): boolean => {
     for (let up = node.$container; up; up = up.$container) if (removed.has(up)) return false;
     return true;
   };
-  const edits = new Map<string, TextEdit[]>();
-  const add = (file: string, edit: TextEdit): void => {
-    const list = edits.get(file);
-    if (list) list.push(edit);
-    else edits.set(file, [edit]);
-  };
-  // Items of lists that keep other items, grouped by their list's rule;
-  // whole constructs, by file (removed together, see removalEditsForRanges).
-  const partial = new Map<ViewAstNode, ViewAstNode[]>();
-  const whole = new Map<string, Array<{ offset: number; end: number }>>();
+  const ranges = new Map<string, Range[]>();
+  const partial = new Map<string, TextEdit[]>();
+  // Items of lists that keep other items, grouped by their list's rule.
+  const items = new Map<ViewAstNode, ViewAstNode[]>();
   for (const node of removed as ReadonlySet<ViewAstNode>) {
     if (!isTopmost(node)) continue;
     const file = fileOf.get(node)!;
     const listNode = node.$container;
     if (listNode && (listNode.$type === 'Expressions' || listNode.$type === 'FqnExpressions') && listNode['value'] === node) {
       const rule = ruleOf(listNode);
-      partial.set(rule, [...(partial.get(rule) ?? []), node]);
+      items.set(rule, [...(items.get(rule) ?? []), node]);
       continue;
     }
     const cst = node.$cstNode;
     if (!cst) throw new Error(`Internal error: a removed ${node.$type} has no position`);
-    whole.set(file, [...(whole.get(file) ?? []), { offset: cst.offset, end: cst.end }]);
+    push(ranges, file, { offset: cst.offset, end: cst.end });
   }
-  for (const [file, ranges] of whole) {
-    for (const edit of removalEditsForRanges(documentOf(file).fullText, ranges)) add(file, edit);
-  }
-  for (const [rule, gone] of partial) {
+  for (const [rule, gone] of items) {
     const file = fileOf.get(rule)!;
-    for (const edit of listItemEdits(listItems(rule[RULE_LISTS[rule.$type ?? '']!] as ViewAstNode), new Set(gone))) add(file, edit);
+    for (const edit of listItemEdits(listItems(rule[RULE_LISTS[rule.$type ?? '']!] as ViewAstNode), new Set(gone))) push(partial, file, edit);
   }
-  for (const [file, list] of edits) {
-    list.sort((a, b) => a.offset - b.offset);
-    for (let i = 1; i < list.length; i++) {
-      if (list[i]!.offset < list[i - 1]!.end) throw new Error(`Internal error: overlapping cascade edits in '${file}'`);
-    }
-  }
-  return edits;
+  return { ranges, partial };
+}
+
+/** Append `value` to the list of `key` in `map`. */
+function push<T>(map: Map<string, T[]>, key: string, value: T): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
 }
 
 /** The rule that holds the list node `list` (the outermost list node's container). */
@@ -272,17 +277,12 @@ const WITH_WRAPPERS: ReadonlySet<string> = new Set(['FqnExprWith', 'RelationExpr
  * property goes is removed with them (the item stays).  A step or
  * relationship body keeps its braces.
  *
- * @param documentOf - The parsed document of a file
  * @throws {Error} (internal) for an entry that is not a `navigateTo` value
  */
-export function planNavigateToCascade(entries: readonly CatalogueEntry[], documentOf: (file: string) => ParsedDocument): CascadePlan {
+export function planNavigateToCascade(entries: readonly CatalogueEntry[]): CascadePlan {
   const removed = new Set<object>();
-  const edits = new Map<string, TextEdit[]>();
-  const add = (file: string, edit: TextEdit): void => {
-    const list = edits.get(file);
-    if (list) list.push(edit);
-    else edits.set(file, [edit]);
-  };
+  const ranges = new Map<string, Range[]>();
+  const partial = new Map<string, TextEdit[]>();
   const byContainer = new Map<ViewAstNode, { file: string; properties: Set<ViewAstNode> }>();
   for (const entry of entries) {
     const property = entry.node.$container;
@@ -302,23 +302,16 @@ export function planNavigateToCascade(entries: readonly CatalogueEntry[], docume
       const subject = (wrapper['subject'] as ViewAstNode | undefined)?.$cstNode;
       const end = wrapper.$cstNode?.end;
       if (!subject || end === undefined) throw new Error('Internal error: a with block without a position');
-      add(file, { offset: subject.end, end, newText: '' });
+      push(partial, file, { offset: subject.end, end, newText: '' });
       removed.add(container);
       continue;
     }
     for (const property of properties) {
       const cst = property.$cstNode;
       if (!cst) throw new Error('Internal error: a navigateTo without a position');
-      const { offset, end, newText } = buildRemovalEdit(documentOf(file).fullText, cst.offset, cst.end);
-      add(file, { offset, end, newText });
+      push(ranges, file, { offset: cst.offset, end: cst.end });
       removed.add(property);
     }
   }
-  for (const [file, list] of edits) {
-    list.sort((a, b) => a.offset - b.offset);
-    for (let i = 1; i < list.length; i++) {
-      if (list[i]!.offset < list[i - 1]!.end) throw new Error(`Internal error: overlapping cascade edits in '${file}'`);
-    }
-  }
-  return { edits, removed, emptied: [], stranded: [] };
+  return { ranges, partial, removed, emptied: [], stranded: [] };
 }
