@@ -102,6 +102,34 @@ describe('the selector fields (row 159)', SLOW, () => {
   });
 });
 
+describe('a typed bidirectional relationship (row 159)', SLOW, () => {
+  it('decorates the typed relationship selected by matchKind, and not the untyped one', async () => {
+    const files = {
+      ...FILES,
+      'model.c4': FILES['model.c4']!.replace("  a -> b 'same' a -> b 'same'\n", "  a -> b 'same' a -> b 'same'\n  a -[calls]<-> b 'both'\n  a <-> b 'both'\n"),
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'likec4-mutator-apply-extend-'));
+    for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, file), text, 'utf-8');
+    const mutationsPath = join(dir, 'mutations.json');
+    writeFileSync(
+      mutationsPath,
+      JSON.stringify({ mutations: [{ op: 'addRelationshipExtend', source: 'a', target: 'b', matchKind: 'calls', matchBidirectional: true, file: 'ext.c4', tags: ['core'] }] }),
+      'utf-8',
+    );
+    const result = spawnSync('npx', ['tsx', 'src/cli.ts', 'apply', '--dir', dir, '--mutations', mutationsPath, '--in-place'], {
+      cwd: PROJECT_ROOT,
+      encoding: 'utf-8',
+      timeout: 30000,
+    });
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    const after = Object.fromEntries(Object.keys(files).map((file) => [file, readFileSync(join(dir, file), 'utf-8')]));
+    expect(tagged(after)).toEqual([{ kind: 'calls', title: 'both' }]);
+    await expectAcceptedWrite(files, after);
+    await expectRelationshipsAgreeWithLikeC4(after, LikeC4Mutator.fromFiles(after).getRelationships());
+  });
+});
+
 describe('rejected ops (rows 158, 159)', () => {
   it.each([
     ['an unresolved element', { op: 'addElementExtend', fqn: 'nope', file: 'ext.c4', tags: ['core'] }, 'mutations[0].fqn:'],

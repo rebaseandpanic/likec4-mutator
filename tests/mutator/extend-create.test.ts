@@ -175,6 +175,32 @@ describe('addRelationshipExtend (row 153)', () => {
   });
 });
 
+describe('a typed bidirectional relationship (row 153)', () => {
+  const BOTH: Files = {
+    'm.c4': `${SPEC}model {
+  a = system 'A'
+  b = system 'B'
+  a -[calls]<-> b 'x'
+  a <-> b 'x'
+}
+`,
+  };
+  it('writes -[kind]<-> and decorates only the typed relationship, not the untyped competitor', SLOW, async () => {
+    await expectValidLikeC4(BOTH);
+    const mutator = LikeC4Mutator.fromFiles(BOTH);
+    mutator.addRelationshipExtend({ source: 'a', target: 'b', matchKind: 'calls', matchBidirectional: true }, { file: 'm.c4', tags: ['edge'] });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toContain("  extend a -[calls]<-> b 'x' {\n    #edge\n  }\n");
+    await expectAcceptedWrite(BOTH, after);
+    await expectReadsAgree(after);
+    const model = await buildLikeC4Model(after);
+    expect(model.relations.map((r) => [(r as { kind?: string }).kind ?? null, r.tags ?? null])).toEqual([
+      ['calls', ['edge']],
+      [null, null],
+    ]);
+  });
+});
+
 describe('the selector (row 154)', () => {
   const COMPETING: Files = {
     'm.c4': `${SPEC}model {
