@@ -316,7 +316,7 @@ export function updateDeclarationEdits(
   // For body-targeting fields, when the element has no body and the patch
   // touches multiple body fields, emit ONE combined snippet that creates the
   // body and includes every field (matches the strategy used in
-  // {@link relationship-ops.updateRelationshipEdit}).  Avoids the latent
+  // {@link relationship-ops.relationPatchEdits}).  Avoids the latent
   // multi-edit bug where two body-creation edits could each emit `' { ... } '`
   // at the same offset and produce two adjacent body blocks.
   const bodyTargeting =

@@ -145,7 +145,7 @@ export interface UpdateRelationshipMatcher {
   matchTitle?: string;
 }
 
-/** Patch payload for {@link updateRelationshipEdit}. */
+/** Patch payload for {@link selectedRelationshipPatchEdits}. */
 export interface UpdateRelationshipPatch {
   /** New inline label.  REPLACE semantics. */
   label?: string;
@@ -168,25 +168,10 @@ export interface UpdateRelationshipPatch {
 }
 
 /**
- * Build TextEdits that update an existing relationship in `doc`.
- *
- * The matcher selects exactly one relation: source/target FQNs are compared
- * after FQN resolution (so `app.api -> app.db` matches the implicit-source
- * relation written `api -> db` inside `app { ... }`).  When more than one
- * relation matches, `matchKind` / `matchTitle` may be supplied to disambiguate.
- *
- * The patch is empty-checked up-front: when no update field is specified the
- * function throws `nothing to update` so the caller sees the error before any
- * source text is parsed.
- *
- * @returns A list of TextEdits — empty when no patch field actually produces a
- *          change (e.g. tags === [] for a relation that has no tags).
- */
-/**
  * Build the TextEdits that apply `patch` to the selected relation `node` of
- * `doc` (see {@link relationPatchEdits}), after the checks of
- * {@link updateRelationshipEdit}: a patch without any field is
- * `nothing to update`, an empty metadata array is rejected.
+ * `doc` (see {@link relationPatchEdits}), after checking the patch: a patch
+ * without any field is `nothing to update`, an empty metadata array is
+ * rejected.
  */
 export function selectedRelationshipPatchEdits(doc: ParsedDocument, node: unknown, patch: UpdateRelationshipPatch): TextEdit[] {
   checkRelationshipPatch(patch);
@@ -215,30 +200,6 @@ function checkRelationshipPatch(patch: UpdateRelationshipPatch): void {
       }
     }
   }
-}
-
-export function updateRelationshipEdit(
-  doc: ParsedDocument,
-  matcher: UpdateRelationshipMatcher,
-  patch: UpdateRelationshipPatch,
-  workspace?: WorkspaceIndex,
-): TextEdit[] {
-  checkRelationshipPatch(patch);
-
-  const { ast, fullText } = doc;
-
-  // Locate the matching relation.
-  const matched = matchRelations(ast, matcher, workspace);
-
-  // Disambiguate.
-  if (matched.length === 0) {
-    throw new Error(formatNotFoundError(matcher));
-  }
-  if (matched.length > 1) {
-    throw new Error(formatAmbiguousError(matched, matcher));
-  }
-
-  return relationPatchEdits(matched[0] as RelationAstNode, fullText, patch, { inlineStrings: 'rewrite' });
 }
 
 /** Options of {@link relationPatchEdits}. */
@@ -473,27 +434,6 @@ export function buildExtendRelationTitleEdit(node: ExtendRelationNode, title: st
   const edit = buildLabelEdit(node as unknown as RelationAstNode, title);
   if (!edit) throw new Error('extend block has no source position');
   return edit;
-}
-
-export function formatNotFoundError(matcher: UpdateRelationshipMatcher): string {
-  const clauses: string[] = [`source=${matcher.source}`, `target=${matcher.target}`];
-  if (matcher.matchKind !== undefined) clauses.push(`kind=${matcher.matchKind}`);
-  if (matcher.matchTitle !== undefined) clauses.push(`title='${matcher.matchTitle}'`);
-  return `Relationship not found: ${clauses.map((c, i) => (i < 2 ? c : `[${c}]`)).join(' ')}`;
-}
-
-function formatAmbiguousError(
-  matched: RelationAstNode[],
-  _matcher: UpdateRelationshipMatcher,
-): string {
-  const found = matched
-    .map((m) => {
-      const k = relationKind(m) ?? 'null';
-      const t = m.title === undefined ? 'null' : `'${m.title}'`;
-      return `[kind=${k} title=${t}]`;
-    })
-    .join(', ');
-  return `Multiple relationships match (${matched.length} found). Specify matchKind and/or matchTitle to disambiguate. Found: ${found}`;
 }
 
 /**
