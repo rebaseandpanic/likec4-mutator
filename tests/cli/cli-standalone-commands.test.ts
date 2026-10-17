@@ -3,8 +3,8 @@
  * --summary / --tags flags added to add-element in Task 2.
  */
 import { describe, it, expect } from 'vitest';
-import { execSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -213,5 +213,38 @@ describe('CLI commands reject values LikeC4 would not accept', () => {
     expect(status).toBe(1);
     expect(stderr).toContain(`${option}:`);
     expect(readFileSync(join(tmpDir, 'model.c4'), 'utf-8')).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// remove-element and the reference policy (lc4m-15.30 row 76, D84)
+// ---------------------------------------------------------------------------
+
+describe('CLI remove-element applies the reference policy', () => {
+  it('exits 1 and writes nothing when a view rule refers to the element', () => {
+    const model = `specification {
+  element system
+}
+model {
+  app = system
+  other = system
+}
+views {
+  view v {
+    include app, other
+  }
+}
+`;
+    const dir = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-'));
+    const out = mkdtempSync(join(tmpdir(), 'likec4-mutator-test-out-'));
+    writeFileSync(join(dir, 'model.c4'), model, 'utf-8');
+    const result = spawnSync('npx', ['tsx', 'src/cli.ts', 'remove-element', '--dir', dir, '--fqn', 'app', '--output', out], {
+      cwd: PROJECT_ROOT,
+      encoding: 'utf-8',
+      timeout: 30000,
+    });
+    expect(result.status).toBe(1);
+    expect(readFileSync(join(dir, 'model.c4'), 'utf-8')).toBe(model);
+    expect(readdirSync(out)).toEqual([]);
   });
 });
