@@ -715,6 +715,7 @@ rel.style;                       // effective; a bidirectional relationship alwa
 - **Relationship.** The effective style is the kind's `line`, `color`, `head` and `tail` overridden by the relationship's own. A bidirectional relationship gets a `tail`: the one written, else the `head`, else `'normal'`.
 - **Values.** As written: opacity as `'40%'`, a size alias as its token. Theme defaults and configured `styles.defaults` are not applied. An absent field is no value.
 - **Where kind styles appear.** The kind's style and `multiple` are reported on the element or relationship, in `fromSpecification`. `getSpecification()` keeps reporting names only.
+- **Updating an icon.** `updateElement(fqn, { style: { icon } })` on an element that has a body-level `icon` rewrites that `icon` and adds no `style { icon }`; LikeC4 would warn `Redundant as icon defined on element` about one. A `style { icon }` already next to it is left as written. An element without a body `icon` gets the icon in its style block, as before.
 
 ## Specification defaults
 

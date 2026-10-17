@@ -772,7 +772,10 @@ export class LikeC4Mutator {
    *  - `tags`: REPLACE.  Empty array clears all tags.
    *  - `links`: REPLACE.  Empty array clears all links.
    *  - `style`: MERGE per-field; absent fields are preserved.  Pass a
-   *    complete style object to replace everything.
+   *    complete style object to replace everything.  `style.icon` is
+   *    written into the body-level `icon` when the element has one (it
+   *    overrides `style { icon }` in LikeC4), and no `style { icon }` is
+   *    added; one already there is left as it is (D75).
    *  - `metadata`: MERGE with `null`-deletion.  Map a key to `null` to delete
    *    it; map to a string or string[] to upsert.  Keys absent from the
    *    patch are preserved verbatim (including their original array

@@ -115,7 +115,7 @@ export interface DeclarationEditOptions {
   /**
    * Write `style.icon` into the body-level `icon` properties when the body
    * has any (they override the style block's icon), instead of into the
-   * style block.  Used by deployment nodes and instances.
+   * style block.  Used by elements (D75), deployment nodes and instances.
    */
   styleIconInBodyIcon?: boolean;
 }
@@ -228,7 +228,10 @@ export function updateElementEdit(
 ): TextEdit[] {
   const entry = buildFqnIndex(doc.ast).get(fqn);
   if (!entry) throw new Error(`Element '${fqn}' not found`);
-  return updateDeclarationEdits(entry.node, doc, props, elementInlineAnchor(entry.node));
+  // A body `icon` overrides `style { icon }` in LikeC4, so a style icon goes
+  // into the body `icon` when the element has one (D75): a `style { icon }`
+  // next to it would raise `Redundant as icon defined on element`.
+  return updateDeclarationEdits(entry.node, doc, props, elementInlineAnchor(entry.node), { styleIconInBodyIcon: true });
 }
 
 /**
