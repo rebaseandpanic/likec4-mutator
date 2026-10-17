@@ -107,6 +107,18 @@ export function isSpecificationName(type: SpecificationDeclarationType, name: st
   return (type === 'tag' ? own[0]!.tag?.name : own[0]!.kind?.name) === name;
 }
 
+/**
+ * The ranges of the comments of `text` (`// …` and `/* … *\/`), as LikeC4's
+ * lexer reads them: a `*\/` or `//` inside a string is not a comment, and
+ * a block comment spans its lines whatever they start with.
+ */
+export function commentRanges(text: string): Array<{ offset: number; end: number }> {
+  const { hidden } = getServices().likec4.parser.Lexer.tokenize(text);
+  return (hidden ?? [])
+    .filter((token) => token.image.startsWith('//') || token.image.startsWith('/*'))
+    .map((token) => ({ offset: token.startOffset, end: token.startOffset + token.image.length }));
+}
+
 /** View kinds an `include` rule can be written for. */
 export type IncludeViewType = 'element' | 'dynamic' | 'deployment';
 

@@ -25,6 +25,7 @@
  *    `./` or `../`, as LikeC4 1.59.4 tells relative paths apart) pins it to
  *    its file.
  */
+import { commentRanges } from '../parser/grammar.js';
 import type { CatalogueEntry, CatalogueTarget, ReferenceCatalogue } from '../query/reference-catalogue.js';
 import type { DeploymentIndex } from '../query/deployment-index.js';
 import { referencePrefix, type ReferenceRecord } from '../query/reference-snapshot.js';
@@ -359,9 +360,13 @@ export interface DeclarationText {
 
 /**
  * The text a move carries for the declaration at `[offset, end)` of
- * `fullText`: with the comment lines directly above it (no blank line
- * between) and a comment ending its last line, when it stands on lines of
- * its own; the declaration alone when it shares a line with other code.
+ * `fullText`: with the comments directly above it and a comment ending its
+ * last line, when it stands on lines of its own; the declaration alone when
+ * it shares a line with other code.  A comment above belongs to it when it
+ * is a comment of LikeC4's lexer that stands on lines of its own (nothing
+ * but indentation before it on its first line) and only a line break and
+ * indentation separate it from the declaration or from the next such
+ * comment — no blank line, no code.
  */
 export function declarationText(fullText: string, offset: number, end: number): DeclarationText {
   const lineStart = (at: number): number => fullText.lastIndexOf('\n', at - 1) + 1;
@@ -373,13 +378,15 @@ export function declarationText(fullText: string, offset: number, end: number): 
     return { text: fullText.slice(offset, end).replace(/\r\n/g, '\n'), offset, end };
   }
   const cutEnd = trailing[1] ? end + fullText.slice(end, lineEnd).replace(/\r$/, '').length : end;
-  let first = declarationLine;
-  while (first > 0) {
-    const previous = lineStart(first - 1);
-    const line = fullText.slice(previous, first - 1).replace(/\r$/, '');
-    if (!/^[ \t]*(\/\/|\/\*|\*)/.test(line) && !/\*\/[ \t]*$/.test(line)) break;
-    first = previous;
+  const comments = commentRanges(fullText);
+  let start = offset;
+  for (;;) {
+    const comment = comments.filter((c) => c.end <= start).at(-1);
+    if (!comment || !/^[ \t]*\r?\n[ \t]*$/.test(fullText.slice(comment.end, start))) break;
+    if (!/^[ \t]*$/.test(fullText.slice(lineStart(comment.offset), comment.offset))) break;
+    start = comment.offset;
   }
+  const first = lineStart(start);
   const indent = /^[ \t]*/.exec(fullText.slice(declarationLine, offset))![0];
   const text = fullText
     .slice(first, cutEnd)
