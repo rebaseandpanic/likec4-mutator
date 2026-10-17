@@ -610,6 +610,19 @@ Execution stays sequential in one repository (the tasks share `mutator.ts`, `cli
 - **Performance:** the catalogue is built two or three times per rename or move (no numeric bound, per the spec). Per-generation resolver caching is reused.
 - **Rollback:** each group is a contiguous series of atomic commits on the working branch; a failing group is reverted with `git revert`. Nothing is pushed.
 
+## Amendment after stage 4 (D111 to D115)
+
+Decisions taken during the test-plan stage change the error contract. They are owned as follows; every other part of the plan is unchanged.
+
+| Decision | Contract | Owner tasks |
+|---|---|---|
+| D111, D113 | `ReferencedRemovalError extends InvalidWriteError` (exported from `src/index.ts`, JSDoc in the same commit) with `references: { file, line, column, role, cascadable, view? }[]`, 1-based. `role` is the FR-001 role enum, plus `unrecovered` for an unrecovered-text hit (only in `references`, never in the catalogue or the oracle). Every reference-caused removal rejection uses it, in both modes. An unknown target or a refused edit stays a plain `InvalidWriteError` (D104). | T010 (type, export, element removals, D77 entries with `view`), T012 (deployment removals), T013 (`removeView`, `extends` chain entries with `view`), T023 (kind and tag removals: `role` is the FR-002 place name, or `opaque-flow` / `global-or-import` for an unmodelled place) |
+| D112 | The removal result has `cascaded` only with `cascade: true` (an array, possibly empty); an entry is `{ file, line, column, role }` with positions in the state before the write. Without `cascade` the result shape is unchanged. | T010, T012, T013 |
+| D114 | `InvalidWriteError.related?: { file, line, column, construct }[]`, 1-based, `construct` one of `deployment-path`, `extend-block`, `where-condition`, `relationship`. Filled by the FR-010 path rejection, D100, D78, D83 and D72. | T010 (the field on `InvalidWriteError`, `src/mutator/write-checks.ts`), T005 and T017 (FR-010 paths), T021 (D100), T023 (D78), T029 (D83), T031 (D72) |
+| D115 | Helper-sensitivity tests are not written. The T039 / T002 gate items called "precondition tests" (role coverage of the oracle, fixture validity, spike facts) are asserted as preconditions inside the product tests that consume them, before any loop. | T039, T002 (helpers only), consumers per `tests.md` |
+
+T010 is the first consumer of D114 only by order: it adds the field, and the first rejection that fills it is in T005.
+
 ## Known residuals
 
 - **RES-plan-1 · MINOR.** `addRelationship` has no `checkMetadata` today, while `addDeploymentRelationship` has. The spec does not list adding it among the INV-8 changes, so the plan leaves it; the new nested and typed forms inherit the gap. → carrier: lc4m-15.31 (semantic validation).
