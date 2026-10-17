@@ -215,7 +215,7 @@ Write: validate form → resolve the target (element, view, kind, relationship) 
 
 ### Significant non-functional constraints
 - Atomic in memory across files; formatting, comments and line endings kept as existing writers do.
-- A write edits each file once: one atomic edit group per changed file. It builds its reference catalogue once before and once after its edits; a rename or move may additionally build in-memory catalogues of its intermediate states, because FR-011 chooses each written text at its place in the state after the preceding step (D126). No numeric bound is set (SC-011 runs the suite in its usual time).
+- A write edits each file once: one atomic edit group per changed file. It builds its reference catalogue once before and once after its edits; a rename or move may additionally build in-memory catalogues of its intermediate states, because the passes of FR-011 choose each written text where it must resolve after the write, and later passes (a view body under its rewritten `of`, an unnamed instance id under its rewritten `instanceOf`) depend on the texts of earlier ones (D126). No numeric bound is set (SC-011 runs the suite in its usual time).
 
 ### Rejected alternatives
 - Linking with the language server inside the library to find references (lc4m-15.31).
