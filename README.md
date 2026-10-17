@@ -689,7 +689,24 @@ Rules (LikeC4's own, applied before any `extend` block):
 
 ### Writing
 
-Kind defaults are read-only. `updateElement` and `updateRelationship` edit the declaration and its `extend` blocks as described below, never the specification. The patch is written as given, and the effective value afterwards follows the rules above:
+Kinds and tags are declared and their defaults changed with their own calls:
+
+```typescript
+mutator.addTag('backend');                                   // => { changedFiles }
+mutator.addKind('element', 'service', {                      // 'element' | 'relationship' | 'deploymentNode'
+  title: 'Service', summary: 'Runs code', description: 'A service', technology: 'Node',
+  tags: ['backend'], links: [{ url: 'https://wiki.example.com/services', label: 'Service guide' }],
+  file: 'spec.c4',                                           // optional
+});
+mutator.updateKind('relationship', 'async', { title: null, technology: 'Kafka' });
+```
+
+- **Where.** A new kind or tag goes to the end of the first `specification` block of `file`, else of the first file in LikeC4's document order that has a `specification` block, else of the first file with a `model` block, else of the first file; a block is created when that file has none, never a second one in a file (LikeC4 warns `Prefer one specification per document`).
+- **Names.** A name must be one LikeC4's grammar accepts for that declaration — `element model` is accepted, `element view` is not. Element kinds, relationship kinds, deployment node kinds and tags are separate name spaces: a name is taken only by a declaration of the same type, in any loaded file.
+- **Defaults.** `title`, `summary` (not for a relationship kind, which LikeC4 gives none), `description`, `technology`, `tags` (declared) and `links`. `updateKind` edits the one declaration of the kind where it is: a string replaces the kind's value and `null` removes it; `tags` and `links` replace the written ones (`[]` removes them). The kind's style, `notation`, `multiple` and colors are kept as written.
+- **Rejected** (`InvalidWriteError`, nothing changed): on `type`, a type other than the three; on `name`, a name the grammar does not accept, a name already declared for the type, an update of an undeclared kind or of one declared more than once; on `patch`, an empty update; on `summary`, a relationship kind summary; on `tags[i]` / `links[i].url`, an undeclared tag or an invalid link; on `file`, a file that is not loaded; on `title`, a relationship kind title change that would make an `extend a -> b` block start or stop applying to a relationship of that kind written without a title — LikeC4 matches the blocks by the title the relationship takes from its kind — with `related` listing those blocks (`construct: 'extend-block'`).
+
+`updateElement` and `updateRelationship` edit the declaration and its `extend` blocks as described below, never the specification. The patch is written as given, and the effective value afterwards follows the rules above:
 
 | Patch | Effective value after the update |
 | --- | --- |

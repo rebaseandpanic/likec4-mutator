@@ -172,6 +172,16 @@ import {
   type ViewStepSpec,
 } from './step-ops.js';
 import { blockInsertEdit, chooseBlockPlacement } from './block-placement.js';
+import {
+  generateKind,
+  generateTag,
+  specificationDeclarations,
+  updateKindEdits,
+  type AddKindOpts,
+  type KindType,
+  type UpdateKindPatch,
+} from './specification-ops.js';
+import { isSpecificationName } from '../parser/grammar.js';
 import { BodyInsertions } from './body-layout.js';
 import { getNodeIndent } from './indent.js';
 import { checkBraceBalance } from './brace-balance.js';
@@ -259,6 +269,14 @@ export interface RenameElementResult {
    * rewritten reference.  Describes the in-memory state: nothing is written
    * to disk.
    */
+  changedFiles: string[];
+}
+
+export type { AddKindOpts, KindLink, KindType, UpdateKindPatch } from './specification-ops.js';
+
+/** Result of a write of the specification ({@link LikeC4Mutator.addKind}, {@link LikeC4Mutator.updateKind}, {@link LikeC4Mutator.addTag}). */
+export interface SpecificationWriteResult {
+  /** Files whose text changed, in the order the files were loaded; nothing is written to disk */
   changedFiles: string[];
 }
 
@@ -1173,6 +1191,163 @@ export class LikeC4Mutator {
         if (joins(source, target)) reject('step', endpoints[i]!.file, source, target);
       }
     }
+  }
+
+  /**
+   * Declare a new kind of `type` — `element`, `relationship` or
+   * `deploymentNode` — named `name`, with optional defaults (lc4m-15.30
+   * US-6): `title`, `summary` (not for a relationship kind), `description`,
+   * `technology`, `tags` and `links`.  It is written at the end of the first
+   * `specification` block of `opts.file`, else of the first file in LikeC4's
+   * document order with a `specification` block, else of the first file
+   * with a `model` block, else of the first file (FR-021, D62); a block is
+   * created when that file has none, never a second one.
+   *
+   * The three kind types are separate name spaces, and a tag may have the
+   * name of a kind (D67).  Rejected, with nothing changed
+   * (`InvalidWriteError`):
+   *  - on `type`: not one of the three kind types;
+   *  - on `name`: a name LikeC4's grammar does not accept for that
+   *    declaration (`element view`; `element model` is accepted); a kind of
+   *    that type declared in a loaded file;
+   *  - on `summary`: a summary for a relationship kind;
+   *  - on `tags[i]` / `links[i].url`: an undeclared tag, an invalid link;
+   *  - on `file`: a file that is not loaded.
+   */
+  addKind(type: KindType, name: string, opts: AddKindOpts = {}): SpecificationWriteResult {
+    checkKindType(type);
+    if (!isSpecificationName(type, name)) {
+      throw new InvalidWriteError('name', `${JSON.stringify(name)} is not accepted by LikeC4 as the name of ${type === 'element' ? 'an' : 'a'} ${type} kind`);
+    }
+    this.rejectDeclaredName(type, name);
+    if (type === 'relationship' && opts.summary !== undefined) {
+      throw new InvalidWriteError('summary', 'a relationship kind has no summary in LikeC4');
+    }
+    checkTags(opts.tags, this.workspace);
+    checkLinks(opts.links);
+    const placement = chooseBlockPlacement('specification', this.documents, opts.file);
+    const { file: _file, ...defaults } = opts;
+    const edit = blockInsertEdit('specification', this.document(placement.file), placement, (indent) => indent + generateKind(type, name, defaults, indent));
+    return this.writeSpecification(new Map([[placement.file, [edit]]]), 'name');
+  }
+
+  /**
+   * Change the defaults of the kind of `type` named `name` (lc4m-15.30
+   * US-6, D33): a string replaces the kind's value (every declaration of
+   * the key) and `null` removes it; `tags` and `links` replace the written
+   * ones.  The one declaration of the kind is edited in place, wherever it
+   * is; a kind written without a body is given one.  Its style, notation,
+   * `multiple` and other lines are kept as written.
+   *
+   * Rejected, with nothing changed (`InvalidWriteError`):
+   *  - on `type`: not one of the three kind types;
+   *  - on `name`: no such kind is declared, or it is declared more than once
+   *    (D94);
+   *  - on `patch`: an empty patch;
+   *  - on `summary`: a summary for a relationship kind;
+   *  - on `tags[i]` / `links[i].url`: an undeclared tag, an invalid link;
+   *  - on `title`: a relationship kind's title change that would make an
+   *    `extend a -> b` block start or stop applying to a relationship of
+   *    that kind written without a title — LikeC4 matches the blocks by the
+   *    effective title (D100); `related` lists the blocks
+   *    (`construct: 'extend-block'`).
+   */
+  updateKind(type: KindType, name: string, patch: UpdateKindPatch): SpecificationWriteResult {
+    checkKindType(type);
+    const [declaration, ...more] = this.specificationDeclarations(type, name);
+    if (!declaration) throw new InvalidWriteError('name', `no ${type} kind '${name}' is declared in a loaded file`);
+    if (more.length > 0) {
+      throw new InvalidWriteError('name', `the ${type} kind '${name}' is declared ${more.length + 1} times; LikeC4 reports each copy as a duplicate`);
+    }
+    const keys = ['title', 'summary', 'description', 'technology', 'tags', 'links'] as const;
+    if (!keys.some((key) => patch[key] !== undefined)) {
+      throw new InvalidWriteError('patch', `nothing to change: give at least one of ${keys.join(', ')}`);
+    }
+    if (type === 'relationship' && patch.summary !== undefined) {
+      throw new InvalidWriteError('summary', 'a relationship kind has no summary in LikeC4');
+    }
+    checkTags(patch.tags, this.workspace);
+    checkLinks(patch.links);
+    if (type === 'relationship' && patch.title !== undefined) this.rejectKindTitleChange(name, patch.title);
+    const edits = updateKindEdits(declaration.node, type, this.document(declaration.file), patch);
+    return this.writeSpecification(new Map([[declaration.file, edits]]), 'name');
+  }
+
+  /**
+   * Declare a new tag `name` (without `#`; lc4m-15.30 US-6), at the end of
+   * the first `specification` block of `opts.file` or of the default file,
+   * as {@link addKind} places a kind.  A tag may have the name of a kind.
+   *
+   * Rejected, with nothing changed (`InvalidWriteError`): on `name`, a name
+   * LikeC4's grammar does not accept for a tag, or a tag declared in a
+   * loaded file; on `file`, a file that is not loaded.
+   */
+  addTag(name: string, opts: { file?: string } = {}): SpecificationWriteResult {
+    if (!isSpecificationName('tag', name)) {
+      throw new InvalidWriteError('name', `${JSON.stringify(name)} is not accepted by LikeC4 as the name of a tag`);
+    }
+    this.rejectDeclaredName('tag', name);
+    const placement = chooseBlockPlacement('specification', this.documents, opts.file);
+    const edit = blockInsertEdit('specification', this.document(placement.file), placement, (indent) => indent + generateTag(name));
+    return this.writeSpecification(new Map([[placement.file, [edit]]]), 'name');
+  }
+
+  /** The declarations of `name` of `type` in every loaded file, in load order. */
+  private specificationDeclarations(type: KindType | 'tag', name: string): Array<{ file: string; node: ReturnType<typeof specificationDeclarations>[number] }> {
+    return [...this.documents].flatMap(([file, doc]) => specificationDeclarations(doc.ast, type, name).map((node) => ({ file, node })));
+  }
+
+  /** Throw on `name` when a loaded file declares `name` for `type` (LikeC4: `Duplicate … kind` / `Duplicate tag`, spike 01). */
+  private rejectDeclaredName(type: KindType | 'tag', name: string): void {
+    const [declared] = this.specificationDeclarations(type, name);
+    if (!declared) return;
+    throw new InvalidWriteError('name', `${type === 'tag' ? 'a tag' : `a ${type} kind`} '${name}' is already declared in '${declared.file}'`);
+  }
+
+  /**
+   * Throw when setting, changing or removing the title of the relationship
+   * kind `kind` would make an `extend a -> b` block start or stop applying
+   * to a relationship of that kind written without a title: LikeC4 matches
+   * the blocks by the effective title, which such a relationship takes from
+   * its kind (D100).
+   *
+   * @throws {InvalidWriteError} on `title`, `related` listing the blocks
+   */
+  private rejectKindTitleChange(kind: string, title: string | null): void {
+    const newTitle = title === null ? '' : removeIndent(title);
+    const blocks = this.workspace.extendRelationBlockList();
+    const affected = new Set<(typeof blocks)[number]['block']>();
+    for (const doc of this.documents.values()) {
+      for (const relation of resolveRelations(doc.ast, this.workspace)) {
+        if (!relation.resolved) continue;
+        const identity = relationIdentity(relation);
+        if (identity.kind !== kind || identity.title !== '') continue;
+        const effective = this.workspace.effectiveIdentity(identity);
+        const before = relationFingerprint(effective);
+        const after = relationFingerprint({ ...effective, title: newTitle });
+        for (const { key, block } of blocks) if ((key === before) !== (key === after)) affected.add(block);
+      }
+    }
+    if (affected.size === 0) return;
+    const related: RelatedConstruct[] = [...affected].map((block) => ({
+      ...this.position(block.file ?? '', block.node.$cstNode?.offset ?? 0),
+      construct: 'extend-block',
+    }));
+    throw new InvalidWriteError(
+      'title',
+      `the relationship kind '${kind}' gives its title to relationships written without one, and LikeC4 matches extend blocks by that title: ` +
+        `the change would make ${related.map((r) => `the block at '${r.file}:${r.line}'`).join(', ')} start or stop applying`,
+      related,
+    );
+  }
+
+  /** Apply the edit groups of a specification write atomically; a refused edit is an `InvalidWriteError` on `field`. */
+  private writeSpecification(edits: Map<string, TextEdit[]>, field: string): SpecificationWriteResult {
+    let changedFiles: string[] = [];
+    refusedOn(field, () => {
+      changedFiles = this.applyEditGroups(edits);
+    });
+    return { changedFiles };
   }
 
   /**
@@ -3907,6 +4082,13 @@ function addEditGroup(editsByFile: Map<string, TextEdit[]>, file: string, edits:
 
 /** Roles a cascade edits: a rule item or a step statement at a modelled place (FR-001, FR-003). */
 const CASCADED_ROLES: ReadonlySet<CatalogueRole> = new Set(['predicate-item', 'step-endpoint', 'style-target', 'rank-target']);
+
+/** Throw on `type` when it is not a kind type (`element`, `relationship`, `deploymentNode`). */
+function checkKindType(type: unknown): asserts type is KindType {
+  if (type !== 'element' && type !== 'relationship' && type !== 'deploymentNode') {
+    throw new InvalidWriteError('type', `${JSON.stringify(type)} is not a kind type: expected element, relationship or deploymentNode`);
+  }
+}
 
 /** Whether a cascade removes the view statement of `entry` (a rule item or a step at a modelled place). */
 function isCascadableStatement(entry: CatalogueEntry): boolean {

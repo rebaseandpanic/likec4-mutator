@@ -77,6 +77,36 @@ export function isLikeC4Id(name: string): boolean {
   return token!.image === name && getIdTokenTypes().has(token!.tokenType.name);
 }
 
+/** The declarations of a `specification` block a name can be given to. */
+export type SpecificationDeclarationType = 'element' | 'relationship' | 'deploymentNode' | 'tag';
+
+/** The AST property of a `specification` block holding each declaration type. */
+const SPECIFICATION_DECLARATIONS: Readonly<Record<SpecificationDeclarationType, string>> = {
+  element: 'elements',
+  relationship: 'relationships',
+  deploymentNode: 'deploymentNodes',
+  tag: 'tags',
+};
+
+/**
+ * Whether LikeC4's grammar accepts `name` as the name of a declaration of
+ * `type` in a `specification` block (D67): `specification { <type> <name> }`
+ * parses without errors into exactly that one declaration, named `name`.
+ * So `element model` is accepted and `element view` is not (spikes 02, 06),
+ * and a name holding a comment, a space or a brace is not.
+ */
+export function isSpecificationName(type: SpecificationDeclarationType, name: string): boolean {
+  if (typeof name !== 'string' || name === '') return false;
+  const result = getServices().likec4.parser.LangiumParser.parse(`specification {\n  ${type} ${name}\n}\n`);
+  if (result.parserErrors.length > 0 || result.lexerErrors.length > 0) return false;
+  const blocks = (result.value as unknown as { specifications?: Array<Record<string, unknown>> }).specifications ?? [];
+  if (blocks.length !== 1) return false;
+  const declared = Object.values(SPECIFICATION_DECLARATIONS).flatMap((property) => (blocks[0]![property] as unknown[] | undefined) ?? []);
+  const own = (blocks[0]![SPECIFICATION_DECLARATIONS[type]] as Array<{ kind?: { name?: string }; tag?: { name?: string } }> | undefined) ?? [];
+  if (declared.length !== 1 || own.length !== 1) return false;
+  return (type === 'tag' ? own[0]!.tag?.name : own[0]!.kind?.name) === name;
+}
+
 /** View kinds an `include` rule can be written for. */
 export type IncludeViewType = 'element' | 'dynamic' | 'deployment';
 

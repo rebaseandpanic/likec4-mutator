@@ -1,6 +1,6 @@
 /**
- * Placement of a construct written at the top level of a `model`,
- * `deployment` or `views` block (D4, D11, D27, D41, D62): the file it goes
+ * Placement of a construct written at the top level of a `specification`,
+ * `model`, `deployment` or `views` block (D4, D11, D27, D41, D62): the file it goes
  * to, and the block it is appended to or the new block that is created for
  * it.
  */
@@ -14,7 +14,7 @@ import { lineEndingOf, withLineEnding } from './text-edit.js';
 import { checkFile, InvalidWriteError } from './write-checks.js';
 
 /** Keyword of a top-level block a construct can be placed in. */
-export type BlockKeyword = 'model' | 'deployment' | 'views';
+export type BlockKeyword = 'specification' | 'model' | 'deployment' | 'views';
 
 /** A top-level `model` / `deployment` / `views` block node with its CST. */
 export interface TopLevelBlockNode {
@@ -35,6 +35,7 @@ export interface BlockPlacement<B extends TopLevelBlockNode = TopLevelBlockNode>
 
 /** Property of the document AST holding the blocks of each keyword. */
 const BLOCKS_PROPERTY: Readonly<Record<BlockKeyword, string>> = {
+  specification: 'specifications',
   model: 'models',
   deployment: 'deployments',
   views: 'views',
@@ -42,6 +43,7 @@ const BLOCKS_PROPERTY: Readonly<Record<BlockKeyword, string>> = {
 
 /** What a write of each keyword places, for the error without any loaded file. */
 const PLACED: Readonly<Record<BlockKeyword, string>> = {
+  specification: 'the kind or tag',
   model: 'the model element or relationship',
   deployment: 'the deployment model',
   views: 'the view',
