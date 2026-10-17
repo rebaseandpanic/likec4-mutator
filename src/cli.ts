@@ -628,7 +628,14 @@ program
           }
           case 'removeRelationship': {
             const m = mutation;
-            mutator.removeRelationship(m.source, m.target);
+            mutator.removeRelationship({
+              source: m.source,
+              target: m.target,
+              matchKind: m.matchKind,
+              matchTitle: m.matchTitle,
+              matchBidirectional: m.matchBidirectional,
+              position: m.position,
+            });
             applied++;
             break;
           }
@@ -640,6 +647,8 @@ program
                 target: m.target,
                 matchKind: m.matchKind,
                 matchTitle: m.matchTitle,
+                matchBidirectional: m.matchBidirectional,
+                position: m.position,
               },
               {
                 label: m.label,

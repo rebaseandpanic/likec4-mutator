@@ -324,7 +324,7 @@ Updates properties of an existing element.  Only specified fields are changed.  
 
 #### updateRelationship
 
-Updates fields on an existing relationship.  Required: `op`, `source`, `target`, plus at least one update field.  When more than one relation matches `source`/`target`, supply `matchKind` and/or `matchTitle` to disambiguate.  `label`, `tags`, `links` and `metadata` also apply to `extend a -> b { ... }` blocks of the relationship (see [Relationships](#relationships)).
+Updates fields on an existing relationship.  Required: `op`, `source`, `target`, plus at least one update field.  The selector fields are the same as for [removeRelationship](#removerelationship): when more than one relation matches `source`/`target`, supply `matchKind`, `matchTitle`, `matchBidirectional` and, for relationships nothing else tells apart, `position`.  `label`, `tags`, `links` and `metadata` also apply to `extend a -> b { ... }` blocks of the relationship (see [Relationships](#relationships)).
 
 | Field | Semantics |
 | --- | --- |
@@ -387,13 +387,25 @@ Adds a relationship between two elements. All fields except `op`, `source`, `tar
 
 #### removeRelationship
 
-Removes a relationship between two elements (matched by absolute source and target FQN, across all files; the reference text as written is accepted as a fallback).
+Removes a relationship between two elements (matched by absolute source and target FQN, across all files; the reference text as written is accepted as a fallback).  Exactly one relationship must match; extend blocks that applied only to it are removed with it.
+
+| Selector field | Semantics |
+| --- | --- |
+| `source`, `target` | Required.  A bidirectional relationship (`<->`) matches them in either order. |
+| `matchKind` | The relationship kind as written (`-[kind]->` or `.kind`). |
+| `matchTitle` | The inline title as written (not the kind's default title). |
+| `matchBidirectional` | `true`: only `<->` relationships; `false`: only one-way ones. |
+| `position` | `{ "file", "line", "column" }`, 1-based: where the relationship's declaration starts.  Inside a mutations file it refers to the sources after the preceding mutations. |
+
+More than one match fails with the path of the mutation's `source` and lists every candidate as `file:line:column` (with its kind, title and direction); pass one of them back as `position` to select it.  No match fails on `source` (on `position` when one is given).  Nothing is written in either case.
 
 ```json
 {
   "op": "removeRelationship",
   "source": "app.api",
-  "target": "app.oldService"
+  "target": "app.oldService",
+  "matchTitle": "legacy sync",
+  "position": { "file": "model.c4", "line": 42, "column": 3 }
 }
 ```
 

@@ -163,12 +163,22 @@ export interface UpdateElementMutation {
   metadata?: MetadataPatch;
 }
 
+/** The 1-based start `{ file, line, column }` of a relationship's declaration, as an ambiguity error prints it. */
+export interface RelationshipPositionSpec {
+  file: string;
+  line: number;
+  column: number;
+}
+
 export interface UpdateRelationshipMutation {
   op: 'updateRelationship';
   source: string;
   target: string;
   matchKind?: string;
   matchTitle?: string;
+  matchBidirectional?: boolean;
+  /** Refers to the sources after the preceding mutations (D102) */
+  position?: RelationshipPositionSpec;
   label?: string;
   description?: string;
   technology?: string;
@@ -187,6 +197,11 @@ export interface RemoveRelationshipMutation {
   op: 'removeRelationship';
   source: string;
   target: string;
+  matchKind?: string;
+  matchTitle?: string;
+  matchBidirectional?: boolean;
+  /** Refers to the sources after the preceding mutations (D102) */
+  position?: RelationshipPositionSpec;
 }
 
 /** `addDeploymentNode`: a root node without `parent`, else a child of `parent`. */
@@ -432,6 +447,30 @@ function optionalBoolean(obj: JsonObject, key: string, path: string): void {
       `${path}.${key}`,
       `expected a boolean, got ${describeValue(value)}`,
     );
+  }
+}
+
+const POSITION_FIELDS = ['file', 'line', 'column'] as const;
+
+/** `position`, when present: `{ file, line, column }` with a non-empty file and 1-based integers. */
+function optionalPosition(obj: JsonObject, path: string): void {
+  const value = obj['position'];
+  if (value === undefined) return;
+  const positionPath = `${path}.position`;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new MutationsFileError(positionPath, `expected a position { file, line, column }, got ${describeValue(value)}`);
+  }
+  const position = value as JsonObject;
+  rejectUnknownFields(position, POSITION_FIELDS, positionPath, 'a position');
+  requireString(position, 'file', positionPath);
+  for (const key of ['line', 'column'] as const) {
+    const n = position[key];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+      throw new MutationsFileError(
+        `${positionPath}.${key}`,
+        n === undefined ? 'required 1-based integer is missing' : `expected a 1-based integer, got ${describeValue(n)}`,
+      );
+    }
   }
 }
 
@@ -843,6 +882,8 @@ const MUTATION_FIELDS = {
     'target',
     'matchKind',
     'matchTitle',
+    'matchBidirectional',
+    'position',
     'label',
     'description',
     'technology',
@@ -851,7 +892,7 @@ const MUTATION_FIELDS = {
     'metadata',
     'style',
   ],
-  removeRelationship: ['op', 'source', 'target'],
+  removeRelationship: ['op', 'source', 'target', 'matchKind', 'matchTitle', 'matchBidirectional', 'position'],
   addView: ['op', 'id', 'type', 'target', 'title', 'includes', 'autoLayout', 'description', 'extends', 'file'],
   addDeploymentNode: [
     'op',
@@ -1038,6 +1079,10 @@ function validateMutation(m: JsonObject, path: string): void {
     case 'removeRelationship':
       requireString(m, 'source', path);
       requireString(m, 'target', path);
+      optionalString(m, 'matchKind', path);
+      optionalString(m, 'matchTitle', path);
+      optionalBoolean(m, 'matchBidirectional', path);
+      optionalPosition(m, path);
       return;
     case 'updateRelationship': {
       requireString(m, 'source', path);
@@ -1045,6 +1090,8 @@ function validateMutation(m: JsonObject, path: string): void {
       for (const key of ['matchKind', 'matchTitle', 'label', 'description', 'technology']) {
         optionalString(m, key, path);
       }
+      optionalBoolean(m, 'matchBidirectional', path);
+      optionalPosition(m, path);
       optionalStringArray(m, 'tags', path);
       optionalLinks(m, path);
       optionalStyle(m, path, 'relationship');
