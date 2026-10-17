@@ -129,7 +129,8 @@ mutator.updateRelationship(
 
 // Remove
 mutator.removeRelationship('app.api', 'app.db');
-mutator.removeElement('app.db'); // rejected while a deployment instance deploys it — see "Rejected writes"
+mutator.removeElement('app.db'); // rejected while other constructs refer to it — see "Removing referenced elements"
+mutator.removeElement('app.db', { cascade: true }); // removes the referring view items, steps and instances too
 
 // Validate & serialize
 const errors = mutator.validate(); // [] = valid
@@ -1526,6 +1527,25 @@ mutator.addView({ id: 'prod', type: 'element', target: 'app', title: 'Deployment
 ## Line endings
 
 Text the library writes into a file uses that file's line ending — the one of its first line break (`\r\n` or `\n`; `\n` when the file has none).  Text kept from the file is never changed, so a file that already mixes line endings stays mixed.
+## Removing referenced elements
+
+`removeElement(fqn, { cascade? })` removes the element with its subtree and what it owns, in both modes: the relationships with an endpoint in the subtree (and those declared in it), the `extend` blocks of the subtree, and the `extend a -> b` blocks that lose an endpoint or their relationship. Every other reference into the subtree is handled by a policy:
+
+| Reference | Default | `cascade: true` |
+| --- | --- | --- |
+| `instanceOf` | rejected | the instance goes, with its deployment relationships and its deployment-view items |
+| deployment relationship endpoint through an instance (`prod.api.handler`) | rejected | the relationship goes |
+| include / exclude item, dynamic `include` item (top level or in a `group`) | rejected | the item goes with its `with { … }` and `where`; an emptied rule and an emptied `group` go too |
+| dynamic step or chain | rejected | the whole step statement goes; an emptied `par` / `parallel` goes too |
+| style target (in a view or the `views` block), `rank` target | rejected | the target goes; an emptied rule goes too |
+| view `of` (and the views that `extends` that view) | rejected | rejected |
+| a reference in an opaque flow block (`opt`, `loop`, `alt`, `try` / `catch` / `finally`, `break`), in a `global` block or an import | rejected | rejected |
+| a name of the subtree written there, or in text the parser could not recover, as a whole identifier or any dotted segment (`x.api` blocks removing `app.api`) | rejected | rejected |
+
+A cascade is also rejected when a view would lose its last content-producing statement — an `include` of an element or deployment view, a step or a dynamic `include` of a dynamic view — since LikeC4 would then show other content. Content a view takes from `extends` or from `global` predicates does not count, so such a cascade is rejected on purpose.
+
+A rejection is a `ReferencedRemovalError` (an `InvalidWriteError` on `fqn`) whose `references` lists every reference: `{ file, line, column, role, cascadable, view? }`, 1-based, `role` naming the place (`instance-of`, `predicate-item`, `step-endpoint`, `style-target`, `rank-target`, `view-of`, `view-extends`, `opaque-flow`, `global-or-import`, `unrecovered`, …), `cascadable` whether `cascade` removes it, `view` the view it is written in. With `cascade: true` the result has `cascaded`: every reference the cascade removed, `{ file, line, column, role }`, at its position before the write; without `cascade` the result has no such key. Nothing is written on a rejection.
+
 ## Rejected writes
 
 Every write call checks the values it introduces before anything changes. A rejected call throws an `InvalidWriteError` (exported): `field` names the offending option in the terms of the call (`name`, `kind`, `id`, `target`, `source`, `autoLayout`, `tags[1]`, `style.color`, `includes[0]`), `detail` says what is wrong, and no file changes. `apply` reports the same as `mutations[i].<field>` (the element name of `addElement` is its `id`) with exit code 1 and writes nothing; the single-purpose CLI commands name the option (`--id`, `--kind`, `--tags`, ...).
@@ -1560,7 +1580,7 @@ Writes LikeC4 would reject are refused the same way:
 | every view write | the edited file would not parse; a surviving reference would link to something else (see [Views › Writing](#writing-3)). |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
-| `removeElement` | the deployment model refers to the element or an element of its subtree: as the element of an instance (`instanceOf`, LikeC4 would report `Could not resolve reference`) or as the element part of a deployment relationship endpoint (`prod.api.handler`). Field `fqn`; the error lists the instances and endpoints. |
+| `removeElement` | `fqn` is not a declared element, or an edit would leave a file that does not parse (`InvalidWriteError`); a reference into the subtree that the mode does not remove (`ReferencedRemovalError`, see [Removing referenced elements](#removing-referenced-elements)). Field `fqn`. |
 | `updateDeploymentNode` | `id` is not one declared node; a tag is not declared; `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating nodes](#updating-nodes)). |
 | `updateDeploymentInstance` | `id` is not one declared instance; a tag is not declared; a patched metadata key would not read as requested, as LikeC4 cannot hold an empty own map (`metadata.<key>`); `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating instances](#updating-instances)). |
 | `removeDeploymentNode`, `removeDeploymentInstance` | `id` is not one declared node (instance); a rule of a deployment view refers to it or to something below it; the removal would change what a surviving reference links to (field `id`). |

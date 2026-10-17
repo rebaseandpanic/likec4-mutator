@@ -58,9 +58,9 @@ export type { DeploymentTarget, LinkedTarget } from './query/deployment-resolver
 
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';
-export { InvalidWriteError } from './mutator/write-checks.js';
+export { InvalidWriteError, ReferencedRemovalError } from './mutator/write-checks.js';
 export { RelationshipAmbiguityError } from './mutator/relationship-selector.js';
-export type { ViewRuleText } from './mutator/write-checks.js';
+export type { RelatedConstruct, RemovalReference, RemovalReferenceRole, ViewRuleText } from './mutator/write-checks.js';
 export type {
   AddDeploymentExtendOpts,
   AddDeploymentInstanceOpts,
@@ -68,6 +68,8 @@ export type {
   AddDeploymentRelationshipOpts,
   AddElementOpts,
   AddViewOpts,
+  CascadedReference,
+  RemoveOptions,
   UpdateViewPatch,
   ViewStepPatch,
   ViewStepSpec,

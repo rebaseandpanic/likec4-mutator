@@ -26,9 +26,9 @@ import {
   type ReferenceSnapshot,
   type TextRange,
 } from '../query/reference-snapshot.js';
-import { buildReferenceCatalogue, type ReferenceCatalogue } from '../query/reference-catalogue.js';
-import { newNameCaptures, unmodelledInventory, type UnmodelledName, type UnmodelledNameClass } from '../query/unmodelled.js';
-import { forEachElementDeclaration, resolveFqnRef } from '../query/fqn.js';
+import { buildReferenceCatalogue, type CatalogueEntry, type CatalogueRole, type ReferenceCatalogue } from '../query/reference-catalogue.js';
+import { affectedNameHits, newNameCaptures, unmodelledInventory, type UnmodelledName, type UnmodelledNameClass } from '../query/unmodelled.js';
+import { buildFqnIndex, forEachElementDeclaration, readStrictFqnRef, resolveFqnRef } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
   WorkspaceIndex,
@@ -163,8 +163,11 @@ import {
 import { chooseBlockPlacement } from './block-placement.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
+import { planCascade, type CascadePlan } from './cascade-ops.js';
 import {
   InvalidWriteError,
+  ReferencedRemovalError,
+  type RemovalReference,
   checkAutoLayout,
   checkElementName,
   checkKind,
@@ -214,6 +217,30 @@ export type { ViewStepPatch, ViewStepSpec };
  */
 export interface RemoveElementResult {
   removedRelationships: Array<{ source: string; target: string; title?: string }>;
+  /**
+   * Only with `cascade: true` (D112): every reference the cascade removed
+   * with its construct, in LikeC4's document order, positions in the state
+   * before the write.  Absent without `cascade`.
+   */
+  cascaded?: CascadedReference[];
+}
+
+/** A reference a cascade removed with its construct; positions are 1-based, in the state before the write. */
+export interface CascadedReference {
+  file: string;
+  line: number;
+  column: number;
+  role: CatalogueRole;
+}
+
+/** Options of the removals of US-1 and US-2 (lc4m-15.30). */
+export interface RemoveOptions {
+  /**
+   * Remove the constructs that refer to what is removed, as FR-001 says,
+   * instead of rejecting the removal (D54).  References the cascade cannot
+   * edit still reject it.
+   */
+  cascade?: boolean;
 }
 
 /**
@@ -713,36 +740,63 @@ export class LikeC4Mutator {
 
   /**
    * Remove an element (and its entire body) from the model, together with
-   * every relationship that depends on it.
+   * what it owns, and — by the reference policy of FR-001 (lc4m-15.30 US-1)
+   * — reject or cascade the other references into its subtree.
    *
-   * The element's subtree includes children declared in `extend` blocks, so
-   * every `extend X { ... }` block whose X is the element or one of its
-   * descendants — in any loaded file — is removed as well (it would otherwise
-   * refer to an element that no longer exists).
+   * **Owned constructs** are removed in both modes (D57): the relationships
+   * whose source or target is the element or a descendant, in any loaded
+   * file, and those declared inside its body or a removed `extend` block;
+   * every `extend X { ... }` block whose X is in the subtree (the subtree
+   * includes children declared in such blocks); `extend a -> b { ... }`
+   * blocks with an endpoint in the subtree and blocks that applied only to
+   * removed relationships.  They are listed in `removedRelationships` (the
+   * relationships) or not at all (the blocks).
    *
-   * Removed relationships are those whose source or target is the element or
-   * one of its descendants — in any loaded file — plus those declared inside
-   * the element's body or inside a removed `extend` block (which disappear
-   * with it).  `extend a -> b { ... }` blocks whose source or target is in
-   * the subtree, and blocks that applied only to removed relationships, are
-   * removed too (see {@link removeRelationship}); they are not listed in the
-   * result.  The operation is atomic: when any step fails, no file is
-   * changed.
+   * **Other references into the subtree** reject the removal by default
+   * ({@link ReferencedRemovalError} on `fqn`, listing every reference with
+   * its position, role, enclosing view and whether `cascade` would remove
+   * it).  With `cascade: true`:
+   *  - an include / exclude item, a dynamic `include` item, a style or
+   *    `rank` target (in a view or the `views` block) is removed with its
+   *    `with { … }` and `where`; a rule, `group`, style or `rank` rule it
+   *    empties goes with it (D55);
+   *  - a dynamic step or chain naming the subtree is removed as a whole
+   *    statement; a `par` / `parallel` block it empties goes with it;
+   *  - an instance whose `instanceOf` is in the subtree is removed as
+   *    `removeDeploymentInstance` would remove it, with its deployment
+   *    relationships and, cascaded the same way, its deployment-view items;
+   *  - a deployment relationship whose endpoint steps through an instance
+   *    into the subtree is removed.
+   * The removed references are listed in `cascaded`.
    *
-   * The removal is rejected, with no file changed, while the deployment
-   * model refers to the element or one of its descendants: as the element of
-   * an instance (`instanceOf`), or as the element part of a deployment
-   * relationship endpoint that steps into an instance's element.
+   * **Rejected in both modes**: a view `of` in the subtree (D56; the views
+   * that extend such a view are listed with it), a reference at a place the
+   * library does not model — an opaque flow block of a dynamic view, a
+   * `global` block, an import (D61) — and a name of the subtree written
+   * there or in text the parser could not recover, as a whole identifier or
+   * any dotted segment (FR-004, D92).  With `cascade`, a view that would
+   * lose its last content-producing statement (D77; content from `extends`
+   * or `global` predicates does not count, D108) and a `par` block left with
+   * only statements LikeC4 discards reject the removal too.
    *
-   * @param fqn - FQN of the element to remove
-   * @returns The relationships that were removed.
-   * @throws {InvalidWriteError} on `fqn` when the deployment model refers to
-   *   the element or its subtree, listing the instances and endpoints
+   * The removal is rejected as well when it would change what a surviving
+   * reference links to.  The operation is atomic: on any rejection or
+   * failure no file is changed.
+   *
+   * @param fqn     - FQN of the element to remove
+   * @param options - `cascade`: remove the referencing constructs (FR-001)
+   * @returns The relationships that were removed and, with `cascade`, the
+   *   references the cascade removed.
+   * @throws {ReferencedRemovalError} on `fqn` for a removal the references
+   *   reject
+   * @throws {InvalidWriteError} on `fqn` when `fqn` is not a declared
+   *   element, or when an edit would leave a file that does not parse (D104)
    */
-  removeElement(fqn: string): RemoveElementResult {
-    const filename = this.findFileContaining(fqn);
-    if (!filename) throw new Error(`Element '${fqn}' not found in any file`);
-    this.rejectDeploymentReferences(fqn);
+  removeElement(fqn: string, options: RemoveOptions = {}): RemoveElementResult {
+    const filename = typeof fqn === 'string' ? this.findFileContaining(fqn) : null;
+    if (!filename) throw new InvalidWriteError('fqn', `${JSON.stringify(fqn)} is not an element declared in the loaded files`);
+    const cascade = options.cascade === true;
+    const policy = this.elementRemovalPolicy(fqn, filename, cascade);
 
     const isDependent = (r: { sourceFqn: string; targetFqn: string }): boolean =>
       isSameOrDescendant(r.sourceFqn, fqn) || isSameOrDescendant(r.targetFqn, fqn);
@@ -769,36 +823,58 @@ export class LikeC4Mutator {
       }
     }
     const keys = this.relationKeys((rel) => removedNodes.has(rel.node));
+    const endpointRemoved = (endpoint: string): boolean => isSameOrDescendant(endpoint, fqn);
+
+    // Every construct the write deletes, for the stability check of the survivors.
+    const deleted = new Set<object>([...(removedNodes as Set<object>), ...policy.deleted]);
+    const element = buildFqnIndex(this.document(filename).ast).get(fqn)?.node;
+    if (element) deleted.add(element as object);
+    for (const doc of this.documents.values()) {
+      for (const node of extendElementNodes(doc, fqn)) deleted.add(node);
+    }
+    for (const { block } of this.workspace.extendRelationBlockList().filter(this.orphanedExtendRelation(keys, endpointRemoved))) {
+      deleted.add(block.node);
+    }
+    const before = this.referenceSnapshot(deleted);
 
     const snapshot = this.snapshot();
     try {
-      // Remove dependent relationships declared outside the removed ranges one
-      // at a time (each removal reparses its file, so offsets stay valid),
-      // then the `extend a -> b` blocks that lose their relationships or an
-      // endpoint (while the endpoints still resolve), then the `extend`
-      // blocks of the subtree, then the element itself.  Relationships inside
-      // the element's body or an `extend` block go along with it.
-      for (;;) {
-        const next = this.findRelationOutsideRemovedRanges(fqn, filename, isDependent);
-        if (!next) break;
-        this.applyEdit(next.filename, removeRelationNodeEdit(this.document(next.filename).fullText, next.node));
-      }
-      this.removeOrphanedExtendRelations(keys, (endpoint) => isSameOrDescendant(endpoint, fqn));
+      refusedOn('fqn', () => {
+        // The cascade first, while every reference still resolves: the view
+        // statements, then the deployment relationships and instances of the
+        // closure.  Then the owned constructs: dependent relationships
+        // declared outside the removed ranges one at a time (each removal
+        // reparses its file, so offsets stay valid), the `extend a -> b`
+        // blocks that lose their relationships or an endpoint (while the
+        // endpoints still resolve), the `extend` blocks of the subtree, and
+        // the element itself.  Relationships inside the element's body or an
+        // `extend` block go along with it.
+        if (policy.plan) this.applyEditGroups(policy.plan.edits);
+        this.removeInstanceClosure(fqn, policy.instances);
 
-      for (;;) {
-        const next = this.findExtendBlock(fqn);
-        if (!next) break;
-        const doc = this.document(next.filename);
-        this.applyEdit(next.filename, removeExtendBlockEdit(doc, next.block));
-      }
+        for (;;) {
+          const next = this.findRelationOutsideRemovedRanges(fqn, filename, isDependent);
+          if (!next) break;
+          this.applyEdit(next.filename, removeRelationNodeEdit(this.document(next.filename).fullText, next.node));
+        }
+        this.removeOrphanedExtendRelations(keys, endpointRemoved);
 
-      this.applyEdit(filename, removeElementEdit(this.document(filename), fqn));
+        for (;;) {
+          const next = this.findExtendBlock(fqn);
+          if (!next) break;
+          const doc = this.document(next.filename);
+          this.applyEdit(next.filename, removeExtendBlockEdit(doc, next.block));
+        }
+
+        this.applyEdit(filename, removeElementEdit(this.document(filename), fqn));
+      });
+      this.rejectChangedReferences(before, new Map(), fqn, { field: 'fqn', action: 'removing' });
     } catch (err) {
       this.restore(snapshot);
       throw err;
     }
 
-    return { removedRelationships };
+    return cascade ? { removedRelationships, cascaded: policy.cascaded } : { removedRelationships };
   }
 
   /**
@@ -2540,6 +2616,19 @@ export class LikeC4Mutator {
   }
 
   /**
+   * Whether an `extend a -> b { ... }` block (endpoints resolved) is
+   * orphaned: it applied to a removed relationship and to no remaining one,
+   * or its source or target satisfies `endpointRemoved`.
+   */
+  private orphanedExtendRelation(
+    keys: { removed: Set<string>; remaining: Set<string> },
+    endpointRemoved: (fqn: string) => boolean,
+  ): (entry: { key: string; block: ExtendRelationBlockRef }) => boolean {
+    return ({ key, block }) =>
+      endpointRemoved(block.sourceFqn) || endpointRemoved(block.targetFqn) || (keys.removed.has(key) && !keys.remaining.has(key));
+  }
+
+  /**
    * Remove, one at a time, every `extend a -> b { ... }` block (endpoints
    * resolved) that applied to a removed relationship and to no remaining
    * one, or whose source or target satisfies `endpointRemoved`.
@@ -2548,10 +2637,7 @@ export class LikeC4Mutator {
     keys: { removed: Set<string>; remaining: Set<string> },
     endpointRemoved: (fqn: string) => boolean,
   ): void {
-    const isOrphaned = ({ key, block }: { key: string; block: ExtendRelationBlockRef }): boolean =>
-      endpointRemoved(block.sourceFqn) ||
-      endpointRemoved(block.targetFqn) ||
-      (keys.removed.has(key) && !keys.remaining.has(key));
+    const isOrphaned = this.orphanedExtendRelation(keys, endpointRemoved);
     for (;;) {
       const next = this.workspace.extendRelationBlockList().find(isOrphaned);
       if (!next) return;
@@ -2589,49 +2675,211 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Throw when the deployment model refers to element `fqn` or an element of
-   * its subtree: an instance deploys it (`instanceOf`), or a deployment
-   * relationship endpoint steps into it through an instance.  Removing the
-   * element would leave such a reference unresolved (LikeC4: Could not
-   * resolve reference).
+   * The reference policy of removing element `fqn` (FR-001; lc4m-15.30
+   * US-1): classifies every reference into the subtree — and, under the
+   * removal closure, into the instances deployed from it — as owned,
+   * cascadable or blocking, adds the names of the subtree found at
+   * unmodelled places and in unrecovered text (affected mode, D92), and
+   * rejects or plans the cascade.
    *
-   * @throws {InvalidWriteError} on `fqn`, listing the instances and endpoints
+   * @throws {ReferencedRemovalError} on `fqn` when a reference is left that
+   *   the mode does not remove, or when the cascade would empty a view (D77)
+   * @throws {InvalidWriteError} on `fqn` for a `par` block the cascade would
+   *   leave with only discarded statements (D40)
    */
-  private rejectDeploymentReferences(fqn: string): void {
-    const resolver = new DeploymentResolver(this.deployments, this.workspace);
-    const instances: string[] = [];
+  private elementRemovalPolicy(
+    fqn: string,
+    elementFile: string,
+    cascade: boolean,
+  ): { instances: string[]; plan: CascadePlan | undefined; cascaded: CascadedReference[]; deleted: Set<object> } {
+    const catalogue = this.referenceCatalogue();
+    const insideElement = (entry: CatalogueEntry): boolean =>
+      this.removedRanges(fqn, elementFile, entry.file).some((range) => entry.offset >= range.offset && entry.end <= range.end);
+
+    const instanceIds = new Map<object, string>();
     for (const id of this.deployments.ids()) {
       for (const declaration of this.deployments.declarations(id)) {
-        if (declaration.type !== 'instance') continue;
-        const element = resolver.instanceElement(declaration.node);
-        if (element === undefined || !isSameOrDescendant(element, fqn)) continue;
-        const entry = `'${id}' (instanceOf '${element}')`;
-        if (!instances.includes(entry)) instances.push(entry);
+        if (declaration.type === 'instance') instanceIds.set(declaration.node, id);
       }
     }
-    const endpoints: string[] = [];
+
+    // Every non-owned reference, with whether a cascade removes it.
+    const listed = new Map<CatalogueEntry, boolean>();
+    const instances: string[] = [];
+    for (const entry of catalogue.intoElement(fqn)) {
+      if (insideElement(entry)) continue;
+      switch (entry.role) {
+        case 'relationship-endpoint':
+        case 'extend-element-target':
+        case 'extend-relationship-endpoint':
+          continue; // owned (D57)
+        case 'instance-of': {
+          const id = instanceIds.get((entry.node.$container?.$container ?? {}) as object);
+          if (id === undefined) throw new Error(`Internal error: the instance of the instanceOf '${entry.text}' in '${entry.file}' has no id`);
+          if (!instances.includes(id)) instances.push(id);
+          listed.set(entry, true);
+          break;
+        }
+        case 'deployment-relationship-endpoint':
+          listed.set(entry, true);
+          break;
+        default:
+          listed.set(entry, isCascadableStatement(entry));
+      }
+    }
+    // The removal closure: what refers to the instances that go with the subtree.
+    const instanceDeclarations = new Set(instances.flatMap((id) => this.deployments.declarations(id).map((d) => d.node)));
+    for (const id of instances) {
+      for (const entry of catalogue.intoDeployment(id)) {
+        if (listed.has(entry) || isInsideAny(entry.node, instanceDeclarations)) continue;
+        if (entry.role === 'deployment-relationship-endpoint') continue; // owned by the instance (D57)
+        listed.set(entry, isCascadableStatement(entry));
+      }
+    }
+    // A view `of` blocks; the views extending that view are named with it (D113).
+    for (const [entry] of listed) {
+      if (entry.role !== 'view-of' || entry.view?.id === undefined) continue;
+      for (const extension of extendsChain(catalogue, entry.view.id)) if (!listed.has(extension)) listed.set(extension, false);
+    }
+
+    // Names of the subtree at unmodelled places and in unrecovered text (affected mode, D92).
+    const names = new Set([...this.subtreeFqns(fqn), ...instances].map((name) => name.slice(name.lastIndexOf('.') + 1)));
+    this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
+    const at = new Set([...listed.keys()].map((entry) => `${entry.file}:${entry.offset}`));
+    const hits = affectedNameHits(this.unmodelled, names, 'element').filter((hit) => !at.has(`${hit.file}:${hit.segments[0]!.offset}`));
+
+    const documentOrder = new Map(catalogue.documents.map(({ file }, i) => [file, i]));
+    const references = [
+      ...[...listed].map(([entry, cascadable]) => ({ offset: entry.offset, reference: this.removalReference(entry, cascadable) })),
+      ...hits.map((hit) => ({
+        offset: hit.segments[0]!.offset,
+        reference: this.unmodelledReference(hit),
+      })),
+    ]
+      .sort((a, b) => (documentOrder.get(a.reference.file) ?? 0) - (documentOrder.get(b.reference.file) ?? 0) || a.offset - b.offset)
+      .map(({ reference }) => reference);
+    const texts = new Map([...listed].map(([entry]) => [`${entry.file}:${entry.line}:${this.position(entry.file, entry.offset).column}`, describeEntry(entry, instanceIds)]));
+    const describeAll = (list: readonly RemovalReference[]): string =>
+      list.map((ref) => `${texts.get(`${ref.file}:${ref.line}:${ref.column}`) ?? `the name in ${ref.role === 'unrecovered' ? 'unparsed text' : `a ${ref.role} place`}`} at ${ref.file}:${ref.line}:${ref.column}`).join('; ');
+
+    const blocking = references.filter((ref) => !ref.cascadable);
+    if (references.length > 0 && (!cascade || blocking.length > 0)) {
+      const cascadable = references.filter((ref) => ref.cascadable);
+      throw new ReferencedRemovalError(
+        'fqn',
+        cascade
+          ? `'${fqn}' cannot be removed even with cascade: blocking — ${describeAll(blocking)}` +
+              (cascadable.length > 0 ? `; cascade would remove — ${describeAll(cascadable)}` : '')
+          : `'${fqn}' cannot be removed while references to it or its descendants remain (cascade removes those marked cascadable): ${describeAll(references)}`,
+        references,
+      );
+    }
+    if (!cascade) return { instances: [], plan: undefined, cascaded: [], deleted: new Set() };
+
+    const statements = [...listed.keys()].filter((entry) => entry.statementClass === 'rule' || entry.statementClass === 'step');
+    const plan = planCascade(statements, (file) => this.document(file), this.viewResolver(), 'fqn');
+    if (plan.emptied.length > 0) {
+      const views = plan.emptied.map((view) => `'${view.id ?? 'unnamed view'}'`).join(', ');
+      throw new ReferencedRemovalError(
+        'fqn',
+        `'${fqn}' cannot be removed with cascade: views ${views} would lose their last content-producing statement (LikeC4 would show other content): ${describeAll(references)}`,
+        references,
+      );
+    }
+
+    const deleted = new Set<object>([...plan.removed, ...instanceDeclarations]);
+    const resolver = new DeploymentResolver(this.deployments, this.workspace);
     for (const relation of this.deployments.relations()) {
-      for (const role of ['source', 'target'] as const) {
-        const ref = relation.node[role] as Parameters<DeploymentResolver['resolveReference']>[0] | undefined;
-        if (!ref) continue;
-        const target = resolver.resolveReference(ref);
-        if (!target || !('deployment' in target) || target.element === undefined) continue;
-        if (!isSameOrDescendant(target.element, fqn)) continue;
-        endpoints.push(
-          `${role} '${resolveFqnRef(ref)}' in '${relation.file ?? ''}' (element '${target.element}' of instance '${target.deployment}')`,
-        );
+      if (this.closureRelation(relation, fqn, instances, resolver)) deleted.add(relation.node);
+    }
+    const cascaded = references
+      .filter((ref) => ref.cascadable)
+      .map(({ file, line, column, role }) => ({ file, line, column, role: role as CatalogueRole }));
+    return { instances, plan, cascaded, deleted };
+  }
+
+  /**
+   * Remove the instances `ids` of the removal closure of element `fqn`,
+   * with the deployment relationships whose endpoint is in one of them or
+   * steps through an instance into the subtree of `fqn` (one construct at a
+   * time: each removal reparses its file).
+   */
+  private removeInstanceClosure(fqn: string, ids: readonly string[]): void {
+    for (;;) {
+      const resolver = new DeploymentResolver(this.deployments, this.workspace);
+      const next = this.deployments.relations().find((relation) => this.closureRelation(relation, fqn, ids, resolver));
+      if (!next) break;
+      this.removeDeploymentConstruct(next.file, next.node);
+    }
+    for (const id of ids) {
+      const declaration = this.deployments.declarations(id).find((d) => d.type === 'instance');
+      if (!declaration) throw new Error(`Internal error: the instance '${id}' is gone before its removal`);
+      this.removeDeploymentConstruct(declaration.file, declaration.node);
+    }
+  }
+
+  /**
+   * Whether the deployment relationship `relation` goes with the removal
+   * closure of element `fqn`: an endpoint is in one of the instances `ids`
+   * (and the relationship is not declared inside one), or steps through an
+   * instance into the subtree of `fqn`.
+   */
+  private closureRelation(relation: DeploymentRelationRef, fqn: string, ids: readonly string[], resolver: DeploymentResolver): boolean {
+    if (ids.some((id) => isNestedInSubtree(relation.frames, id))) return false;
+    if (ids.some((id) => relationEndpointInSubtree(resolver, relation, id))) return true;
+    return (['source', 'target'] as const).some((role) => {
+      const ref = relation.node[role] as Parameters<DeploymentResolver['resolveReference']>[0] | undefined;
+      const target = ref && resolver.resolveReference(ref);
+      return target !== undefined && 'deployment' in target && target.element !== undefined && isSameOrDescendant(target.element, fqn);
+    });
+  }
+
+  /** The FQNs of element `fqn` and every element below it, `extend` children included. */
+  private subtreeFqns(fqn: string): string[] {
+    return [fqn, ...this.workspace.children(fqn).flatMap((child) => this.subtreeFqns(child))];
+  }
+
+  /** The {@link RemovalReference} of catalogue entry `entry`. */
+  private removalReference(entry: CatalogueEntry, cascadable: boolean): RemovalReference {
+    return {
+      ...this.position(entry.file, entry.offset),
+      role: entry.role,
+      cascadable,
+      ...(entry.view?.id !== undefined && { view: entry.view.id }),
+    };
+  }
+
+  /**
+   * The {@link RemovalReference} of a name at an unmodelled place or in
+   * unrecovered text: never cascadable, with the view whose declaration
+   * text holds it.
+   */
+  private unmodelledReference(name: UnmodelledName): RemovalReference {
+    const offset = name.segments[0]!.offset;
+    const view = this.views.declarations().find((declaration) => {
+      const cst = declaration.node.$cstNode;
+      return declaration.file === name.file && cst !== undefined && cst.offset <= offset && offset < cst.end;
+    });
+    return {
+      ...this.position(name.file, offset),
+      role: name.place,
+      cascadable: false,
+      ...(view?.id !== undefined && { view: view.id }),
+    };
+  }
+
+  /** The 1-based line and column of `offset` in the current text of `file`. */
+  private position(file: string, offset: number): { file: string; line: number; column: number } {
+    const text = this.document(file).fullText;
+    let line = 1;
+    let lineStart = 0;
+    for (let i = 0; i < offset && i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) {
+        line++;
+        lineStart = i + 1;
       }
     }
-    if (instances.length === 0 && endpoints.length === 0) return;
-    const parts = [
-      ...(instances.length > 0 ? [`instances ${instances.join(', ')}`] : []),
-      ...(endpoints.length > 0 ? [`deployment relationship endpoints ${endpoints.join(', ')}`] : []),
-    ];
-    throw new InvalidWriteError(
-      'fqn',
-      `'${fqn}' cannot be removed while the deployment model refers to it or its descendants: ${parts.join('; ')} ` +
-        `(LikeC4 would report: Could not resolve reference)`,
-    );
+    return { file, line, column: offset - lineStart + 1 };
   }
 
   /**
@@ -2998,6 +3246,60 @@ interface MutatorSnapshot {
 function addEditGroup(editsByFile: Map<string, TextEdit[]>, file: string, edits: TextEdit[]): void {
   if (edits.length === 0) return;
   editsByFile.set(file, [...(editsByFile.get(file) ?? []), ...edits]);
+}
+
+/** Roles a cascade edits: a rule item or a step statement at a modelled place (FR-001, FR-003). */
+const CASCADED_ROLES: ReadonlySet<CatalogueRole> = new Set(['predicate-item', 'step-endpoint', 'style-target', 'rank-target']);
+
+/** Whether a cascade removes the view statement of `entry` (a rule item or a step at a modelled place). */
+function isCascadableStatement(entry: CatalogueEntry): boolean {
+  return (
+    !entry.unmodelled &&
+    CASCADED_ROLES.has(entry.role) &&
+    (entry.statementClass === 'rule' || entry.statementClass === 'step') &&
+    entry.containers.length > 0
+  );
+}
+
+/** Whether `node` lies inside (or is) one of `nodes`. */
+function isInsideAny(node: { $container?: unknown }, nodes: ReadonlySet<object>): boolean {
+  for (let up: { $container?: unknown } | undefined = node; up; up = up.$container as { $container?: unknown } | undefined) {
+    if (nodes.has(up)) return true;
+  }
+  return false;
+}
+
+/** The `extends` references of the views that extend view `id`, directly or through other views (D113). */
+function extendsChain(catalogue: ReferenceCatalogue, id: string, seen = new Set<string>()): CatalogueEntry[] {
+  if (seen.has(id)) return [];
+  seen.add(id);
+  return catalogue
+    .toView(id)
+    .filter((entry) => entry.role === 'view-extends')
+    .flatMap((entry) => [entry, ...(entry.view?.id !== undefined ? extendsChain(catalogue, entry.view.id, seen) : [])]);
+}
+
+/** A catalogue entry for a rejection message, e.g. `instance 'prod.api' (instanceOf 'app.api')`. */
+function describeEntry(entry: CatalogueEntry, instanceIds: ReadonlyMap<object, string>): string {
+  const inView = entry.view?.id !== undefined ? ` in view '${entry.view.id}'` : '';
+  if (entry.role === 'instance-of') {
+    const id = instanceIds.get((entry.node.$container?.$container ?? {}) as object);
+    return `instance '${id ?? ''}' (instanceOf '${entry.text}')`;
+  }
+  return `${entry.description} '${entry.text}'${inView} (${entry.role})`;
+}
+
+/** The `extend X { ... }` nodes of `doc` whose X is `fqn` or below it. */
+function extendElementNodes(doc: ParsedDocument, fqn: string): object[] {
+  const nodes: object[] = [];
+  for (const model of doc.ast.models ?? []) {
+    for (const item of model.elements ?? []) {
+      if (item.$type !== 'ExtendElement') continue;
+      const target = readStrictFqnRef(item.element);
+      if (target !== undefined && isSameOrDescendant(target, fqn)) nodes.push(item);
+    }
+  }
+  return nodes;
 }
 
 /** True when `fqn` equals `ancestor` or is nested below it. */

@@ -25,6 +25,10 @@
  *  - **New mode** (additions, D107): a name occurs when it equals a bare
  *    name or the leading segment of a dotted name of its own class or of
  *    unknown class.
+ *  - **Affected mode** (removals, renames, moves; D92): a name occurs when
+ *    it equals a bare name or any segment of a dotted name of its own class
+ *    or of unknown class.  A longer identifier that merely contains it does
+ *    not match: segments are whole tokens.
  */
 import { CstUtils, type CstNode } from 'langium';
 import { getServices } from '../parser/services.js';
@@ -58,6 +62,12 @@ export interface UnmodelledName {
   segments: NameSegment[];
   /** Its class; undefined for unrecovered text, which matches every class */
   nameClass: UnmodelledNameClass | undefined;
+  /**
+   * Where it is written: a flow block of a dynamic view (`opaque-flow`), a
+   * `global` block or an import (`global-or-import`), or text the parser
+   * could not recover (`unrecovered`)
+   */
+  place: 'opaque-flow' | 'global-or-import' | 'unrecovered';
 }
 
 /** The class of each reference type of the grammar that names something the library adds, renames or removes. */
@@ -119,11 +129,13 @@ export function unmodelledInventory(documents: Iterable<{ file: string; parsed: 
   const names: UnmodelledName[] = [];
   for (const { file, parsed } of documents) {
     const found: UnmodelledName[] = [];
+    let place: UnmodelledName['place'] = 'opaque-flow';
     const add = (segments: NameSegment[], nameClass: UnmodelledNameClass | undefined, line: number): void => {
-      if (segments.length > 0) found.push({ file, line, segments, nameClass });
+      if (segments.length > 0) found.push({ file, line, segments, nameClass, place });
     };
 
-    walk(parsed.ast as AstLike, false, (node, property, ref) => {
+    walk(parsed.ast as AstLike, undefined, (node, property, ref, at) => {
+      place = at;
       const type = reflection.getReferenceType({ container: node, property, reference: ref } as Parameters<typeof reflection.getReferenceType>[0]);
       if (IGNORED_REFERENCE_TYPES.has(type)) return;
       const nameClass = REFERENCE_CLASSES[type];
@@ -155,20 +167,46 @@ export function newNameCaptures(inventory: readonly UnmodelledName[], name: stri
 }
 
 /**
- * Visit every cross-reference held by a node at an unmodelled place below
- * `node`, with the node and the property holding it.
+ * The names of the inventory that the removal, rename or move of a thing
+ * named `names` of class `nameClass` affects (affected mode, D92): a bare
+ * name or any segment of a dotted name equals one of `names`.
  */
-function walk(node: AstLike, unmodelled: boolean, visit: (node: AstLike, property: string, ref: RefLike) => void): void {
+export function affectedNameHits(
+  inventory: readonly UnmodelledName[],
+  names: ReadonlySet<string>,
+  nameClass: UnmodelledNameClass,
+): UnmodelledName[] {
+  return inventory.filter(
+    (entry) => (entry.nameClass === undefined || entry.nameClass === nameClass) && entry.segments.some((segment) => names.has(segment.name)),
+  );
+}
+
+/** Where a reference below an unmodelled place is written. */
+type RecoveredPlace = 'opaque-flow' | 'global-or-import';
+
+/**
+ * Visit every cross-reference held by a node at an unmodelled place below
+ * `node`, with the node, the property holding it and the kind of place
+ * (`at`: undefined while `node` is not at an unmodelled place).
+ */
+function walk(
+  node: AstLike,
+  at: RecoveredPlace | undefined,
+  visit: (node: AstLike, property: string, ref: RefLike, at: RecoveredPlace) => void,
+): void {
   for (const [key, value] of Object.entries(node)) {
     if (key.startsWith('$')) continue;
     for (const child of Array.isArray(value) ? value : [value]) {
       if (!child || typeof child !== 'object') continue;
       if ('$refText' in child) {
-        if (unmodelled) visit(node, key, child as RefLike);
+        if (at) visit(node, key, child as RefLike, at);
         continue;
       }
-      if (typeof (child as AstLike).$type !== 'string') continue;
-      walk(child as AstLike, unmodelled || isUnmodelledPlace(child as AstLike), visit);
+      const type = (child as AstLike).$type;
+      if (typeof type !== 'string') continue;
+      const place =
+        at ?? (isUnmodelledPlace(child as AstLike) ? (type === 'Globals' || type === 'ImportsFromPoject' ? 'global-or-import' : 'opaque-flow') : undefined);
+      walk(child as AstLike, place, visit);
     }
   }
 }
@@ -201,7 +239,7 @@ function unrecoveredNames(file: string, parsed: ParsedDocument): UnmodelledName[
   let line = 0;
   let expectName = true;
   const flush = (): void => {
-    if (segments.length > 0) names.push({ file, line, segments, nameClass: undefined });
+    if (segments.length > 0) names.push({ file, line, segments, nameClass: undefined, place: 'unrecovered' });
     segments = [];
     expectName = true;
   };

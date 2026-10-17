@@ -30,6 +30,7 @@ import {
   type ViewRuleKeyword,
 } from '../parser/grammar.js';
 import { resolveFqnRef } from '../query/fqn.js';
+import type { CatalogueRole } from '../query/reference-catalogue.js';
 import type { ViewBodyPlace, ViewReferenceResolver } from '../query/view-resolver.js';
 import type { WorkspaceIndex } from '../query/workspace-index.js';
 import { isLinkUrl, viewIncludeExpression, type ElementStyle, type RelationshipStyle } from './codegen.js';
@@ -43,12 +44,68 @@ import { isLinkUrl, viewIncludeExpression, type ElementStyle, type RelationshipS
 export class InvalidWriteError extends Error {
   readonly field: string;
   readonly detail: string;
+  /**
+   * The constructs the rejection is about, when it names some besides the
+   * offending value (D114): a deployment path, an `extend` block, a `where`
+   * condition or a relationship.  Absent otherwise.
+   */
+  readonly related?: readonly RelatedConstruct[];
 
-  constructor(field: string, detail: string) {
+  constructor(field: string, detail: string, related?: readonly RelatedConstruct[]) {
     super(`Invalid ${field}: ${detail}`);
     this.name = 'InvalidWriteError';
     this.field = field;
     this.detail = detail;
+    if (related !== undefined) this.related = related;
+  }
+}
+
+/** A construct named by a rejection (see {@link InvalidWriteError.related}); positions are 1-based. */
+export interface RelatedConstruct {
+  file: string;
+  line: number;
+  column: number;
+  construct: 'deployment-path' | 'extend-block' | 'where-condition' | 'relationship';
+}
+
+/**
+ * Where a reference that a removal is about is written: the place's FR-001
+ * role (see {@link CatalogueRole}), or `unrecovered` for a name in text the parser
+ * could not recover.
+ */
+export type RemovalReferenceRole = CatalogueRole | 'unrecovered';
+
+/** One reference listed by a {@link ReferencedRemovalError}; positions are 1-based. */
+export interface RemovalReference {
+  file: string;
+  line: number;
+  column: number;
+  role: RemovalReferenceRole;
+  /**
+   * True when the removal with `cascade` removes the referencing construct;
+   * false when the reference blocks the removal in both modes
+   */
+  cascadable: boolean;
+  /** The id of the view the reference is written in, when it lies in a named view */
+  view?: string;
+}
+
+/**
+ * A removal was rejected because of references to what it removes
+ * (lc4m-15.30 US-1, US-2; D54, D111, D113).  `references` lists every such
+ * reference: without `cascade` all of them, each marked whether a cascade
+ * would remove it; with `cascade` the references that block the removal
+ * (`cascadable: false`) together with those the cascade would have removed.
+ * `field` is the removal's target field (`fqn`, `id`).  An unknown target or
+ * an edit that would not parse is a plain {@link InvalidWriteError}.
+ */
+export class ReferencedRemovalError extends InvalidWriteError {
+  readonly references: readonly RemovalReference[];
+
+  constructor(field: string, detail: string, references: readonly RemovalReference[]) {
+    super(field, detail);
+    this.name = 'ReferencedRemovalError';
+    this.references = references;
   }
 }
 

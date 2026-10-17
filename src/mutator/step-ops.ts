@@ -499,9 +499,10 @@ export function removeStatementEdit(doc: ParsedDocument, node: ViewAstNode): Tex
 }
 
 /**
- * What leaving the `par` block `block` (taking away its statement `leaving`)
- * does to it (D40): `remove` when nothing is left, so the block goes with it;
- * `keep` when a remaining statement still contributes a step to LikeC4.
+ * What leaving the `par` block `block` (taking away its statement `leaving`,
+ * or each statement of a set) does to it (D40): `remove` when nothing is
+ * left, so the block goes with it; `keep` when a remaining statement still
+ * contributes a step to LikeC4.
  *
  * @throws {InvalidWriteError} on `field` when only statements LikeC4
  *   discards would be left: LikeC4 would drop the block silently, and its
@@ -510,11 +511,12 @@ export function removeStatementEdit(doc: ParsedDocument, node: ViewAstNode): Tex
 export function leaveParallel(
   view: ViewDeclaration,
   block: ViewStepStatementEntry,
-  leaving: ViewStepStatementEntry,
+  leaving: ViewStepStatementEntry | ReadonlySet<ViewStepStatementEntry>,
   resolver: ViewReferenceResolver,
   field: string,
 ): 'remove' | 'keep' {
-  const rest = block.statements.filter((s) => s !== leaving);
+  const leaves = (s: ViewStepStatementEntry): boolean => (leaving instanceof Set ? leaving.has(s) : s === leaving);
+  const rest = block.statements.filter((s) => !leaves(s));
   if (rest.length === 0) return 'remove';
   if (rest.some((s) => contributesSteps(s, view, resolver))) return 'keep';
   throw new InvalidWriteError(
