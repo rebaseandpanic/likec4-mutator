@@ -26,14 +26,20 @@ export interface LikeC4ModelElement {
   tags?: readonly string[] | null;
   links?: ReadonlyArray<{ url: string; title?: string }> | null;
   metadata?: Record<string, string | string[]>;
+  /** Effective style before theme defaults (`$data`, D88): the kind style overridden by the own style */
+  style?: LikeC4ModelStyle;
 }
 
-/** Relation data of the computed LikeC4 model, as far as the tests read it. */
+/** Relation data of the computed LikeC4 model, as far as the tests read it; style fields are top-level, before theme defaults (D88). */
 export interface LikeC4ModelRelation extends LikeC4ModelElement {
   source: { model: string };
   target: { model: string };
   kind?: string;
   isBidirectional?: boolean;
+  line?: string;
+  color?: string;
+  head?: string;
+  tail?: string;
 }
 
 /** Style data of the computed LikeC4 model (`style` of an element, node or kind): opacity is a number there. */
@@ -1607,6 +1613,227 @@ export async function linkedKindReferences(
     result.push(...found.sort((a, b) => a.offset - b.offset));
   }
   return result;
+}
+
+// ----- styles, warnings, the accepted-write bundle and σ images ------------
+
+/**
+ * An element style as the library reports it: the `StyleProperty` keys of
+ * LikeC4's grammar, values as written (D18) — opacity `'40%'`, `multiple` a
+ * boolean.
+ */
+export interface ReportedElementStyle {
+  shape?: string;
+  color?: string;
+  icon?: string;
+  opacity?: string;
+  border?: string;
+  multiple?: boolean;
+  size?: string;
+  padding?: string;
+  textSize?: string;
+  iconPosition?: string;
+  iconColor?: string;
+  iconSize?: string;
+}
+
+/** An element's styles as the library reports them, as far as {@link expectElementStylesAgreeWithLikeC4} reads them. */
+export interface ReportedElementStyles {
+  fqn: string;
+  /** Own style: the first `style { }` block plus a body-level `icon` */
+  ownStyle?: ReportedElementStyle;
+  /** The style of the element's kind */
+  kindStyle?: ReportedElementStyle;
+  /** Effective style: the kind style overridden by the own style */
+  style?: ReportedElementStyle;
+}
+
+/** LikeC4's per-document parser output, as far as the style and σ comparisons read it (`ModelParser.parse`). */
+interface LikeC4ParsedDocumentElements {
+  c4Elements?: Array<{ id: string; title?: string | null; style?: LikeC4ModelStyle }>;
+}
+
+/** Own element values of LikeC4's document parser by FQN, before kind defaults are merged (LS `c4Elements`). */
+function parsedElements(
+  services: Awaited<ReturnType<typeof buildWorkspace>>['services'],
+  documents: LangiumDocument[],
+): Map<string, { title?: string | null; style?: LikeC4ModelStyle }> {
+  const modelParser = services.likec4.ModelParser as unknown as { parse(doc: LangiumDocument): LikeC4ParsedDocumentElements };
+  const result = new Map<string, { title?: string | null; style?: LikeC4ModelStyle }>();
+  for (const document of documents) {
+    for (const element of modelParser.parse(document).c4Elements ?? []) result.set(element.id, element);
+  }
+  return result;
+}
+
+/**
+ * Assert that each reported element's own, kind and effective style equal
+ * LikeC4's values before theme defaults (D88), for `files`, which must build
+ * without errors (warnings are allowed: a body `icon` next to
+ * `style { icon }` warns).  Own style is LikeC4's document parser value
+ * (`c4Elements[].style`, before kind defaults); kind style is
+ * `$data.specification.elements[kind].style`; effective style is
+ * `$data.elements[fqn].style`.  Written forms are compared as for
+ * deployment styles: the same fields, opacity a written percentage whose
+ * value is LikeC4's number.  `actual` must not be empty.
+ */
+export async function expectElementStylesAgreeWithLikeC4(
+  files: Record<string, string>,
+  actual: ReportedElementStyles[],
+): Promise<void> {
+  expect(actual.length, 'reported elements').toBeGreaterThan(0);
+  const { services, documents } = await buildWorkspace(files);
+  expect(services.likec4.LanguageServices.getErrors()).toEqual([]);
+  const model = await services.likec4.ModelBuilder.computeModel();
+  const data = model!.$data as unknown as {
+    elements: Record<string, { kind: string; style?: LikeC4ModelStyle }>;
+    specification: { elements: Record<string, { style?: LikeC4ModelStyle }> };
+  };
+  const own = parsedElements(services, documents);
+  for (const reported of actual) {
+    const element = data.elements[reported.fqn];
+    expect(element, `${reported.fqn} in LikeC4's model`).toBeDefined();
+    expectSameStyle(reported.style, element!.style, `${reported.fqn} effective`);
+    expectSameStyle(reported.kindStyle, data.specification.elements[element!.kind]?.style, `${reported.fqn} kind`);
+    expectSameStyle(reported.ownStyle, own.get(reported.fqn)?.style, `${reported.fqn} own`);
+  }
+}
+
+/** The LikeC4 warnings an accepted write must not introduce (INV-2). */
+const INV2_WARNINGS: readonly string[] = [
+  'Redundant as icon defined on element',
+  'This extend does not match any relation',
+  'Prefer one specification per document',
+];
+
+/**
+ * The INV-2 warnings LikeC4 reports for `after` and not for `before`, as
+ * `<file>:<line>: <message>`.  Warnings are matched by file and message
+ * (a write moves lines), as a multiset: a second warning of the same
+ * message in the same file is introduced.
+ */
+export async function introducedWarnings(
+  before: Record<string, string>,
+  after: Record<string, string>,
+): Promise<string[]> {
+  const inv2 = async (files: Record<string, string>): Promise<Array<{ key: string; text: string }>> =>
+    (await buildLikeC4Model(files)).diagnostics.flatMap((text) => {
+      const match = /^([^:]*):\d+: (.*)$/s.exec(text);
+      if (!match || !INV2_WARNINGS.some((w) => match[2]!.startsWith(w))) return [];
+      return [{ key: `${match[1]}\n${match[2]}`, text }];
+    });
+  const was = new Map<string, number>();
+  for (const { key } of await inv2(before)) was.set(key, (was.get(key) ?? 0) + 1);
+  const introduced: string[] = [];
+  for (const { key, text } of await inv2(after)) {
+    const left = was.get(key) ?? 0;
+    if (left > 0) was.set(key, left - 1);
+    else introduced.push(text);
+  }
+  return introduced;
+}
+
+/**
+ * The accepted-write bundle: `after` passes `likec4 validate`
+ * ({@link expectValidLikeC4}, INV-1), every named view LikeC4 computed for
+ * `before` is still computed except `removedViewId`
+ * ({@link expectComputedViewsSurvive}, INV-9), and the write introduced no
+ * INV-2 warning ({@link introducedWarnings}).
+ */
+export async function expectAcceptedWrite(
+  before: Record<string, string>,
+  after: Record<string, string>,
+  options: { removedViewId?: string } = {},
+): Promise<void> {
+  await expectValidLikeC4(after);
+  await expectComputedViewsSurvive(before, after, options.removedViewId);
+  expect(await introducedWarnings(before, after), 'introduced INV-2 warnings').toEqual([]);
+}
+
+/** JSON of `value` with object keys sorted at every level, for multiset comparisons. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+}
+
+/** The last segment of a dotted id. */
+function lastSegment(id: string): string {
+  return id.slice(id.lastIndexOf('.') + 1);
+}
+
+/**
+ * Assert that `after` is the image of `before` under σ (D76): `sigma` maps
+ * every element FQN and deployment id that the write changes to its new
+ * value, literally — an id not in it is unchanged.  Then:
+ * - the computed elements of `after` are those of `before` with ids mapped,
+ *   all values equal (own and kind-default ones, style included), except a
+ *   title LikeC4 derived from the name (none written, equal to the old last
+ *   segment), which follows the new name;
+ * - the computed deployment elements likewise, with an instance's
+ *   `element` mapped;
+ * - the explicit model and deployment relations, compared as multisets
+ *   without their ids, with endpoints mapped;
+ * - every resolved {@link linkedCatalogueReferences} target of `before`,
+ *   mapped, by role, equals the resolved targets of `after` (multisets).
+ * Both sides must build without errors.
+ */
+export async function expectSigmaImage(
+  before: Record<string, string>,
+  after: Record<string, string>,
+  sigma: Record<string, string>,
+): Promise<void> {
+  const s = (id: string): string => sigma[id] ?? id;
+  const sides = await Promise.all(
+    [before, after].map(async (files) => {
+      const { services, documents } = await buildWorkspace(files);
+      expect(services.likec4.LanguageServices.getErrors()).toEqual([]);
+      return { model: await buildLikeC4Model(files), own: parsedElements(services, documents) };
+    }),
+  );
+  const [was, now] = sides as [(typeof sides)[0], (typeof sides)[0]];
+
+  const elements = Object.fromEntries(
+    Object.entries(was.model.elements).map(([id, element]) => {
+      const derived = !was.own.get(id)?.title && element.title === lastSegment(id);
+      return [s(id), { ...element, id: s(id), ...(derived && { title: lastSegment(s(id)) }) }];
+    }),
+  );
+  expect(now.model.elements, 'elements under σ').toEqual(elements);
+
+  const deployments = Object.fromEntries(
+    Object.entries(was.model.deployments.elements).map(([id, element]) => [
+      s(id),
+      { ...element, id: s(id), ...(element.element !== undefined && { element: s(element.element) }) },
+    ]),
+  );
+  expect(now.model.deployments.elements, 'deployment elements under σ').toEqual(deployments);
+
+  const canonical = (relation: object): string => {
+    const { id: _id, ...rest } = relation as { id?: string };
+    return stableJson(rest);
+  };
+  const endpoint = (e: { model?: string; deployment?: string; element?: string }) => ({
+    ...(e.model !== undefined && { model: s(e.model) }),
+    ...(e.deployment !== undefined && { deployment: s(e.deployment) }),
+    ...(e.element !== undefined && { element: s(e.element) }),
+  });
+  const mapped = (relations: Array<LikeC4ModelRelation | LikeC4DeploymentRelation>): string[] =>
+    relations.map((r) => canonical({ ...r, source: endpoint(r.source), target: endpoint(r.target) })).sort();
+  expect(now.model.relations.map(canonical).sort(), 'relations under σ').toEqual(mapped(was.model.relations));
+  expect(now.model.deployments.relations.map(canonical).sort(), 'deployment relations under σ').toEqual(
+    mapped(was.model.deployments.relations),
+  );
+
+  const targets = async (files: Record<string, string>, map: (t: LinkedViewTarget) => LinkedViewTarget): Promise<string[]> =>
+    (await linkedCatalogueReferences(files))
+      .filter((r) => r.target !== null)
+      .map((r) => `${r.role} ${stableJson(map(r.target!))}`)
+      .sort();
+  const mapTarget = (t: LinkedViewTarget): LinkedViewTarget => ('view' in t ? t : endpoint(t) as LinkedViewTarget);
+  expect(await targets(after, (t) => t), 'reference targets under σ').toEqual(await targets(before, mapTarget));
 }
 
 // ----- the library's view reads, as the comparisons read them --------------
