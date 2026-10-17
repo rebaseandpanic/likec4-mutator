@@ -416,3 +416,25 @@ describe('plain InvalidWriteError without references (row 71, D104, D113)', () =
     }
   });
 });
+
+describe('a self-reference at an unmodelled place inside the removed view (review fix of row 70, D43)', SLOW, () => {
+  const SELF = '  dynamic view d {\n    a -> b\n    opt {\n      a -> b {\n        navigateTo d\n      }\n    }\n  }\n';
+
+  it.each([false, true])('removes the view, cascade %s', async (cascade) => {
+    const before: Files = { 'm.c4': `${MODEL}views {\n  view keep {\n    include *\n  }\n${SELF}}\n` };
+    await expectValidLikeC4(before);
+    const m = LikeC4Mutator.fromFiles(before);
+    expect(m.removeView('d', { cascade })).toEqual({ changedFiles: ['m.c4'], ...(cascade && { cascaded: [] }) });
+    expect(m.serialize()).toEqual({ 'm.c4': `${MODEL}views {\n  view keep {\n    include *\n  }\n}\n` });
+    await expectAcceptedWrite(before, m.serialize(), { removedViewId: 'd' });
+  });
+
+  it.each([false, true])('an opaque navigateTo outside the view still blocks, cascade %s', async (cascade) => {
+    const outside = '  dynamic view e {\n    a -> b\n    opt {\n      b -> a {\n        navigateTo d\n      }\n    }\n  }\n';
+    const files: Files = { 'm.c4': `${MODEL}views {\n${SELF}${outside}}\n` };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'd', cascade).references).toEqual([
+      { ...at(files, 'm.c4', 'd\n      }\n    }\n  }\n}'), role: 'opaque-flow', cascadable: false, view: 'e' },
+    ]);
+  });
+});
