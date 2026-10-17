@@ -1433,7 +1433,9 @@ export class LikeC4Mutator {
    *    not set; `related` lists them (`construct: 'relationship'`);
    *  - on `file`, `tags[i]`, `links[i].url`, `metadata.<key>`, `tags`: as
    *    {@link addElementExtend}, the metadata keys being those of the
-   *    relationship and of every block applying to it.
+   *    relationship, of the other relationships of its identity (with
+   *    `shared`, the block applies to them too) and of every block applying
+   *    to them.
    *
    * @returns The changed files, and whether an existing block took the contributions.
    */
@@ -1452,11 +1454,13 @@ export class LikeC4Mutator {
     }
     const key = relationFingerprint(identity);
     const others: RelatedConstruct[] = [];
+    const otherBodies: unknown[] = [];
     for (const [file, doc] of this.documents) {
       for (const relation of resolveRelations(doc.ast, this.workspace)) {
         if (relation.node === selected.relation.node || !relation.resolved) continue;
         if (relationFingerprint(this.workspace.effectiveIdentity(relationIdentity(relation))) !== key) continue;
         others.push({ ...positionOf({ file, relation }), construct: 'relationship' });
+        otherBodies.push((relation.node as { body?: unknown }).body);
       }
     }
     if (others.length > 0 && opts.shared !== true) {
@@ -1469,7 +1473,8 @@ export class LikeC4Mutator {
     }
     const blocks = this.workspace.extendRelationBlocks(own);
     const relationBody = (selected.relation.node as { body?: unknown }).body;
-    this.rejectPresentMetadata(opts.metadata, [relationBody, ...blocks.map((block) => block.node.body)], 'the relationship');
+    // With `shared`, the block also applies to the other relationships of the identity: their keys count too (D86).
+    this.rejectPresentMetadata(opts.metadata, [relationBody, ...otherBodies, ...blocks.map((block) => block.node.body)], 'the relationship');
     const target = blocks.find((block) => block.file === opts.file);
     // The kind is written only when LikeC4 resolves it; an undeclared kind is no kind in the identity.
     return this.writeExtend(opts.file, opts, target, (indent, contributions) => generateRelationExtend(indent, identity, contributions));
