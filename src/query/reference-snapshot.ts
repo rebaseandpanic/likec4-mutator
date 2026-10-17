@@ -6,15 +6,21 @@
  * can make a reference ambiguous, unresolved or re-targeted).  The snapshot
  * taken before a write is compared with the one taken after it:
  *
- *  - **Key.**  A reference is keyed by its file, its frame path, its role,
- *    its text and its occurrence among the references with the same key
- *    prefix.  The frame path lists every enclosing block that bears on
- *    resolution, from the top-level block inwards, each as a descriptor
- *    (`model`, `deployment`, `views`, `el:<fqn>`, `extend:<target>`,
- *    `node:<id>`, `inst:<id>`, `dextend:<path>`, `view:<name>`) with its
- *    ordinal among the siblings with the same descriptor in the parent
- *    frame.  So equal reference texts in two `extend` scopes, and repeated
- *    same-target `extend` blocks, keep distinct keys.
+ *  - **Records.**  One record per entry of the reference catalogue (see
+ *    `buildReferenceCatalogue`): every reference kind of FR-001, view bodies,
+ *    `navigateTo` in every container, `extends`, `views`-block style
+ *    targets, `global` references and imports included.
+ *  - **Key.**  A reference is keyed by its file, its frame path, its kind
+ *    (the catalogue entry's description), its text and its occurrence among
+ *    the references with the same key prefix.  The frame path lists every
+ *    enclosing block that bears on resolution, from the top-level block
+ *    inwards, each as a descriptor (`model`, `deployment`, `views`,
+ *    `el:<fqn>`, `extend:<target>`, `node:<id>`, `inst:<id>`,
+ *    `dextend:<path>`, `view:<name>`) with its ordinal among the siblings
+ *    with the same descriptor in the parent frame.  So equal reference texts
+ *    in two `extend` scopes, and repeated same-target `extend` blocks, keep
+ *    distinct keys.  A step's key has no path, so a step moved into or out
+ *    of a `par` block keeps its key.
  *  - **Removal.**  A removing write passes the AST nodes it deletes; the
  *    references inside them are left out, and ordinals count the surviving
  *    items only, so a survivor keeps its key.
@@ -22,25 +28,10 @@
  *    write, and every reference found only after the write must lie in text
  *    the write inserted; anything else is an internal error.  A survivor
  *    that resolved before and now resolves differently is a change.
- *
- * References covered: logical relationship endpoints, `extend a -> b`
- * endpoints, `extend X` targets and view `of` targets (see
- * `resolveDocumentReferences`); `instanceOf` targets, deployment
- * relationship endpoints (including the element part of an endpoint that
- * steps into an instance's element), `extend <node>` targets and the
- * references of deployment view rules (see `DeploymentResolver`).  With the
- * opt-in `views` option (taken by view writes only, so existing writes keep
- * their behaviour): the element references in the bodies of element and
- * dynamic views (rules, step endpoints), every `navigateTo` and every
- * `extends` (see `ViewReferenceResolver`).  A step's key has no path, so a
- * step moved into or out of a `par` block keeps its key.
  */
-import { readStrictFqnRef, resolveFqnRef } from './fqn.js';
+import { readStrictFqnRef } from './fqn.js';
 import type { DeploymentIndex } from './deployment-index.js';
-import { DeploymentResolver, type LinkedTarget } from './deployment-resolver.js';
-import type { ViewDeclaration, ViewIndex } from './view-index.js';
-import { ViewReferenceResolver, type ViewTargetRole } from './view-resolver.js';
-import { resolveDocumentReferences, type WorkspaceDocumentAst, type WorkspaceIndex } from './workspace-index.js';
+import type { CatalogueEntry, ReferenceCatalogue } from './reference-catalogue.js';
 
 /** What a reference links to. */
 export interface ReferenceTarget {
@@ -62,7 +53,7 @@ export interface ReferenceRecord {
   text: string;
   /** What it links to; undefined when it does not resolve */
   target: ReferenceTarget | undefined;
-  /** Offset of the AST node the reference is written in */
+  /** Offset of the written reference */
   offset: number | undefined;
 }
 
@@ -89,22 +80,6 @@ export interface ReferenceChange {
   after: ReferenceTarget | undefined;
 }
 
-/** A document of the workspace. */
-export interface SnapshotDocument {
-  file: string;
-  ast: WorkspaceDocumentAst;
-}
-
-/** Options of {@link takeReferenceSnapshot}. */
-export interface ReferenceSnapshotOptions {
-  /**
-   * The view index of the same documents: also snapshot the references of
-   * view bodies, `navigateTo` and `extends` (INV-8).  Opt-in: an existing
-   * write that changes such a reference is not rejected (INV-7).
-   */
-  views?: ViewIndex;
-}
-
 /** Structural view of an AST node. */
 interface AstLike {
   $type?: string;
@@ -113,100 +88,54 @@ interface AstLike {
   [k: string]: unknown;
 }
 
-/** A reference attached to the AST node it is written in. */
-interface Attached {
-  role: string;
-  text: string;
-  target: ReferenceTarget | undefined;
-}
-
 /**
- * Take the reference snapshot of `documents`.
+ * Take the reference snapshot of the references of `catalogue`.
  *
- * @param documents   - Every loaded document
- * @param workspace   - Element index of the same documents
- * @param deployments - Deployment index of the same documents
+ * @param catalogue   - Reference catalogue of the workspace
+ * @param deployments - Deployment index of the same generation (frame descriptors of nodes and instances)
  * @param removed     - AST nodes the write deletes (taken before the write);
  *                      the references inside them are not surviving
- * @param options     - `views`: include the view references
  */
 export function takeReferenceSnapshot(
-  documents: Iterable<SnapshotDocument>,
-  workspace: WorkspaceIndex,
+  catalogue: ReferenceCatalogue,
   deployments: DeploymentIndex,
   removed: ReadonlySet<object> = new Set(),
-  options: ReferenceSnapshotOptions = {},
 ): ReferenceSnapshot {
-  const attached = new Map<object, Attached[]>();
-  const attach = (node: object, reference: Attached): void => {
-    const list = attached.get(node);
-    if (list) list.push(reference);
-    else attached.set(node, [reference]);
-  };
-
   const ids = new Map<object, string>();
-  const resolver = new DeploymentResolver(deployments, workspace);
   for (const id of deployments.ids()) {
-    for (const declaration of deployments.declarations(id)) {
-      ids.set(declaration.node, id);
-      if (declaration.type !== 'instance') continue;
-      const ref = (declaration.node['target'] as { modelElement?: unknown } | undefined)?.modelElement;
-      if (!ref) continue;
-      const fqn = resolver.instanceElement(declaration.node);
-      attach(declaration.node, { role: 'instanceOf target', text: resolveFqnRef(ref), target: fqn === undefined ? undefined : element(fqn) });
-    }
+    for (const declaration of deployments.declarations(id)) ids.set(declaration.node, id);
   }
-  for (const relation of deployments.relations()) {
-    for (const role of ['source', 'target'] as const) {
-      const ref = relation.node[role];
-      if (!ref) continue;
-      attach(relation.node, {
-        role: `deployment relationship ${role}`,
-        text: resolveFqnRef(ref),
-        target: linked(resolver.resolveReference(ref as Parameters<DeploymentResolver['resolveReference']>[0])),
-      });
-    }
+  const byDocument = new Map<number, CatalogueEntry[]>();
+  for (const entry of catalogue.entries()) {
+    const list = byDocument.get(entry.document);
+    if (list) list.push(entry);
+    else byDocument.set(entry.document, [entry]);
   }
-  for (const extend of deployments.allExtendBlocks()) {
-    const path = resolver.extendTarget(extend);
-    attach(extend.node, { role: 'deployment extend target', text: extend.target, target: path === undefined ? undefined : deployment(path) });
-  }
-  deployments.documents.forEach((_, document) => {
-    for (const reference of resolver.viewReferences(document)) {
-      attach(reference.node, { role: 'deployment view reference', text: reference.text, target: linked(reference.target) });
-    }
-  });
-  if (options.views) attachViewReferences(options.views, workspace, deployments, attach);
 
   const records: ReferenceRecord[] = [];
   const byKey = new Map<string, ReferenceRecord>();
-  for (const { file, ast } of documents) {
-    for (const reference of resolveDocumentReferences(ast, workspace)) {
-      attach(reference.node, {
-        role: reference.role,
-        text: reference.text,
-        target: reference.fqn === undefined ? undefined : element(reference.fqn),
-      });
-    }
+  catalogue.documents.forEach(({ file, ast }, document) => {
+    const framesOf = new Map<object, readonly string[]>();
+    walk(ast as AstLike, [], new Map(), '', (node, frames) => framesOf.set(node, frames));
     const occurrences = new Map<string, number>();
-    walk(ast as unknown as AstLike, [], new Map(), '', (node, frames) => {
-      for (const reference of attached.get(node) ?? []) {
-        const prefix = JSON.stringify([file, frames, reference.role, reference.text]);
-        const occurrence = occurrences.get(prefix) ?? 0;
-        occurrences.set(prefix, occurrence + 1);
-        const record: ReferenceRecord = {
-          key: `${prefix}#${occurrence}`,
-          file,
-          role: reference.role,
-          text: reference.text,
-          target: reference.target,
-          offset: node.$cstNode?.offset,
-        };
-        records.push(record);
-        byKey.set(record.key, record);
-      }
-    });
-  }
+    for (const entry of byDocument.get(document) ?? []) {
+      const frames = framesOf.get(anchor(entry.node as AstLike));
+      if (frames === undefined) continue; // inside a removed node
+      const prefix = JSON.stringify([file, frames, entry.description, entry.text]);
+      const occurrence = occurrences.get(prefix) ?? 0;
+      occurrences.set(prefix, occurrence + 1);
+      const record: ReferenceRecord = {
+        key: `${prefix}#${occurrence}`,
+        file,
+        role: entry.description,
+        text: entry.text,
+        target: referenceTarget(entry),
+        offset: entry.offset,
+      };
+      records.push(record);
+      byKey.set(record.key, record);
+    }
+  });
   return { records, byKey };
 
   /**
@@ -350,85 +279,42 @@ export function compareReferenceSnapshots(
   return changes;
 }
 
-/** Step nodes: their element references are endpoints, their `navigateTo` a step's. */
-const STEP_TYPES: ReadonlySet<string> = new Set(['Step', 'StepSeries']);
+/** The properties of a frame-opening node that hold its header references, outside its own frame. */
+const HEADER_PROPERTIES: Readonly<Record<string, readonly string[]>> = {
+  DeployedInstance: ['target'],
+  ExtendElement: ['element'],
+  ExtendDeployment: ['deploymentNode'],
+  ElementView: ['viewOf', 'extends'],
+};
 
 /**
- * Attach the view references of every declaration of `views`: `extends`
- * targets; the element references of element and dynamic view bodies
- * (`view rule reference`, or `view step endpoint` inside a step) — those of
- * deployment views are the `deployment view reference`s; every `navigateTo`
- * by its place (an element `with` accepts any view, a relation `with` and a
- * step a dynamic view).
+ * The node whose enclosing frames key the reference `node`: the construct
+ * when the reference is in its header (`instanceOf`, `extend` targets, view
+ * `of` and `extends`), so that an unnamed instance's id, which follows its
+ * `instanceOf`, does not key its own target; the reference itself otherwise.
  */
-function attachViewReferences(
-  views: ViewIndex,
-  workspace: WorkspaceIndex,
-  deployments: DeploymentIndex,
-  attach: (node: object, reference: Attached) => void,
-): void {
-  const resolver = new ViewReferenceResolver(workspace, deployments, views);
-  for (const view of views.declarations()) {
-    const extendsNode = view.node.extends as AstLike | undefined;
-    const extendsText = resolver.extendsText(view);
-    if (extendsNode && extendsText !== undefined) {
-      attach(extendsNode, { role: 'view extends', text: extendsText, target: viewTarget(resolver.resolveViewText(extendsText, 'element')) });
-    }
-    if (view.body) visit(view, view.body as AstLike, false);
+function anchor(node: AstLike): AstLike {
+  for (let child = node, up = node['$container'] as AstLike | undefined; up; child = up, up = up['$container'] as AstLike | undefined) {
+    const header = HEADER_PROPERTIES[up.$type ?? ''];
+    if (header?.some((property) => up![property] === child)) return up;
   }
-
-  function visit(view: ViewDeclaration, node: AstLike, inStep: boolean): void {
-    for (const [key, value] of Object.entries(node)) {
-      if (key.startsWith('$')) continue;
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (!child || typeof child !== 'object' || '$refText' in child || !('$type' in child)) continue;
-        const item = child as AstLike;
-        if (item.$type === 'FqnRef') {
-          if (view.type === 'deployment') continue;
-          const fqn = resolver.resolveElementRef(view, item);
-          attach(item, {
-            role: inStep ? 'view step endpoint' : 'view rule reference',
-            text: resolveFqnRef(item),
-            target: fqn === undefined ? undefined : element(fqn),
-          });
-          continue;
-        }
-        if (item.$type === 'NavigateToProperty' || item.$type === 'RelationNavigateToProperty') {
-          const ref = item['value'] as AstLike | undefined;
-          const text = (ref?.['view'] as { $refText?: string } | undefined)?.$refText;
-          if (ref && text !== undefined) {
-            const [role, accepts]: [string, ViewTargetRole] =
-              item.$type === 'NavigateToProperty'
-                ? ['element with navigateTo', 'any']
-                : inStep
-                  ? ['step navigateTo', 'dynamic']
-                  : ['relation with navigateTo', 'dynamic'];
-            attach(ref, { role, text, target: viewTarget(resolver.resolveViewText(text, accepts)) });
-          }
-          continue;
-        }
-        visit(view, item, inStep || STEP_TYPES.has(item.$type ?? ''));
-      }
-    }
-  }
+  return node;
 }
 
-function viewTarget(id: string | undefined): ReferenceTarget | undefined {
-  return id === undefined ? undefined : { key: `view:${id}`, display: `view '${id}'` };
-}
-
-function element(fqn: string): ReferenceTarget {
-  return { key: `element:${fqn}`, display: `'${fqn}'` };
-}
-
-function deployment(id: string): ReferenceTarget {
-  return { key: `deployment:${id}`, display: `'${id}'` };
-}
-
-function linked(target: LinkedTarget | undefined): ReferenceTarget | undefined {
+/**
+ * The snapshot target of a catalogue entry.  A logical element reached from
+ * the deployment model or a deployment view is shown as `element '…'`, as
+ * the deployment messages name it.
+ */
+function referenceTarget(entry: CatalogueEntry): ReferenceTarget | undefined {
+  const target = entry.target;
   if (target === undefined) return undefined;
-  if ('model' in target) return { key: `element:${target.model}`, display: `element '${target.model}'` };
-  if (target.element === undefined) return deployment(target.deployment);
+  if ('view' in target) return { key: `view:${target.view}`, display: `view '${target.view}'` };
+  if ('model' in target) {
+    const deploymentPlace = entry.role === 'deployment-relationship-endpoint' || entry.view?.type === 'deployment';
+    return { key: `element:${target.model}`, display: deploymentPlace ? `element '${target.model}'` : `'${target.model}'` };
+  }
+  if (target.element === undefined) return { key: `deployment:${target.deployment}`, display: `'${target.deployment}'` };
   return {
     key: `deployment:${target.deployment}/element:${target.element}`,
     display: `'${target.deployment}' (element '${target.element}')`,

@@ -26,6 +26,7 @@ import {
   type ReferenceSnapshot,
   type TextRange,
 } from '../query/reference-snapshot.js';
+import { buildReferenceCatalogue, type ReferenceCatalogue } from '../query/reference-catalogue.js';
 import { forEachElementDeclaration, resolveFqnRef } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
@@ -323,6 +324,8 @@ export class LikeC4Mutator {
   private views: ViewIndex;
   /** Resolver of view references over the current indices; dropped when they are rebuilt */
   private viewReferenceResolver: ViewReferenceResolver | undefined;
+  /** Reference catalogue of the current indices; dropped when they are rebuilt */
+  private catalogue: ReferenceCatalogue | undefined;
   /** Reads of the deployment model */
   private deploymentQuery: DeploymentQuery;
 
@@ -1084,7 +1087,7 @@ export class LikeC4Mutator {
       ...(target === undefined && { target: undefined }),
       ...(parentId === undefined && { extends: undefined }),
     });
-    const before = this.referenceSnapshot(undefined, { views: true });
+    const before = this.referenceSnapshot();
     const snapshot = this.snapshot();
     try {
       refusedOn('file', () => this.applyEdit(filename, edit));
@@ -1093,7 +1096,6 @@ export class LikeC4Mutator {
         new Map([[filename, insertedRanges(doc.fullText, [edit])]]),
         opts.id,
         { field: 'id', action: 'adding the view' },
-        { views: true },
       );
     } catch (err) {
       this.restore(snapshot);
@@ -1183,11 +1185,11 @@ export class LikeC4Mutator {
     const file = view.file;
     if (file === undefined) throw new Error(`Internal error: view '${id}' has no file`);
     const edit = removeViewEdit(this.document(file), view);
-    const before = this.referenceSnapshot(new Set([view.node]), { views: true });
+    const before = this.referenceSnapshot(new Set([view.node]));
     const snapshot = this.snapshot();
     try {
       refusedOn('id', () => this.applyEdit(file, edit));
-      this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing the view' }, { views: true });
+      this.rejectChangedReferences(before, new Map(), id, { field: 'id', action: 'removing the view' });
     } catch (err) {
       this.restore(snapshot);
       throw err;
@@ -1568,7 +1570,7 @@ export class LikeC4Mutator {
    */
   private writeViewEdits(file: string, edits: TextEdit[], removed: ReadonlySet<object>, field: string): void {
     const doc = this.document(file);
-    const before = this.referenceSnapshot(removed, { views: true });
+    const before = this.referenceSnapshot(removed);
     const snapshot = this.snapshot();
     try {
       refusedOn(field, () => this.applyEditsToFile(file, edits));
@@ -1577,7 +1579,6 @@ export class LikeC4Mutator {
         new Map([[file, insertedRanges(doc.fullText, edits)]]),
         file,
         { field, action: `writing into '${file}'` },
-        { views: true },
       );
     } catch (err) {
       this.restore(snapshot);
@@ -2306,6 +2307,7 @@ export class LikeC4Mutator {
     this.deployments = new DeploymentIndex(documents);
     this.views = new ViewIndex(documents);
     this.viewReferenceResolver = undefined;
+    this.catalogue = undefined;
     this.queries = new Map();
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));
@@ -2580,14 +2582,19 @@ export class LikeC4Mutator {
   }
 
   /**
-   * The reference snapshot of the loaded files (see {@link takeReferenceSnapshot}).
+   * The reference snapshot of the loaded files (see {@link takeReferenceSnapshot}):
+   * every reference kind of the catalogue, whatever the write (US-4, INV-3).
    *
    * @param removed - AST nodes the coming write deletes
-   * @param options - `views`: also the view references (view writes only, INV-8; existing writes leave it off, INV-7)
    */
-  private referenceSnapshot(removed?: ReadonlySet<object>, options: { views?: boolean } = {}): ReferenceSnapshot {
-    const documents = [...this.documents].map(([file, doc]) => ({ file, ast: doc.ast }));
-    return takeReferenceSnapshot(documents, this.workspace, this.deployments, removed, options.views ? { views: this.views } : {});
+  private referenceSnapshot(removed?: ReadonlySet<object>): ReferenceSnapshot {
+    return takeReferenceSnapshot(this.referenceCatalogue(), this.deployments, removed);
+  }
+
+  /** The reference catalogue of the current indices, built on first use. */
+  private referenceCatalogue(): ReferenceCatalogue {
+    this.catalogue ??= buildReferenceCatalogue(this.workspace, this.deployments, this.views);
+    return this.catalogue;
   }
 
   /**
@@ -2607,7 +2614,6 @@ export class LikeC4Mutator {
    *
    * @param inserted - Per file, the text ranges the write inserted
    * @param write    - The field the error names and the verb of the message
-   * @param options  - `views`: the snapshots include the view references (as `before` must)
    * @throws {InvalidWriteError} on `write.field` (`name` by default)
    */
   private rejectChangedReferences(
@@ -2615,9 +2621,8 @@ export class LikeC4Mutator {
     inserted: ReadonlyMap<string, readonly TextRange[]>,
     fqn: string,
     write: { field: string; action: string } = { field: 'name', action: 'declaring' },
-    options: { views?: boolean } = {},
   ): void {
-    const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(undefined, options), inserted);
+    const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(), inserted);
     if (!change) return;
     throw new InvalidWriteError(
       write.field,

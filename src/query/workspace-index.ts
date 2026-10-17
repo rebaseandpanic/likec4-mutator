@@ -570,6 +570,12 @@ export interface ReferenceResolution {
    * `extend a -> b` or `extend X` block, or the view
    */
   node: object;
+  /**
+   * The reference node as written: the topmost `FqnRef`, or the
+   * `StrictFqnElementRef` of `extend X`; undefined when the parser
+   * recovered the construct without it
+   */
+  ref: object | undefined;
 }
 
 /**
@@ -592,8 +598,10 @@ export function resolveDocumentReferences(
   const results: ReferenceResolution[] = [];
   for (const rel of resolveRelations(ast, workspace)) {
     const node = rel.node as AstNodeLike;
-    if (node.source) results.push({ role: 'relationship source', text: rel.sourceText, fqn: rel.linkedSource, node });
-    results.push({ role: 'relationship target', text: rel.targetText, fqn: rel.linkedTarget, node });
+    if (node.source) {
+      results.push({ role: 'relationship source', text: rel.sourceText, fqn: rel.linkedSource, node, ref: node.source as object | undefined });
+    }
+    results.push({ role: 'relationship target', text: rel.targetText, fqn: rel.linkedTarget, node, ref: node.target as object | undefined });
   }
 
   const models = ast.models ?? [];
@@ -611,12 +619,13 @@ export function resolveDocumentReferences(
             text: resolveFqnRef(ref),
             fqn: resolver.resolveEndpoint(ref, chain),
             node: item,
+            ref,
           });
         }
       } else if (isExtendElement(item)) {
         const text = readStrictFqnRef(item.element);
         if (text !== undefined) {
-          results.push({ role: 'extend target', text, fqn: workspace.has(text) ? text : undefined, node: item });
+          results.push({ role: 'extend target', text, fqn: workspace.has(text) ? text : undefined, node: item, ref: item.element as object | undefined });
         }
       }
     }
@@ -626,7 +635,7 @@ export function resolveDocumentReferences(
     for (const view of block.views ?? []) {
       const ref = view.viewOf?.modelElement as RefLike | undefined;
       if (!ref) continue;
-      results.push({ role: 'view target', text: resolveFqnRef(ref), fqn: resolver.resolveEndpoint(ref, []), node: view });
+      results.push({ role: 'view target', text: resolveFqnRef(ref), fqn: resolver.resolveEndpoint(ref, []), node: view, ref });
     }
   }
   return results;
