@@ -932,6 +932,22 @@ interface ComputedEdge {
 }
 
 /**
+ * The relationship kinds of LikeC4's computed specification of `files`
+ * (`$data.specification.relationships`): there the kind's `line`, `color`,
+ * `head`, `tail` and `multiple` are held in `style`.
+ */
+export async function likec4RelationshipKinds(
+  files: Record<string, string>,
+): Promise<Record<string, { style?: { line?: string; color?: string; head?: string; tail?: string; multiple?: boolean } }>> {
+  const { services } = await buildWorkspace(files);
+  const model = await services.likec4.ModelBuilder.computeModel();
+  return ((model?.$data as unknown as { specification?: { relationships?: object } })?.specification?.relationships ?? {}) as Record<
+    string,
+    { style?: { line?: string; color?: string; head?: string; tail?: string; multiple?: boolean } }
+  >;
+}
+
+/**
  * LikeC4's computed views of `files` by id (`model.views()` of
  * `ModelBuilder.computeModel()`), generated views included.  Separate from
  * {@link buildLikeC4Model}, whose `views` keep their `{ title, folder }`
