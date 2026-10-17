@@ -3185,11 +3185,12 @@ export class LikeC4Mutator {
    *  2. the declaration edits, together with the `extend X` targets σ
    *     changes (they decide where the elements declared in the blocks
    *     live);
-   *  3. a first pass over the changed references without a deployment part
-   *     — `instanceOf` included — each paired with its place in the edited
-   *     state by the pairing rule and written in the form of FR-011; then a
-   *     second pass over deployment references, whose ids may follow a
-   *     rewritten `instanceOf` (spike 05);
+   *  3. passes over the changed references, each reference paired with its
+   *     place in the edited state by the pairing rule and written in the
+   *     form of FR-011: first the `of` of element views, which decides the
+   *     scope of the view's body; then the other references without a
+   *     deployment part, `instanceOf` included; then the deployment
+   *     references, whose ids may follow a rewritten `instanceOf` (spike 05);
    *  4. the stability check by the pairing rule.
    * Atomic: on any failure every file is restored and the error rethrown.
    *
@@ -3259,15 +3260,17 @@ export class LikeC4Mutator {
           for (const file of this.applyEditGroups(groups)) changedFiles.add(file);
         });
       apply(edits);
-      for (const deploymentPass of [false, true]) {
+      const passOf = (entry: CatalogueEntry): 'view-of' | 'model' | 'deployment' =>
+        'deployment' in entry.target! ? 'deployment' : entry.role === 'view-of' ? 'view-of' : 'model';
+      for (const pass of ['view-of', 'model', 'deployment'] as const) {
         const current = this.referenceCatalogue();
         const pairs = pairReferenceSnapshots(before, this.referenceSnapshot(), new Map(), {
-          expectedPrefix: (record) => expectedPrefix(record, stage(deploymentPass)),
+          expectedPrefix: (record) => expectedPrefix(record, stage(pass === 'deployment')),
         });
         const passEdits = new Map<string, TextEdit[]>();
         for (const [old, now] of pairs) {
           const target = old.entry.target;
-          if (target === undefined || !sigma.changes(target) || texts.has(old) || ('deployment' in target) !== deploymentPass) continue;
+          if (target === undefined || !sigma.changes(target) || texts.has(old) || passOf(old.entry) !== pass) continue;
           const form = writtenForm(old.entry, catalogue, now.entry, current, sigma, fullText(target, sigma, instanceElement));
           if (!form) {
             throw new InvalidWriteError(
