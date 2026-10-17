@@ -24,6 +24,7 @@ import {
   expectDeploymentNodesAgreeWithLikeC4,
   expectRelationshipsAgreeWithLikeC4,
   expectValidLikeC4,
+  validateLikeC4,
 } from '../helpers/likec4-model.js';
 
 // Each accepted write is checked against several LikeC4 builds.
@@ -214,6 +215,27 @@ describe('file choice (row 111)', () => {
     const after = mutator.serialize();
     expect(after).toEqual({ ...files, 'views2.c4': replaced(files['views2.c4']!, [['  element early\n', '  element early\n  element fresh\n']]) });
     await expectAcceptedWrite(files, after);
+  });
+});
+
+describe('reserved names (row 112)', () => {
+  it.each([
+    ['an element kind', 'element'],
+    ['a relationship kind', 'relationship'],
+    ['a deployment node kind', 'deploymentNode'],
+  ] as const)('rejects self as %s, which LikeC4 rejects as a reserved word', async (_, type) => {
+    // P: LikeC4 reports the declaration when written by hand.
+    expect(await validateLikeC4({ 'm.c4': replaced(SPEC + MODEL, [['  tag core\n', `  ${type} self\n  tag core\n`]]) })).not.toEqual([]);
+    const mutator = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + MODEL });
+    expectRejected(mutator, () => mutator.addKind(type, 'self'), 'name');
+  });
+  it('accepts self as a tag, which LikeC4 accepts', SLOW, async () => {
+    const before: Files = { 'm.c4': SPEC + MODEL };
+    // P: LikeC4 accepts the tag when written by hand.
+    await expectValidLikeC4({ 'm.c4': replaced(SPEC + MODEL, [['  tag core\n', '  tag self\n  tag core\n']]) });
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.addTag('self');
+    await expectAcceptedWrite(before, mutator.serialize());
   });
 });
 

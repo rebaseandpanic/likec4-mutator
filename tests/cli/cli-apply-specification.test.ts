@@ -84,6 +84,9 @@ describe('rejected ops (row 116)', () => {
     ['an update of an undeclared kind', { op: 'updateKind', type: 'element', name: 'nope', title: 'x' }, 'mutations[0].name:'],
     ['an empty update', { op: 'updateKind', type: 'element', name: 'system' }, 'mutations[0]'],
     ['a file that is not loaded', { op: 'addTag', name: 'edge', file: 'z.c4' }, 'mutations[0].file:'],
+    ['a reserved element kind name', { op: 'addKind', type: 'element', name: 'self' }, 'mutations[0].name:'],
+    ['a reserved relationship kind name', { op: 'addKind', type: 'relationship', name: 'self' }, 'mutations[0].name:'],
+    ['a reserved deployment node kind name', { op: 'addKind', type: 'deploymentNode', name: 'self' }, 'mutations[0].name:'],
     ['an unknown field', { op: 'addTag', name: 'edge', color: 'red' }, 'mutations[0].color'],
   ])('rejects %s and writes nothing', (_, mutation, path) => {
     const result = runApply([mutation]);
