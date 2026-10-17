@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { resolve, join, relative, extname, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
-import { LikeC4Mutator } from './mutator/mutator.js';
+import { LikeC4Mutator, type CascadedReference } from './mutator/mutator.js';
 import { deploymentRelationshipSelector, mutationFieldPath, parseMutationsFile, type Mutation } from './mutations-file.js';
 import { InvalidWriteError } from './mutator/write-checks.js';
 
@@ -479,6 +479,13 @@ program
         process.stdout.write('\n');
       }
 
+      /** A result line listing the references a cascade removed, `file:line:column (role)` at their pre-write positions. */
+      function writeCascaded(op: Mutation['op'], cascaded: CascadedReference[] | undefined): void {
+        if (!cascaded || cascaded.length === 0) return;
+        const list = cascaded.map((ref) => `${ref.file}:${ref.line}:${ref.column} (${ref.role})`).join(', ');
+        process.stdout.write(`  ${op}: cascade removed ${list}\n`);
+      }
+
       /** A result line naming the `par` blocks a step move or removal emptied (pre-write paths). */
       function writeRemovedBlocks(op: Mutation['op'], paths: number[][]): void {
         if (paths.length === 0) return;
@@ -560,8 +567,10 @@ program
             break;
           }
           case 'removeView': {
-            mutator.removeView(mutation.id);
-            process.stdout.write(`  removeView: removed '${mutation.id}'\n`);
+            const m = mutation;
+            const { cascaded } = mutator.removeView(m.id, { cascade: m.cascade === true });
+            process.stdout.write(`  removeView: removed '${m.id}'\n`);
+            writeCascaded(m.op, cascaded);
             applied++;
             break;
           }
@@ -618,12 +627,13 @@ program
           }
           case 'removeElement': {
             const m = mutation;
-            const { removedRelationships } = mutator.removeElement(m.fqn);
+            const { removedRelationships, cascaded } = mutator.removeElement(m.fqn, { cascade: m.cascade === true });
             process.stdout.write(`  removeElement: removed '${m.fqn}'`);
             if (removedRelationships.length > 0) {
               process.stdout.write(` (${removedRelationships.length} relationship(s) also removed)`);
             }
             process.stdout.write('\n');
+            writeCascaded(m.op, cascaded);
             applied++;
             break;
           }
@@ -704,9 +714,11 @@ program
           case 'removeDeploymentNode':
           case 'removeDeploymentInstance': {
             const m = mutation;
-            const { removedRelationships } =
-              m.op === 'removeDeploymentNode' ? mutator.removeDeploymentNode(m.id) : mutator.removeDeploymentInstance(m.id);
+            const options = { cascade: m.cascade === true };
+            const { removedRelationships, cascaded } =
+              m.op === 'removeDeploymentNode' ? mutator.removeDeploymentNode(m.id, options) : mutator.removeDeploymentInstance(m.id, options);
             writeRemoved(m.op, `'${m.id}'`, removedRelationships.length);
+            writeCascaded(m.op, cascaded);
             applied++;
             break;
           }

@@ -353,14 +353,17 @@ Updates fields on an existing relationship.  Required: `op`, `source`, `target`,
 
 #### removeElement
 
-Removes an element and all its children.
+Removes an element and all its children. With `"cascade": true` the constructs that refer into the removed subtree are removed too, as the library's `removeElement(fqn, { cascade: true })` does (see [Removing referenced elements](#removing-referenced-elements)); without it such a reference fails on `mutations[i].fqn` and nothing is written.
 
 ```json
 {
   "op": "removeElement",
-  "fqn": "app.oldService"
+  "fqn": "app.oldService",
+  "cascade": true
 }
 ```
+
+The four remove ops (`removeElement`, `removeDeploymentNode`, `removeDeploymentInstance`, `removeView`) take `cascade` (a boolean). A cascade prints one more line listing the references it removed, as `file:line:column (role)` at their positions before the op.
 
 #### addRelationship
 
@@ -437,7 +440,7 @@ Every view write of the library is an op with the same fields as its arguments â
 | `addViewRule` | `rule` `{ kind, expression }`, `before` `{ index, text? }` |
 | `replaceViewRule` | `address` `{ index, text? }`, `rule` |
 | `removeViewRule` | `address` |
-| `removeView` | â€” |
+| `removeView` | `cascade` (boolean) |
 | `addViewStep` | `step` `{ source, target, direction?, kind?, kindForm?, title?, description?, technology?, notes?, notation?, navigateTo?, color?, line?, head?, tail? }`, `path` |
 | `updateViewStep` | `address` `{ path, segment?, text? }`, `patch` (the step fields; `null` removes `kind`, `title`, a body string, `navigateTo` or a style field) |
 | `moveViewStep` | `from` (a step address), `to` (a path) |
@@ -458,10 +461,10 @@ Every deployment write of the library is an op with the same fields as its optio
 |---|---|---|
 | `addDeploymentNode` | `parent` (optional: without it the node is a root node) | `addDeploymentNode(parent ?? null, opts)` |
 | `updateDeploymentNode` | `id` | `updateDeploymentNode(id, patch)` |
-| `removeDeploymentNode` | `id` | `removeDeploymentNode(id)` |
+| `removeDeploymentNode` | `id`, `cascade` | `removeDeploymentNode(id, { cascade })` |
 | `addDeploymentInstance` | `node` | `addDeploymentInstance(node, opts)` |
 | `updateDeploymentInstance` | `id` | `updateDeploymentInstance(id, patch)` |
-| `removeDeploymentInstance` | `id` | `removeDeploymentInstance(id)` |
+| `removeDeploymentInstance` | `id`, `cascade` | `removeDeploymentInstance(id, { cascade })` |
 | `addDeploymentRelationship` | `source`, `target` | `addDeploymentRelationship(source, target, opts)` |
 | `updateDeploymentRelationship` | `source`, `target`, `matchKind`, `matchTitle` | `updateDeploymentRelationship({ source, target, kind: matchKind, title: matchTitle }, patch)` |
 | `removeDeploymentRelationship` | `source`, `target`, `matchKind`, `matchTitle` | `removeDeploymentRelationship({ source, target, kind: matchKind, title: matchTitle })` |

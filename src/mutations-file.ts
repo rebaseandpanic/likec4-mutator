@@ -117,6 +117,8 @@ export interface RemoveViewRuleMutation {
 export interface RemoveViewMutation {
   op: 'removeView';
   id: string;
+  /** Remove the referring constructs instead of rejecting (lc4m-15.30 FR-001) */
+  cascade?: boolean;
 }
 
 export interface AddViewStepMutation {
@@ -195,6 +197,8 @@ export interface UpdateRelationshipMutation {
 export interface RemoveElementMutation {
   op: 'removeElement';
   fqn: string;
+  /** Remove the referring constructs instead of rejecting (lc4m-15.30 FR-001) */
+  cascade?: boolean;
 }
 
 export interface RemoveRelationshipMutation {
@@ -241,6 +245,8 @@ export interface UpdateDeploymentNodeMutation {
 export interface RemoveDeploymentNodeMutation {
   op: 'removeDeploymentNode';
   id: string;
+  /** Remove the referring constructs instead of rejecting (lc4m-15.30 FR-001) */
+  cascade?: boolean;
 }
 
 /** `addDeploymentInstance`: an instance of `element` in node `node`. */
@@ -275,6 +281,8 @@ export interface UpdateDeploymentInstanceMutation {
 export interface RemoveDeploymentInstanceMutation {
   op: 'removeDeploymentInstance';
   id: string;
+  /** Remove the referring constructs instead of rejecting (lc4m-15.30 FR-001) */
+  cascade?: boolean;
 }
 
 export interface AddDeploymentRelationshipMutation {
@@ -868,7 +876,7 @@ const MUTATION_FIELDS = {
     'style',
     'metadata',
   ],
-  removeElement: ['op', 'fqn'],
+  removeElement: ['op', 'fqn', 'cascade'],
   addRelationship: [
     'op',
     'source',
@@ -926,7 +934,7 @@ const MUTATION_FIELDS = {
     'style',
     'metadata',
   ],
-  removeDeploymentNode: ['op', 'id'],
+  removeDeploymentNode: ['op', 'id', 'cascade'],
   addDeploymentInstance: [
     'op',
     'node',
@@ -953,7 +961,7 @@ const MUTATION_FIELDS = {
     'style',
     'metadata',
   ],
-  removeDeploymentInstance: ['op', 'id'],
+  removeDeploymentInstance: ['op', 'id', 'cascade'],
   addDeploymentRelationship: [
     'op',
     'source',
@@ -990,7 +998,7 @@ const MUTATION_FIELDS = {
   addViewRule: ['op', 'id', 'rule', 'before'],
   replaceViewRule: ['op', 'id', 'address', 'rule'],
   removeViewRule: ['op', 'id', 'address'],
-  removeView: ['op', 'id'],
+  removeView: ['op', 'id', 'cascade'],
   addViewStep: ['op', 'id', 'step', 'path'],
   updateViewStep: ['op', 'id', 'address', 'patch'],
   moveViewStep: ['op', 'id', 'from', 'to'],
@@ -1065,6 +1073,7 @@ function validateMutation(m: JsonObject, path: string): void {
       return;
     case 'removeElement':
       requireString(m, 'fqn', path);
+      optionalBoolean(m, 'cascade', path);
       return;
     case 'addRelationship':
       requireString(m, 'source', path);
@@ -1176,6 +1185,7 @@ function validateMutation(m: JsonObject, path: string): void {
       return;
     case 'removeView':
       requireString(m, 'id', path);
+      optionalBoolean(m, 'cascade', path);
       return;
     case 'addViewStep':
       requireString(m, 'id', path);
@@ -1240,6 +1250,7 @@ function validateMutation(m: JsonObject, path: string): void {
     case 'removeDeploymentNode':
     case 'removeDeploymentInstance':
       requireString(m, 'id', path);
+      optionalBoolean(m, 'cascade', path);
       return;
     case 'addDeploymentInstance':
       requireString(m, 'node', path);
