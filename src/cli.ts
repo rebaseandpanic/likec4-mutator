@@ -684,6 +684,34 @@ program
             applied++;
             break;
           }
+          case 'renameKind': {
+            const m = mutation;
+            mutator.renameKind(m.type, m.name, m.newName);
+            process.stdout.write(`  renameKind: renamed the ${m.type} kind '${m.name}' to '${m.newName}'\n`);
+            applied++;
+            break;
+          }
+          case 'removeKind': {
+            const m = mutation;
+            mutator.removeKind(m.type, m.name);
+            process.stdout.write(`  removeKind: removed the ${m.type} kind '${m.name}'\n`);
+            applied++;
+            break;
+          }
+          case 'renameTag': {
+            const m = mutation;
+            mutator.renameTag(m.name, m.newName);
+            process.stdout.write(`  renameTag: renamed the tag '${m.name}' to '${m.newName}'\n`);
+            applied++;
+            break;
+          }
+          case 'removeTag': {
+            const m = mutation;
+            mutator.removeTag(m.name);
+            process.stdout.write(`  removeTag: removed the tag '${m.name}'\n`);
+            applied++;
+            break;
+          }
           case 'renameElement': {
             const m = mutation;
             const { fqn } = mutator.renameElement(m.fqn, m.newName);

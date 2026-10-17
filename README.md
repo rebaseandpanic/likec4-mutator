@@ -418,6 +418,19 @@ Declare a kind or a tag and change a kind's defaults, as the library's `addKind(
 ]
 ```
 
+#### renameKind, removeKind, renameTag, removeTag
+
+Rename or remove a kind or a tag, as the library's `renameKind(type, name, newName)`, `removeKind(type, name)`, `renameTag(name, newName)` and `removeTag(name)` do (see [Renaming and removing kinds and tags](#renaming-and-removing-kinds-and-tags)). Tag names are written without `#`. A rejection fails on `mutations[i].<field>` (`type`, `name`, `newName`) and nothing is written; the removal of a used kind or tag fails on `mutations[i].name`, naming its uses.
+
+```json
+[
+  { "op": "renameKind", "type": "element", "name": "vm", "newName": "machine" },
+  { "op": "renameTag", "name": "hot", "newName": "warm" },
+  { "op": "removeKind", "type": "relationship", "name": "legacy" },
+  { "op": "removeTag", "name": "unused" }
+]
+```
+
 #### addRelationship
 
 Adds a relationship between two elements. All fields except `op`, `source`, `target` are optional. It is written at the end of the first `model` block of the first file, in LikeC4's document order, that has one; else in a new `model` block at the end of the first file.

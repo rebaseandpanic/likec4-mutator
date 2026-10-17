@@ -266,6 +266,34 @@ export interface AddTagMutation {
   file?: string;
 }
 
+/** `renameKind` (lc4m-15.30 US-7): the library's `renameKind(type, name, newName)`. */
+export interface RenameKindMutation {
+  op: 'renameKind';
+  type: KindTypeName;
+  name: string;
+  newName: string;
+}
+
+/** `removeKind` (lc4m-15.30 US-7): the library's `removeKind(type, name)`. */
+export interface RemoveKindMutation {
+  op: 'removeKind';
+  type: KindTypeName;
+  name: string;
+}
+
+/** `renameTag` (lc4m-15.30 US-7): the library's `renameTag(name, newName)`; names without `#`. */
+export interface RenameTagMutation {
+  op: 'renameTag';
+  name: string;
+  newName: string;
+}
+
+/** `removeTag` (lc4m-15.30 US-7): the library's `removeTag(name)`; the name without `#`. */
+export interface RemoveTagMutation {
+  op: 'removeTag';
+  name: string;
+}
+
 /** `renameElement` (lc4m-15.30 US-3): the library's `renameElement(fqn, newName)`. */
 export interface RenameElementMutation {
   op: 'renameElement';
@@ -444,6 +472,10 @@ export type Mutation =
   | AddRelationshipExtendMutation
   | UpdateKindMutation
   | AddTagMutation
+  | RenameKindMutation
+  | RemoveKindMutation
+  | RenameTagMutation
+  | RemoveTagMutation
   | RemoveRelationshipMutation
   | AddDeploymentNodeMutation
   | UpdateDeploymentNodeMutation
@@ -971,6 +1003,10 @@ const MUTATION_FIELDS = {
   addKind: ['op', 'type', 'name', 'file', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
   updateKind: ['op', 'type', 'name', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
   addTag: ['op', 'name', 'file'],
+  renameKind: ['op', 'type', 'name', 'newName'],
+  removeKind: ['op', 'type', 'name'],
+  renameTag: ['op', 'name', 'newName'],
+  removeTag: ['op', 'name'],
   addElementExtend: ['op', 'fqn', 'file', 'tags', 'links', 'metadata'],
   addRelationshipExtend: [
     'op',
@@ -1127,7 +1163,7 @@ type MutationFieldsAreExhaustive = AssertNever<FieldsNotListed>;
 
 const MUTATIONS_FILE_FIELDS = ['mutations'] as const satisfies ReadonlyArray<keyof MutationsFile>;
 
-/** The kind types of `addKind` / `updateKind`. */
+/** The kind types of the kind ops (`addKind`, `updateKind`, `renameKind`, `removeKind`). */
 const KIND_TYPES: readonly KindTypeName[] = ['element', 'relationship', 'deploymentNode'];
 
 function isKnownOp(op: unknown): op is Mutation['op'] {
@@ -1198,7 +1234,9 @@ function validateMutation(m: JsonObject, path: string): void {
       optionalString(m, 'file', path);
       return;
     case 'addKind':
-    case 'updateKind': {
+    case 'updateKind':
+    case 'renameKind':
+    case 'removeKind': {
       if (!KIND_TYPES.includes(m.type as KindTypeName)) {
         throw new MutationsFileError(
           `${path}.type`,
@@ -1206,6 +1244,8 @@ function validateMutation(m: JsonObject, path: string): void {
         );
       }
       requireString(m, 'name', path);
+      if (m.op === 'renameKind') requireString(m, 'newName', path);
+      if (m.op === 'renameKind' || m.op === 'removeKind') return;
       const strings = ['title', 'summary', 'description', 'technology'];
       if (m.op === 'addKind') {
         for (const key of [...strings, 'file']) optionalString(m, key, path);
@@ -1224,6 +1264,13 @@ function validateMutation(m: JsonObject, path: string): void {
     case 'addTag':
       requireString(m, 'name', path);
       optionalString(m, 'file', path);
+      return;
+    case 'renameTag':
+      requireString(m, 'name', path);
+      requireString(m, 'newName', path);
+      return;
+    case 'removeTag':
+      requireString(m, 'name', path);
       return;
     case 'addElementExtend':
     case 'addRelationshipExtend':
