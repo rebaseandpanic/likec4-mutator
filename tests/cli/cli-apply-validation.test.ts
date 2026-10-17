@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
-import { expectValidLikeC4 } from '../helpers/likec4-model.js';
+import { expectAcceptedWrite, expectAgreesWithLikeC4, expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
 
@@ -418,5 +418,38 @@ model {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('mutations[0].id:');
     expect(result.model).toBe(model);
+  });
+});
+
+describe('CLI apply addElement without parent or title (row 30 of lc4m-15.30)', () => {
+  // US-5, D65: no parent adds a model-level element; without a title LikeC4
+  // shows the kind's title, else the element name.
+  it.each([
+    { name: 'a kind without a title: the name', kind: 'element service', title: 'solo' },
+    { name: 'a kind with a title: the kind title', kind: "element service {\n    title 'Service'\n  }", title: 'Service' },
+  ])('adds a model-level element with $name as its title', { timeout: 60_000 }, async ({ kind, title }) => {
+    const model = `specification {\n  ${kind}\n}\nmodel {\n  app = service\n}\n`;
+    const result = runApply({ mutations: [{ op: 'addElement', kind: 'service', id: 'solo' }] }, model);
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.model).toBe(model.replace('  app = service\n', '  app = service\n  solo = service\n'));
+    const after = { 'model.c4': result.model };
+    const element = LikeC4Mutator.fromFiles(after).getElement('solo')!;
+    expect(element.title).toBe(title);
+    await expectAgreesWithLikeC4(after, 'solo', element);
+    await expectAcceptedWrite({ 'model.c4': model }, after);
+  });
+});
+
+describe('CLI apply addElement file rejections (row 31 of lc4m-15.30)', () => {
+  it.each([
+    { name: 'file together with parent', mutation: { op: 'addElement', parent: 'app', kind: 'service', id: 'x', file: 'model.c4' }, field: 'file' },
+    { name: 'an unloaded file', mutation: { op: 'addElement', kind: 'service', id: 'x', file: 'other.c4' }, field: 'file' },
+    { name: 'an unknown field', mutation: { op: 'addElement', kind: 'service', id: 'x', files: 'model.c4' }, field: 'files' },
+  ])('$name: exit 1 on mutations[0].$field, nothing written', ({ mutation, field }) => {
+    const { status, stderr, model } = runApply({ mutations: [mutation] });
+    expect(status).toBe(1);
+    expect(stderr).toContain(`mutations[0].${field}`);
+    expect(model).toBe(source);
   });
 });
