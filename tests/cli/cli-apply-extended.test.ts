@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { expectAcceptedWrite, expectRelationshipsAgreeWithLikeC4 } from '../helpers/likec4-model.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
 const FIXTURE_DIR = resolve(import.meta.dirname, '..', 'fixtures', 'minimal');
@@ -337,5 +339,68 @@ describe('CLI apply extended', () => {
     expect(content).toContain('style {');
     expect(content).toContain('line dashed');
     expect(content).toContain('color blue');
+  });
+});
+
+// ----- addRelationship with the fields of lc4m-15.30 US-5 and US-8 (row 151) ----------
+
+const RELATIONSHIP_FILES: Record<string, string> = {
+  'spec.c4': "specification {\n  element sys\n  relationship calls\n  tag t\n}\n",
+  'model.c4': "model {\n  app = sys 'App' {\n    api = sys 'API'\n    db = sys 'DB'\n  }\n  ext = sys 'Ext'\n}\n",
+  'ext.c4': "model {\n  extend app.api -[calls]-> ext 'reads' {\n    #t\n  }\n}\n",
+};
+
+/** Run `apply --in-place` on a copy of `RELATIONSHIP_FILES`; exit status, output and the files after. */
+function runApplyInPlace(mutations: unknown[]): { status: number | null; stderr: string; files: Record<string, string> } {
+  const dir = mkdtempSync(join(tmpdir(), 'likec4-mutator-apply-relationship-'));
+  for (const [file, text] of Object.entries(RELATIONSHIP_FILES)) writeFileSync(join(dir, file), text, 'utf-8');
+  const mutationsPath = join(dir, 'mutations.json');
+  writeFileSync(mutationsPath, JSON.stringify({ mutations }), 'utf-8');
+  const result = spawnSync('npx', ['tsx', 'src/cli.ts', 'apply', '--dir', dir, '--mutations', mutationsPath, '--in-place'], {
+    cwd: PROJECT_ROOT,
+    encoding: 'utf-8',
+    timeout: 30000,
+  });
+  const files = Object.fromEntries(Object.keys(RELATIONSHIP_FILES).map((file) => [file, readFileSync(join(dir, file), 'utf-8')]));
+  return { status: result.status, stderr: result.stderr, files };
+}
+
+describe('apply addRelationship with kind, direction, placement, file and shared (row 151)', { timeout: 120_000 }, () => {
+  it('writes every new field', async () => {
+    const result = runApplyInPlace([
+      { op: 'addRelationship', source: 'app.api', target: 'ext', label: 'syncs', kind: 'calls', bidirectional: true },
+      { op: 'addRelationship', source: 'app.api', target: 'app.db', label: 'writes', placement: 'nested', kind: 'calls', kindForm: 'dot' },
+      { op: 'addRelationship', source: 'app', target: 'ext', label: 'uses', file: 'model.c4' },
+      { op: 'addRelationship', source: 'app.api', target: 'ext', label: 'reads', kind: 'calls', shared: true },
+    ]);
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.files).toEqual({
+      'spec.c4': RELATIONSHIP_FILES['spec.c4'],
+      // `file` chose `model.c4`; the others go to the default file `ext.c4`, the first in LikeC4's document order with a model block (D62).
+      'model.c4':
+        "model {\n  app = sys 'App' {\n    api = sys 'API' {\n      .calls db 'writes'\n    }\n    db = sys 'DB'\n  }\n  ext = sys 'Ext'\n  app -> ext 'uses'\n}\n",
+      'ext.c4':
+        "model {\n  extend app.api -[calls]-> ext 'reads' {\n    #t\n  }\n  app.api -[calls]<-> ext 'syncs'\n  app.api -[calls]-> ext 'reads'\n}\n",
+    });
+    await expectRelationshipsAgreeWithLikeC4(result.files, LikeC4Mutator.fromFiles(result.files).getRelationships());
+    await expectAcceptedWrite(RELATIONSHIP_FILES, result.files);
+  });
+
+  it.each([
+    ['an undeclared kind', { kind: 'nope' }, 'mutations[0].kind:'],
+    ['an unknown kindForm', { kind: 'calls', kindForm: 'sideways' }, 'mutations[0].kindForm'],
+    ['the dot form with bidirectional', { kind: 'calls', kindForm: 'dot', bidirectional: true }, 'mutations[0].kindForm:'],
+    ['a non-boolean bidirectional', { bidirectional: 'yes' }, 'mutations[0].bidirectional'],
+    ['an unknown placement', { placement: 'inside' }, 'mutations[0].placement'],
+    ['file with nested placement', { placement: 'nested', file: 'model.c4' }, 'mutations[0].file:'],
+    ['a file that is not loaded', { file: 'nope.c4' }, 'mutations[0].file:'],
+    ['the identity of an extend block without shared', { label: 'reads', kind: 'calls' }, 'mutations[0].shared:'],
+    ['a non-boolean shared', { shared: 1 }, 'mutations[0].shared'],
+  ])('rejects %s and writes nothing', (_label, fields, path) => {
+    const result = runApplyInPlace([{ op: 'addRelationship', source: 'app.api', target: 'ext', ...fields }]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(path);
+    expect(result.files).toEqual(RELATIONSHIP_FILES);
   });
 });
