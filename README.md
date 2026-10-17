@@ -363,7 +363,7 @@ Removes an element and all its children.
 
 #### addRelationship
 
-Adds a relationship between two elements. All fields except `op`, `source`, `target` are optional.
+Adds a relationship between two elements. All fields except `op`, `source`, `target` are optional. It is written at the end of the first `model` block of the first file, in LikeC4's document order, that has one; else in a new `model` block at the end of the first file.
 
 ```json
 {
@@ -1569,7 +1569,9 @@ Writes LikeC4 would reject are refused the same way:
 | `addDeploymentExtend` | `node` is not one declared node, or is an instance (LikeC4: `ExtendDeployment allows only DeploymentNode`); nothing to contribute (`tags`); a tag is not declared; `file` is missing or not loaded. |
 | `removeDeploymentExtend` | the file has no such block, or a rule of a deployment view refers to something declared in it, or the removal would change what a surviving reference links to (`node`); several blocks of the node in the file and no valid `occurrence` (`occurrence`). |
 
-Endpoints are resolved the way LikeC4 links them from the place they are written — the first `model` block of the first file that has one: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
+A model-level element (`addElement` without a parent) and a relationship (`addRelationship`) go to the end of the first `model` block of the first file, in LikeC4's document order, that has one; when no loaded file has a `model` block, a new one is appended to the first file in that order. LikeC4's document order is not the order the files were loaded in.
+
+Endpoints are resolved the way LikeC4 links them from the place they are written — that first `model` block: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
 
 A new element can change how LikeC4 links references that are already written: with `app = service { api = service }`, a model-level `api -> other` links `api` to `app.api`, the only element of that name; once `other.api` exists, `api` is ambiguous and LikeC4 reports `Could not resolve reference`. A new direct child can also shadow a unique descendant (`app.api` linking to `app.inner.api` would link to a new `app.api`). `addElement` resolves the existing references again with the new element in place and is rejected, with nothing changed, when one that resolved before then resolves to another element or not at all. Checked are, in every loaded file:
 

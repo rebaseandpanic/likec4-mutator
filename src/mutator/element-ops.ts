@@ -23,6 +23,7 @@ import {
   type ElementStyle,
 } from './codegen.js';
 import { BodyInsertions } from './body-layout.js';
+import { blockInsertEdit, firstModelBlock, type BlockPlacement } from './block-placement.js';
 import { buildMergeStyleEdits } from './style-ops.js';
 import {
   buildInsertBodySnippet,
@@ -167,40 +168,38 @@ export interface AddElementOpts {
  *
  * The new element goes on its own line at the end of the target block (a
  * block written on one line is spread over several, see {@link BodyInsertions}).
+ * At model level the target is `placement`: its `model` block, or a new
+ * `model` block appended at the end of `doc` when it names none.
  *
  * @param doc       - Parsed document
  * @param parentFqn - FQN of the container element, or empty/null for model-level
  * @param opts      - Properties for the new element
+ * @param placement - Model level only: where in `doc` the element goes
+ *                    (default: the first `model` block of `doc`)
  * @returns TextEdit to insert the element text
  */
 export function addElementEdit(
   doc: ParsedDocument,
   parentFqn: string | null,
   opts: AddElementOpts,
+  placement?: Pick<BlockPlacement, 'block'>,
 ): TextEdit {
   const { ast, fullText } = doc;
-  const index = buildFqnIndex(ast);
 
-  let inserts: BodyInsertions;
-  if (parentFqn) {
-    const entry = index.get(parentFqn);
-    if (!entry) {
-      throw new Error(`Parent element '${parentFqn}' not found`);
-    }
-    const parentNode = entry.node;
-    if (!parentNode.body?.$cstNode) {
-      throw new Error(`Parent element '${parentFqn}' has no body`);
-    }
-    inserts = BodyInsertions.forBody(parentNode, fullText, getNodeIndent(parentNode, fullText));
-  } else {
-    // Model level: first model block
-    const model = ast.models?.[0];
-    if (!model?.$cstNode) {
-      throw new Error('No model block found in document');
-    }
-    inserts = BodyInsertions.forBlock(model.$cstNode, fullText, getNodeIndent(model, fullText));
+  if (!parentFqn) {
+    return blockInsertEdit('model', doc, placement ?? firstModelBlock(doc), (indent) =>
+      generateElement({ indent, ...opts }),
+    );
   }
-
+  const entry = buildFqnIndex(ast).get(parentFqn);
+  if (!entry) {
+    throw new Error(`Parent element '${parentFqn}' not found`);
+  }
+  const parentNode = entry.node;
+  if (!parentNode.body?.$cstNode) {
+    throw new Error(`Parent element '${parentFqn}' has no body`);
+  }
+  const inserts = BodyInsertions.forBody(parentNode, fullText, getNodeIndent(parentNode, fullText));
   inserts.append(generateElement({ indent: inserts.innerIndent, ...opts }) + '\n');
   const [edit] = inserts.apply([]);
   if (!edit) throw new Error('internal: no edit for the new element');

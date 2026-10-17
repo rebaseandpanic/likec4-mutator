@@ -574,6 +574,11 @@ export class LikeC4Mutator {
    * Add a new element as a child of `parentFqn`, or at model level when
    * `parentFqn` is null/empty.
    *
+   * A model-level element goes to the default file (FR-021, D62): the first
+   * file, in LikeC4's document order, with a `model` block — at the end of
+   * its first `model` block — else a new `model` block at the end of the
+   * first file.
+   *
    * The file is automatically reparsed after the edit.
    *
    * The write is rejected with an `InvalidWriteError` on `name`, with no
@@ -591,17 +596,10 @@ export class LikeC4Mutator {
     checkKind(opts.kind, 'element', this.workspace);
     checkTags(opts.tags, this.workspace);
     checkStyle(opts.style, 'element', this.workspace);
-    const filename = parentFqn
-      ? this.findFileContaining(parentFqn)
-      : this.findFileWithModel();
-
-    if (!filename) {
-      throw new Error(
-        parentFqn
-          ? `Parent element '${parentFqn}' not found in any file`
-          : 'No file with a model block found',
-      );
-    }
+    // A root element goes to the default file (FR-021, D62).
+    const placement = parentFqn ? undefined : chooseBlockPlacement('model', this.documents, undefined);
+    const filename = placement ? placement.file : this.findFileContaining(parentFqn!);
+    if (!filename) throw new Error(`Parent element '${parentFqn}' not found in any file`);
 
     const fqn = parentFqn ? `${parentFqn}.${opts.name}` : opts.name;
     if (this.workspace.has(fqn)) {
@@ -616,7 +614,7 @@ export class LikeC4Mutator {
 
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    const edit = addElementEdit(doc, parentFqn, opts);
+    const edit = addElementEdit(doc, parentFqn, opts, placement);
     const before = this.referenceSnapshot();
     const snapshot = this.snapshot();
     try {
@@ -797,6 +795,10 @@ export class LikeC4Mutator {
   /**
    * Add a new relationship at model level.
    *
+   * It goes to the default file (FR-021, D62): the first file, in LikeC4's
+   * document order, with a `model` block — at the end of its first `model`
+   * block — else a new `model` block at the end of the first file.
+   *
    * @param source - Source element identifier
    * @param target - Target element identifier
    * @param label  - Optional relationship label
@@ -819,13 +821,14 @@ export class LikeC4Mutator {
     checkReferenceForm(target, 'target');
     checkTags(opts?.tags, this.workspace);
     checkStyle(opts?.style, 'relationship', this.workspace);
-    const filename = this.findFileWithModel();
-    if (!filename) throw new Error('No file with a model block found');
-
+    // The default file (FR-021, D62): its first `model` block, else a new one.
+    const placement = chooseBlockPlacement('model', this.documents, undefined);
+    const filename = placement.file;
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
-    // The relationship is written into the first model block of `filename`;
-    // its endpoints link from there as LikeC4 links them.
+    // The relationship is written at the top level of the chosen (first)
+    // model block of `filename`; its endpoints link from there as LikeC4
+    // links them.
     const sourceFqn = this.resolveWritten(doc, filename, source, 'source', { model: 0 });
     const targetFqn = this.resolveWritten(doc, filename, target, 'target', { model: 0 });
     // LikeC4 rejects a relationship between an element and itself or one of
@@ -840,7 +843,7 @@ export class LikeC4Mutator {
           : `'${source}' (${sourceFqn}) and '${target}' (${targetFqn}) are parent and child: LikeC4 rejects such a relationship`,
       );
     }
-    const edit = addRelationshipEdit(doc, source, target, label, opts);
+    const edit = addRelationshipEdit(doc, source, target, label, opts, placement);
     this.applyEdit(filename, edit);
   }
 
@@ -2912,20 +2915,6 @@ export class LikeC4Mutator {
   private findFileContaining(fqn: string): string | null {
     for (const [filename, query] of this.queries) {
       if (query.getElement(fqn)) return filename;
-    }
-    return null;
-  }
-
-  /**
-   * Return the filename of the FIRST file that contains at least one model block.
-   * When multiple files are loaded and each contains a model block, relationships
-   * and root-level elements are always inserted into this first matching file.
-   * Use a single-file setup or pass an explicit target file (future work) when
-   * precise file targeting is required.
-   */
-  private findFileWithModel(): string | null {
-    for (const [filename, doc] of this.documents) {
-      if (doc.ast.models?.length > 0) return filename;
     }
     return null;
   }

@@ -19,6 +19,7 @@ import {
   type RelationshipStyle,
 } from './codegen.js';
 import { BodyInsertions } from './body-layout.js';
+import { blockInsertEdit, firstModelBlock, type BlockPlacement } from './block-placement.js';
 import { buildMergeStyleEdits } from './style-ops.js';
 import {
   buildRemovalEdit,
@@ -36,12 +37,15 @@ import {
 
 /**
  * Build a TextEdit that inserts a new relationship at model level, on its
- * own line at the end of the first model block.
+ * own line at the end of `placement`'s `model` block, or in a new `model`
+ * block appended at the end of `doc` when it names none.
  *
- * @param doc    - Parsed document
- * @param source - Source element identifier (local name or FQN)
- * @param target - Target element identifier (local name or FQN)
- * @param label  - Optional relationship label
+ * @param doc       - Parsed document
+ * @param source    - Source element identifier (local name or FQN)
+ * @param target    - Target element identifier (local name or FQN)
+ * @param label     - Optional relationship label
+ * @param placement - Where in `doc` the relationship goes (default: the first
+ *                    `model` block of `doc`)
  * @returns TextEdit to insert the relationship
  */
 export function addRelationshipEdit(
@@ -57,31 +61,22 @@ export function addRelationshipEdit(
     metadata?: Record<string, string | string[]>;
     style?: RelationshipStyle;
   },
+  placement?: Pick<BlockPlacement, 'block'>,
 ): TextEdit {
-  const { ast, fullText } = doc;
-
-  const model = ast.models?.[0];
-  if (!model?.$cstNode) {
-    throw new Error('No model block found in document');
-  }
-
-  const inserts = BodyInsertions.forBlock(model.$cstNode, fullText, getNodeIndent(model, fullText));
-  const snippet = generateRelationship({
-    indent: inserts.innerIndent,
-    source,
-    target,
-    label,
-    description: opts?.description,
-    technology: opts?.technology,
-    tags: opts?.tags,
-    links: opts?.links,
-    metadata: opts?.metadata,
-    style: opts?.style,
-  });
-  inserts.append(snippet + '\n');
-  const [edit] = inserts.apply([]);
-  if (!edit) throw new Error('internal: no edit for the new relationship');
-  return edit;
+  return blockInsertEdit('model', doc, placement ?? firstModelBlock(doc), (indent) =>
+    generateRelationship({
+      indent,
+      source,
+      target,
+      label,
+      description: opts?.description,
+      technology: opts?.technology,
+      tags: opts?.tags,
+      links: opts?.links,
+      metadata: opts?.metadata,
+      style: opts?.style,
+    }),
+  );
 }
 
 /**
