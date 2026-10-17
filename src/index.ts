@@ -81,6 +81,8 @@ export type {
   RemoveDeploymentRelationshipResult,
   RemoveElementResult,
   RenameElementResult,
+  MoveElementResult,
+  MoveElementTarget,
   RemoveRelationshipResult,
   RelationshipCandidate,
   RelationshipPosition,

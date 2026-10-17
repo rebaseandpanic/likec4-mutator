@@ -134,6 +134,8 @@ mutator.removeElement('app.db', { cascade: true }); // removes the referring vie
 
 // Rename (=> { fqn, changedFiles }); every reference to the element and its subtree is rewritten — see "Renaming elements"
 mutator.renameElement('app.api', 'gateway');
+// Move (=> { fqn, changedFiles }) under a new parent, or to the top level of a file — see "Moving elements"
+mutator.moveElement('app.gateway', { parent: null, file: 'model.c4' });
 
 // Validate & serialize
 const errors = mutator.validate(); // [] = valid
@@ -1581,6 +1583,22 @@ Rejected, with nothing changed (`InvalidWriteError`):
 | `fqn` | no element `fqn` is declared; a construct the library does not resolve — a `global` block, an import, an opaque flow block of a dynamic view (`opt`, `loop`, `alt`, `try` / `catch` / `finally`, `break`), text the parser could not recover — writes the old name as an identifier or any dotted segment, or holds a reference into the renamed subtree |
 | `newName` | not a valid element name (see [Rejected writes](#rejected-writes)); an element with the new FQN is already declared; such a construct writes the new name as a bare identifier or the leading segment of a dotted name (`opt { gateway -> other }` blocks renaming to `gateway`); an instance declared without a name would get the id of another node or instance of its node, `extend` blocks of the node in any file included (LikeC4: `Duplicate node name` / `Duplicate instance name`); a reference cannot be written so that it links to its new target; another reference would link to something else |
 
+## Moving elements
+
+`moveElement(fqn, { parent, file? })` moves the element's declaration — with its whole body and the comment lines directly above it (no blank line between), plus a comment ending its last line — to the end of the body of `parent` (a body is created when the parent has none), or, with `parent: null`, to the end of the first `model` block of `file` (a block is created when the file has none). Without `file`, a move to the top level stays in the element's current file. The text is indented for its new place and written with the new file's line ending; a file the element leaves keeps its `model` block, even when it is empty. It returns `{ fqn, changedFiles }` with the new FQN.
+
+The element and everything below it get new FQNs. Every reference to them, in every file, and every reference written in the moved text, is written so that it links to the same element as before from its place: its text when that still resolves there (a relationship between two children of the moved element usually keeps `api -> db`), else the text with the segments up to the moved element written as its new path (`app.api.handler` → `core.api.handler`), else the full FQN; else the move is rejected. The targets of `extend` blocks of the subtree follow. References that did not resolve before are left as they are.
+
+What LikeC4 derives from the hierarchy changes with a move, as it would by hand: with `app.api` moved to the top level, `include app.*` no longer shows `api`, and wildcards in scoped views, `x.**`, `x._` and implicit relationships follow the new tree. The explicit relationships, the element's properties and every written reference keep their targets.
+
+Rejected, with nothing changed (`InvalidWriteError`):
+
+| Field | When |
+| --- | --- |
+| `fqn` | no element `fqn` is declared; a construct the library does not resolve — a `global` block, an import, an opaque flow block of a dynamic view, text the parser could not recover — writes the name of the element or of anything below it as an identifier or any dotted segment, or holds a reference into the subtree. The rule is on the safe side: `opt { other.api -> x }` blocks moving `app.api` even though it names another element. |
+| `parent` | no element `parent` is declared; `parent` is the element or lies below it; the move changes neither the parent nor the file; an element with the new FQN exists; a relationship or a dynamic step would join an element and its ancestor (LikeC4: `Invalid parent-child relationship`); a deployment path through an instance (`prod.vm.app.api`) would name an element outside the instance's element — the error's `related` lists those paths (`{ file, line, column, construct: 'deployment-path' }`); a reference cannot be written so that it links to its target; another reference would link to something else; the moved text, going to another file, holds an `icon` or a `link` starting with `./` or `../` (LikeC4 resolves those against the file they are written in) |
+| `file` | given with a parent; not a loaded file; the element's own file for an element already at the top level; and, for a move to the top level with `file`, every reason listed under `parent` after the first two |
+
 ## Rejected writes
 
 Every write call checks the values it introduces before anything changes. A rejected call throws an `InvalidWriteError` (exported): `field` names the offending option in the terms of the call (`name`, `kind`, `id`, `target`, `source`, `autoLayout`, `tags[1]`, `style.color`, `includes[0]`), `detail` says what is wrong, and no file changes. `apply` reports the same as `mutations[i].<field>` (the element name of `addElement` is its `id`) with exit code 1 and writes nothing; the single-purpose CLI commands name the option (`--id`, `--kind`, `--tags`, ...).
@@ -1616,6 +1634,7 @@ Writes LikeC4 would reject are refused the same way:
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
 | `renameElement` | see [Renaming elements](#renaming-elements). |
+| `moveElement` | see [Moving elements](#moving-elements). |
 | `removeElement` | `fqn` is not a declared element, or an edit would leave a file that does not parse (`InvalidWriteError`); a reference into the subtree that the mode does not remove (`ReferencedRemovalError`, see [Removing referenced elements](#removing-referenced-elements)). Field `fqn`. |
 | `updateDeploymentNode` | `id` is not one declared node; a tag is not declared; `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating nodes](#updating-nodes)). |
 | `updateDeploymentInstance` | `id` is not one declared instance; a tag is not declared; a patched metadata key would not read as requested, as LikeC4 cannot hold an empty own map (`metadata.<key>`); `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating instances](#updating-instances)). |

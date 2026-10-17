@@ -42,9 +42,12 @@ import {
 } from '../query/workspace-index.js';
 import { buildRemovalEdit, removalEditsForRanges } from './cst-helpers.js';
 import {
+  declarationText,
   elementSubstitution,
   expectedPrefix,
   fullText,
+  indented,
+  relativeValues,
   renamedInstances,
   Substitution,
   writtenForm,
@@ -168,7 +171,9 @@ import {
   type ViewStepPatch,
   type ViewStepSpec,
 } from './step-ops.js';
-import { chooseBlockPlacement } from './block-placement.js';
+import { blockInsertEdit, chooseBlockPlacement } from './block-placement.js';
+import { BodyInsertions } from './body-layout.js';
+import { getNodeIndent } from './indent.js';
 import { checkBraceBalance } from './brace-balance.js';
 import { normalizedMetadataValue, type MetadataPatch } from './metadata-ops.js';
 import { planCascade, planNavigateToCascade, type CascadePlan } from './cascade-ops.js';
@@ -179,6 +184,7 @@ import {
   type RemovalReference,
   checkAutoLayout,
   checkElementName,
+  checkFile,
   checkKind,
   checkMetadata,
   checkReferenceForm,
@@ -255,6 +261,21 @@ export interface RenameElementResult {
    */
   changedFiles: string[];
 }
+
+/** Where {@link LikeC4Mutator.moveElement} moves an element. */
+export interface MoveElementTarget {
+  /** The new parent's FQN, or null for the top level of a `model` block */
+  parent: string | null;
+  /**
+   * For a move to the top level: the loaded file whose first `model` block
+   * (created when it has none) takes the element; its current file when
+   * omitted.  Not accepted with a parent, whose declaration decides the file.
+   */
+  file?: string;
+}
+
+/** Result of {@link LikeC4Mutator.moveElement}. */
+export type MoveElementResult = RenameElementResult;
 
 /** A reference a cascade removed with its construct; positions are 1-based, in the state before the write. */
 export interface CascadedReference {
@@ -978,6 +999,180 @@ export class LikeC4Mutator {
       action: `renaming '${fqn}' to '${newName}'`,
     });
     return { fqn: newFqn, changedFiles };
+  }
+
+  /**
+   * Move the element `fqn`, with its whole body and the comment lines
+   * directly above it, under a new parent or to the top level (lc4m-15.30
+   * US-3, FR-020): to the end of the parent's declaration body (given one
+   * when it has none), or to the end of the first `model` block of `file`
+   * (created when it has none) — of the element's current file when `file`
+   * is omitted (D98).  The text is indented for its new place and written
+   * with the line ending of its new file.
+   *
+   * Every reference whose target the move changes (σ: the element and
+   * everything below it get their new FQN), and every reference written in
+   * the moved text, is written so that it links to σ of its old target at
+   * its place: its text when that still resolves, else the text with the
+   * segments up to the moved element written as its new path, else the
+   * full FQN (FR-011).  The `extend` blocks of the subtree, in every file,
+   * follow.  References that did not resolve before are left as they are
+   * (D93); every other reference must keep its target.  What LikeC4 derives
+   * from the hierarchy — `app.*`, `*` in a scoped view, implicit
+   * relationships — changes with the move, as it would by hand (D76).
+   *
+   * Rejected before anything changes, with an {@link InvalidWriteError}:
+   *  - on `fqn`: no element `fqn` is declared; a construct the library does
+   *    not model (a `global` block, an import, a dynamic-view flow block
+   *    other than `par` / `parallel`, text the parser could not recover)
+   *    writes the name of the element or of anything below it as an
+   *    identifier or a dotted segment — whatever it links to (D92, D110) —
+   *    or holds a reference into the subtree (FR-004);
+   *  - on `parent`: no element `parent` is declared; it is the element or
+   *    lies below it; the move changes neither the parent nor the file; an
+   *    element with the new FQN is already declared; the move would make a
+   *    relationship or a dynamic step join an element and its ancestor
+   *    (LikeC4: `Invalid parent-child relationship`); a deployment path
+   *    through an instance would name an element outside the instance's
+   *    element (FR-010; listed in `related`); a reference cannot be written
+   *    so that it links to its new target; another reference would link to
+   *    something else; a move to another file of text with an `icon` or a
+   *    `link` relative to its file (`./…`, `../…`; D85, D99) — on `file`
+   *    when `file` chose that file;
+   *  - on `file`: given with a parent; not a loaded file; a top-level move
+   *    into the element's own file at the top level (nothing to change).
+   *
+   * The operation is atomic in memory: when any step fails, every file is
+   * restored and the error is rethrown.
+   *
+   * @param fqn    - FQN of the element to move
+   * @param target - The new parent, or `null` and optionally the file, for the top level
+   * @returns The new FQN and the files that changed.
+   */
+  moveElement(fqn: string, target: MoveElementTarget): MoveElementResult {
+    const file = this.findFileContaining(fqn);
+    const declaration = file === null ? undefined : buildFqnIndex(this.document(file).ast).get(fqn)?.node;
+    if (file === null || !declaration?.$cstNode) {
+      throw new InvalidWriteError('fqn', `no element '${fqn}' is declared in a loaded file`);
+    }
+    const parent = target.parent;
+    if (parent !== null && target.file !== undefined) {
+      throw new InvalidWriteError('file', `'file' is accepted for a move to the top level only; under '${parent}' the element goes into the file of its declaration`);
+    }
+    if (target.file !== undefined) checkFile(target.file, this.sources.keys());
+    let destination: string;
+    if (parent !== null) {
+      if (isSameOrDescendant(parent, fqn)) {
+        throw new InvalidWriteError('parent', `'${parent}' is the element '${fqn}' or lies below it`);
+      }
+      const parentFile = this.findFileContaining(parent);
+      if (parentFile === null) throw new InvalidWriteError('parent', `no element '${parent}' is declared in a loaded file`);
+      destination = parentFile;
+    } else {
+      destination = target.file ?? file;
+    }
+    const dot = fqn.lastIndexOf('.');
+    const oldParent = dot === -1 ? null : fqn.slice(0, dot);
+    const field = parent === null && target.file !== undefined ? 'file' : 'parent';
+    if (parent === oldParent && destination === file) {
+      throw new InvalidWriteError(field, `moving '${fqn}' there changes neither its parent nor its file`);
+    }
+    const name = fqn.slice(dot + 1);
+    const newFqn = parent === null ? name : `${parent}.${name}`;
+    if (newFqn !== fqn && this.workspace.has(newFqn)) {
+      // LikeC4 reports `Duplicate element name` for two declarations of one FQN.
+      throw new InvalidWriteError(
+        field,
+        `an element '${newFqn}' is already declared${parent !== null ? ` in '${parent}'` : ' at the model root'} (in a loaded file)`,
+      );
+    }
+    if (destination !== file) {
+      const [relative] = relativeValues(declaration);
+      if (relative) {
+        throw new InvalidWriteError(
+          field,
+          `the ${relative.kind} '${relative.value}' at '${file}:${this.position(file, relative.offset).line}' is resolved relative to '${file}' ` +
+            `and would point elsewhere from '${destination}'`,
+        );
+      }
+    }
+    const elements = elementSubstitution(this.workspace, fqn, newFqn);
+    this.rejectAffectedNames(new Set([...elements.keys()].map((old) => old.slice(old.lastIndexOf('.') + 1))), 'fqn', `moving '${fqn}'`);
+    const sigma = new Substitution(elements, new Map());
+    this.rejectParentChild(sigma, field, `moving '${fqn}' to '${newFqn}'`);
+
+    // The declaration text leaves its place and is appended at the new one.
+    const source = this.document(file);
+    const moved = declarationText(source.fullText, declaration.$cstNode.offset, declaration.$cstNode.end);
+    const cut = buildRemovalEdit(source.fullText, moved.offset, moved.end);
+    const cutEdit: TextEdit = { offset: cut.offset, end: cut.end, newText: cut.newText };
+    const destinationDoc = this.document(destination);
+    const sameFile = destination === file;
+    let inserts: BodyInsertions | undefined;
+    if (parent !== null) {
+      const parentNode = buildFqnIndex(destinationDoc.ast).get(parent)!.node;
+      inserts = BodyInsertions.forDeclaration(parentNode, destinationDoc.fullText, getNodeIndent(parentNode, destinationDoc.fullText));
+    } else {
+      const placement = chooseBlockPlacement('model', this.documents, destination);
+      const block = placement.block as { $cstNode?: Parameters<typeof BodyInsertions.forBlock>[0] } | undefined;
+      if (block?.$cstNode) inserts = BodyInsertions.forBlock(block.$cstNode, destinationDoc.fullText, getNodeIndent(block, destinationDoc.fullText));
+    }
+    const edits = new Map<string, TextEdit[]>();
+    if (inserts) {
+      inserts.append(indented(moved.text, inserts.innerIndent) + '\n');
+      edits.set(destination, inserts.apply(sameFile ? [cutEdit] : []));
+    } else {
+      edits.set(destination, [blockInsertEdit('model', destinationDoc, {}, (indent) => indented(moved.text, indent))]);
+    }
+    if (!sameFile) edits.set(file, [cutEdit]);
+
+    const changedFiles = this.rewriteReferences(sigma, edits, { field, action: `moving '${fqn}' to '${newFqn}'` }, {
+      file,
+      offset: declaration.$cstNode.offset,
+      end: declaration.$cstNode.end,
+      destination,
+      fqn: newFqn,
+    });
+    return { fqn: newFqn, changedFiles };
+  }
+
+  /**
+   * Throw when σ would make a relationship or a dynamic step join an
+   * element and its ancestor (LikeC4: `Invalid parent-child relationship`):
+   * the model relationships of every file (at any nesting level and in
+   * `extend` bodies, a sourceless one starting at its owner) and the steps
+   * of dynamic views at modelled places.
+   *
+   * @throws {InvalidWriteError} on `field`
+   */
+  private rejectParentChild(sigma: Substitution, field: string, action: string): void {
+    const reject = (what: string, file: string, source: string, target: string): never => {
+      throw new InvalidWriteError(
+        field,
+        `${action} would make the ${what} '${source} -> ${target}' in '${file}' join '${sigma.element(source)}' and '${sigma.element(target)}', ` +
+          `an element and its ancestor (LikeC4: Invalid parent-child relationship)`,
+      );
+    };
+    const joins = (source: string, target: string): boolean =>
+      !isSameHierarchy(source, target) && isSameHierarchy(sigma.element(source), sigma.element(target));
+    for (const [file, doc] of this.documents) {
+      for (const relation of resolveRelations(doc.ast, this.workspace)) {
+        if (relation.resolved && joins(relation.sourceFqn, relation.targetFqn)) reject('relationship', file, relation.sourceFqn, relation.targetFqn);
+      }
+    }
+    const steps = new Map<object, CatalogueEntry[]>();
+    for (const entry of this.referenceCatalogue().entries()) {
+      const step = entry.node.$container?.$container;
+      if (entry.role !== 'step-endpoint' || !step || entry.target === undefined || !('model' in entry.target)) continue;
+      steps.set(step, [...(steps.get(step) ?? []), entry]);
+    }
+    for (const endpoints of steps.values()) {
+      for (let i = 1; i < endpoints.length; i++) {
+        const source = (endpoints[i - 1]!.target as { model: string }).model;
+        const target = (endpoints[i]!.target as { model: string }).model;
+        if (joins(source, target)) reject('step', endpoints[i]!.file, source, target);
+      }
+    }
   }
 
   /**
@@ -3194,14 +3389,22 @@ export class LikeC4Mutator {
    *  4. the stability check by the pairing rule.
    * Atomic: on any failure every file is restored and the error rethrown.
    *
+   * A move carries the references written in the moved text to another
+   * place: each is paired, in source order, with the reference at the same
+   * position of the moved declaration in the edited state, which gives its
+   * file and frames after the write, and it is written like a reference σ
+   * changes.
+   *
    * @param declarationEdits - Per file, the edits of the declaration itself
    * @param write            - The field the errors name and the write for the messages
+   * @param moved            - For a move: the declaration's range before the write and its file and FQN after it
    * @returns The files whose text changed, in load order.
    */
   private rewriteReferences(
     sigma: Substitution,
     declarationEdits: ReadonlyMap<string, readonly TextEdit[]>,
     write: { field: string; action: string },
+    moved?: { file: string; offset: number; end: number; destination: string; fqn: string },
   ): string[] {
     const catalogue = this.referenceCatalogue();
     const before = this.referenceSnapshot();
@@ -3250,7 +3453,8 @@ export class LikeC4Mutator {
       );
       texts.set(record, path.join('.'));
     }
-    const stage = (instances: boolean): PairingStage => ({ sigma, declarations: true, instances, texts });
+    const carried = new Map<ReferenceRecord, { file: string; frames: readonly string[] }>();
+    const stage = (instances: boolean): PairingStage => ({ sigma, declarations: true, instances, texts, moved: carried });
 
     const state = this.snapshot();
     try {
@@ -3260,6 +3464,20 @@ export class LikeC4Mutator {
           for (const file of this.applyEditGroups(groups)) changedFiles.add(file);
         });
       apply(edits);
+      if (moved) {
+        const declaration = buildFqnIndex(this.document(moved.destination).ast).get(moved.fqn)?.node.$cstNode;
+        if (!declaration) throw new Error(`Internal error: the moved element '${moved.fqn}' is not found in '${moved.destination}'`);
+        const inside = (records: readonly ReferenceRecord[], file: string, range: TextRange): ReferenceRecord[] =>
+          records
+            .filter((record) => record.file === file && record.offset !== undefined && record.offset >= range.offset && record.offset < range.end)
+            .sort((a, b) => a.offset! - b.offset!);
+        const olds = inside(before.records, moved.file, moved);
+        const news = inside(this.referenceSnapshot().records, moved.destination, declaration);
+        if (olds.length !== news.length) {
+          throw new Error(`Internal error: the moved text of '${moved.fqn}' holds ${news.length} references instead of ${olds.length}`);
+        }
+        olds.forEach((old, i) => carried.set(old, { file: news[i]!.file, frames: news[i]!.frames }));
+      }
       const passOf = (entry: CatalogueEntry): 'view-of' | 'model' | 'deployment' =>
         'deployment' in entry.target! ? 'deployment' : entry.role === 'view-of' ? 'view-of' : 'model';
       for (const pass of ['view-of', 'model', 'deployment'] as const) {
@@ -3270,8 +3488,8 @@ export class LikeC4Mutator {
         const passEdits = new Map<string, TextEdit[]>();
         for (const [old, now] of pairs) {
           const target = old.entry.target;
-          if (target === undefined || !sigma.changes(target) || texts.has(old) || passOf(old.entry) !== pass) continue;
-          const form = writtenForm(old.entry, catalogue, now.entry, current, sigma, fullText(target, sigma, instanceElement));
+          if (target === undefined || (!sigma.changes(target) && !carried.has(old)) || texts.has(old) || passOf(old.entry) !== pass) continue;
+          const form = writtenForm(old.entry, catalogue, now.entry, current, sigma, (t) => fullText(t, sigma, instanceElement));
           if (!form) {
             throw new InvalidWriteError(
               write.field,

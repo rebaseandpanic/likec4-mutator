@@ -17,7 +17,13 @@
  *    rewritten; its text is the text written for it, or the old one.
  *  - **Written form.**  The old text when it resolves at its place to the
  *    new target; else the text with the segments that name a renamed part
- *    replaced; else the full id of the new target; else none.
+ *    replaced — for a move, the segments up to the moved element written as
+ *    its new path; else the full id of the new target; else none.
+ *  - **Moved text.**  A moved declaration keeps its leading comments and is
+ *    written at the indentation of its new place; a value LikeC4 resolves
+ *    relative to the declaring file (an `icon` or a `link` starting with
+ *    `./` or `../`, as LikeC4 1.59.4 tells relative paths apart) pins it to
+ *    its file.
  */
 import type { CatalogueEntry, CatalogueTarget, ReferenceCatalogue } from '../query/reference-catalogue.js';
 import type { DeploymentIndex } from '../query/deployment-index.js';
@@ -139,6 +145,12 @@ export interface PairingStage {
   instances: boolean;
   /** The text written for a reference so far, by its record before the write */
   texts: ReadonlyMap<ReferenceRecord, string>;
+  /**
+   * The references written in moved declaration text, with the file and
+   * the frames they have at their new place (read from the state the
+   * declaration was written to)
+   */
+  moved?: ReadonlyMap<ReferenceRecord, { file: string; frames: readonly string[] }>;
 }
 
 /**
@@ -147,6 +159,8 @@ export interface PairingStage {
  * descriptors `stage` maps, its role and its text as written by then.
  */
 export function expectedPrefix(record: ReferenceRecord, stage: PairingStage): string {
+  const moved = stage.moved?.get(record);
+  if (moved) return referencePrefix(moved.file, moved.frames, record.role, stage.texts.get(record) ?? record.text);
   const frames = record.frames.map((frame) => {
     const hash = frame.lastIndexOf('#');
     const descriptor = frame.slice(0, hash);
@@ -189,18 +203,20 @@ export interface WrittenForm {
 }
 
 /**
- * The written form of a reference whose target σ changes (FR-011): the text
- * it has at `current` (its place in the state being rewritten) when that
- * resolves there to σ of its old target; else that text with every segment
- * that names a renamed part replaced by the new name — a segment names a
- * part when the text up to it resolves, at the reference's place before the
- * write, to an element or instance whose last segment σ changes; else the
- * full id of the new target ({@link fullText}); undefined when none of them
- * resolves there.
+ * The written form of a reference whose target σ changes, or that a move
+ * carries to another place (FR-011): the text it has at `current` (its place
+ * in the state being rewritten) when that resolves there to σ of its old
+ * target; else that text with the segments that name a renamed or moved
+ * part replaced, a segment naming a part when the text up to it resolves, at
+ * the reference's place before the write, to an element or instance σ
+ * changes — by its new name when σ changes its last segment (a rename),
+ * else, with the segments before it, by the full id of its image (a move);
+ * else the full id of the new target; undefined when none of them resolves
+ * there.
  *
- * @param before        - The reference in the catalogue before the write
- * @param current       - The same reference in `currentCatalogue`
- * @param full          - The full id of σ of the old target ({@link fullText})
+ * @param before  - The reference in the catalogue before the write
+ * @param current - The same reference in `currentCatalogue`
+ * @param fullOf  - The full id of σ of a target before the write ({@link fullText})
  */
 export function writtenForm(
   before: CatalogueEntry,
@@ -208,7 +224,7 @@ export function writtenForm(
   current: CatalogueEntry,
   currentCatalogue: ReferenceCatalogue,
   sigma: Substitution,
-  full: string,
+  fullOf: (target: CatalogueTarget) => string,
 ): WrittenForm | undefined {
   const expected = targetKey(sigma.target(before.target!));
   const resolves = (text: string): boolean => {
@@ -221,22 +237,36 @@ export function writtenForm(
   const written = writtenSegments(current.node);
   if (segments.length > 0 && written.length === segments.length) {
     const names = segments.map((segment) => segment.name);
+    const prefixes = names.map((_, i) => beforeCatalogue.resolveAt(before.place, names.slice(0, i + 1).join('.')));
     const replaced = names.map((name, i) => {
-      const prefix = beforeCatalogue.resolveAt(before.place, names.slice(0, i + 1).join('.'));
+      const prefix = prefixes[i];
       const id = prefix === undefined ? undefined : namedId(prefix);
       if (id === undefined) return name;
       const mapped = 'deployment' in prefix! && prefix.element === undefined ? sigma.deployment(id) : sigma.element(id);
       return lastSegment(mapped) === lastSegment(id) ? name : lastSegment(mapped);
     });
-    if (replaced.some((name, i) => name !== names[i]) && resolves(replaced.join('.'))) {
-      return {
-        text: replaced.join('.'),
-        edits: written.flatMap((segment, i) =>
-          replaced[i] === names[i] ? [] : [{ offset: segment.offset, end: segment.end, newText: replaced[i]! }],
-        ),
-      };
+    if (replaced.some((name, i) => name !== names[i])) {
+      if (resolves(replaced.join('.'))) {
+        return {
+          text: replaced.join('.'),
+          edits: written.flatMap((segment, i) =>
+            replaced[i] === names[i] ? [] : [{ offset: segment.offset, end: segment.end, newText: replaced[i]! }],
+          ),
+        };
+      }
+    } else {
+      // A move: the first segment whose prefix σ changes is written, with those before it, as its new path.
+      const moved = prefixes.findIndex((prefix) => prefix !== undefined && sigma.changes(prefix));
+      if (moved !== -1) {
+        const head = fullOf(prefixes[moved]!);
+        const text = [head, ...names.slice(moved + 1)].join('.');
+        if (resolves(text)) {
+          return { text, edits: [{ offset: written[0]!.offset, end: written[moved]!.end, newText: head }] };
+        }
+      }
     }
   }
+  const full = fullOf(before.target!);
   if (full !== current.text && resolves(full)) {
     return { text: full, edits: [{ offset: current.offset, end: current.end, newText: full }] };
   }
@@ -282,4 +312,91 @@ function namedId(target: CatalogueTarget): string | undefined {
 
 function lastSegment(id: string): string {
   return id.slice(id.lastIndexOf('.') + 1);
+}
+
+/** A value of a declaration that LikeC4 resolves relative to the declaring file. */
+export interface RelativeValue {
+  kind: 'icon' | 'link';
+  value: string;
+  /** Offset of the property in its file */
+  offset: number;
+}
+
+/**
+ * The `icon` and `link` values below `node` (the declaration and its whole
+ * body, nested declarations and relationships included) that start with
+ * `./` or `../`: LikeC4 resolves them against the declaring document
+ * (`ufo.isRelative` in its model parser and link provider), so they would
+ * point elsewhere from another file (D85, D99).
+ */
+export function relativeValues(node: object): RelativeValue[] {
+  const found: RelativeValue[] = [];
+  const visit = (item: { $type?: string; $cstNode?: { offset: number }; [k: string]: unknown }): void => {
+    const value = item['value'];
+    if ((item.$type === 'IconProperty' || item.$type === 'LinkProperty') && typeof value === 'string' && /^\.\.?\//.test(value)) {
+      found.push({ kind: item.$type === 'IconProperty' ? 'icon' : 'link', value, offset: item.$cstNode?.offset ?? 0 });
+    }
+    for (const [key, child] of Object.entries(item)) {
+      if (key.startsWith('$')) continue;
+      for (const next of Array.isArray(child) ? child : [child]) {
+        if (next && typeof next === 'object' && !('$refText' in next) && typeof (next as { $type?: unknown }).$type === 'string') visit(next as typeof item);
+      }
+    }
+  };
+  visit(node as Parameters<typeof visit>[0]);
+  return found;
+}
+
+/** The text of a declaration that a move carries, and the range of its file it is cut from. */
+export interface DeclarationText {
+  /** The lines, line breaks as `\n`, with the declaration's own indentation removed */
+  text: string;
+  /** Start of the cut: the first leading comment, else the declaration */
+  offset: number;
+  /** End of the cut: after a comment that ends the declaration's last line, else the declaration's end */
+  end: number;
+}
+
+/**
+ * The text a move carries for the declaration at `[offset, end)` of
+ * `fullText`: with the comment lines directly above it (no blank line
+ * between) and a comment ending its last line, when it stands on lines of
+ * its own; the declaration alone when it shares a line with other code.
+ */
+export function declarationText(fullText: string, offset: number, end: number): DeclarationText {
+  const lineStart = (at: number): number => fullText.lastIndexOf('\n', at - 1) + 1;
+  const declarationLine = lineStart(offset);
+  const nextBreak = fullText.indexOf('\n', end);
+  const lineEnd = nextBreak === -1 ? fullText.length : nextBreak;
+  const trailing = /^[ \t]*(\/\/[^\r\n]*|\/\*[^\r\n]*?\*\/[ \t]*)?\r?$/.exec(fullText.slice(end, lineEnd));
+  if (!/^[ \t]*$/.test(fullText.slice(declarationLine, offset)) || !trailing) {
+    return { text: fullText.slice(offset, end).replace(/\r\n/g, '\n'), offset, end };
+  }
+  const cutEnd = trailing[1] ? end + fullText.slice(end, lineEnd).replace(/\r$/, '').length : end;
+  let first = declarationLine;
+  while (first > 0) {
+    const previous = lineStart(first - 1);
+    const line = fullText.slice(previous, first - 1).replace(/\r$/, '');
+    if (!/^[ \t]*(\/\/|\/\*|\*)/.test(line) && !/\*\/[ \t]*$/.test(line)) break;
+    first = previous;
+  }
+  const indent = /^[ \t]*/.exec(fullText.slice(declarationLine, offset))![0];
+  const text = fullText
+    .slice(first, cutEnd)
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => {
+      const own = /^[ \t]*/.exec(line)![0];
+      return line.slice(Math.min(own.length, indent.length));
+    })
+    .join('\n');
+  return { text, offset: first + /^[ \t]*/.exec(fullText.slice(first))![0].length, end: cutEnd };
+}
+
+/** `text` (lines without their indentation) indented with `indent`; blank lines stay empty. */
+export function indented(text: string, indent: string): string {
+  return text
+    .split('\n')
+    .map((line) => (line.trim() === '' ? '' : indent + line))
+    .join('\n');
 }
