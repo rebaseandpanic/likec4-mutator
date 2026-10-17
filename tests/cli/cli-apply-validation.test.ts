@@ -453,3 +453,41 @@ describe('CLI apply addElement file rejections (row 31 of lc4m-15.30)', () => {
     expect(model).toBe(source);
   });
 });
+
+describe('CLI apply addElement into a chosen file (review fix of row 31 of lc4m-15.30)', () => {
+  // a.c4 is the default file (first in LikeC4's document order with a model block).
+  const FILES: Record<string, string> = {
+    'a.c4': 'specification {\n  element system\n}\nmodel {\n  first = system\n}\n',
+    'b.c4': 'model {\n  second = system\n}\n',
+    'c.c4': '// notes\n',
+  };
+
+  /** Run `apply --in-place` on a copy of `FILES`; exit status, stderr and the files after. */
+  function runApplyFiles(mutations: unknown[]): { status: number | null; stderr: string; files: Record<string, string> } {
+    const dir = mkdtempSync(join(tmpdir(), 'likec4-mutator-apply-file-'));
+    for (const [name, text] of Object.entries(FILES)) writeFileSync(join(dir, name), text, 'utf-8');
+    const mutationsPath = join(dir, 'mutations.json');
+    writeFileSync(mutationsPath, JSON.stringify({ mutations }), 'utf-8');
+    const result = spawnSync('npx', ['tsx', 'src/cli.ts', 'apply', '--dir', dir, '--mutations', mutationsPath, '--in-place'], {
+      cwd: PROJECT_ROOT,
+      encoding: 'utf-8',
+      timeout: 30000,
+    });
+    const files = Object.fromEntries(Object.keys(FILES).map((name) => [name, readFileSync(join(dir, name), 'utf-8')]));
+    return { status: result.status, stderr: result.stderr, files };
+  }
+
+  it.each([
+    { name: 'a file with a model block that is not the default', file: 'b.c4', expected: 'model {\n  second = system\n  added = system\n}\n' },
+    { name: 'a file without a model block', file: 'c.c4', expected: '// notes\n\nmodel {\n  added = system\n}\n' },
+  ])('writes the element into $name and changes no other file', { timeout: 60_000 }, async ({ file, expected }) => {
+    await expectValidLikeC4(FILES);
+    const result = runApplyFiles([{ op: 'addElement', kind: 'system', id: 'added', file }]);
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(Object.keys(FILES).filter((name) => result.files[name] !== FILES[name])).toEqual([file]);
+    expect(result.files[file]).toBe(expected);
+    expect(LikeC4Mutator.fromFiles(result.files).getElement('added')).toMatchObject({ fqn: 'added', kind: 'system' });
+    await expectAcceptedWrite(FILES, result.files);
+  });
+});
