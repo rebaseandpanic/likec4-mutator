@@ -457,6 +457,36 @@ describe('what counts as a leading comment (row 99)', () => {
   });
 });
 
+describe('multi-line strings in the moved text (row 99)', () => {
+  it('keeps the lines inside a multi-line string as written, so its value does not change', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `${SPEC}model {
+  app = system 'App' {
+    inner = system 'Inner' {
+      api = service 'API' {
+        description 'one
+            two'
+        summary \'\'\'
+          First
+            second
+        \'\'\'
+      }
+    }
+  }
+}
+`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.inner.api', { parent: null });
+    const after = mutator.serialize();
+    // The declaration lines move two levels out; the string lines after the first stay byte for byte.
+    expect(after['m.c4']).toContain("  api = service 'API' {\n    description 'one\n            two'\n    summary \'\'\'\n          First\n            second\n        \'\'\'\n  }\n");
+    await expectSigmaImage(before, after, { 'app.inner.api': 'api' });
+    await expectAcceptedWrite(before, after);
+  });
+});
+
 describe('references inside the moved body (row 100)', () => {
   it('keeps a relative text between two children and rewrites one that would link elsewhere', SLOW, async () => {
     const before: Files = {
