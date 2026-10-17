@@ -27,6 +27,7 @@ import {
   type TextRange,
 } from '../query/reference-snapshot.js';
 import { buildReferenceCatalogue, type ReferenceCatalogue } from '../query/reference-catalogue.js';
+import { newNameCaptures, unmodelledInventory, type UnmodelledName, type UnmodelledNameClass } from '../query/unmodelled.js';
 import { forEachElementDeclaration, resolveFqnRef } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
 import {
@@ -326,6 +327,8 @@ export class LikeC4Mutator {
   private viewReferenceResolver: ViewReferenceResolver | undefined;
   /** Reference catalogue of the current indices; dropped when they are rebuilt */
   private catalogue: ReferenceCatalogue | undefined;
+  /** Unmodelled-name inventory of the current documents; dropped when they are reparsed */
+  private unmodelled: UnmodelledName[] | undefined;
   /** Reads of the deployment model */
   private deploymentQuery: DeploymentQuery;
 
@@ -561,6 +564,13 @@ export class LikeC4Mutator {
    *
    * The file is automatically reparsed after the edit.
    *
+   * The write is rejected with an `InvalidWriteError` on `name`, with no
+   * file changed, when the new element would change what an existing
+   * reference links to, or when a construct the library does not resolve
+   * (a `global` block, an import, an opaque flow block of a dynamic view,
+   * text the parser could not recover) names the new name as a bare
+   * identifier or as the leading segment of a dotted name (FR-004, D107).
+   *
    * @param parentFqn - FQN of the parent element, or '' / null for model level
    * @param opts      - Properties for the new element
    */
@@ -590,6 +600,7 @@ export class LikeC4Mutator {
         `an element '${fqn}' is already declared${parentFqn ? ` in '${parentFqn}'` : ' at the model root'} (in a loaded file)`,
       );
     }
+    this.rejectCapturedName(opts.name, 'element', 'name', `an element named '${opts.name}'`);
 
     const doc = this.documents.get(filename);
     if (!doc) throw new Error(`Internal error: document for '${filename}' not found in cache`);
@@ -1020,7 +1031,9 @@ export class LikeC4Mutator {
    *
    * The write is rejected, with no file changed, when:
    *  - `id` is not one identifier, is reserved, or is already declared in a
-   *    loaded file — field `id`;
+   *    loaded file, or a construct the library does not resolve (a `global`
+   *    block, an opaque flow block, text the parser could not recover)
+   *    names it as a bare view reference (FR-004, D107) — field `id`;
    *  - `target` is not an element reference, or does not resolve in the
    *    chosen file — `target`;
    *  - `extends` is given together with `target`, on a dynamic or deployment
@@ -1047,6 +1060,7 @@ export class LikeC4Mutator {
       // project, whatever their types (`viewChecks`).
       throw new InvalidWriteError('id', `a view '${opts.id}' is already declared (in a loaded file)`);
     }
+    this.rejectCapturedName(opts.id, 'view', 'id', `a view '${opts.id}'`);
     const target = opts.type === 'element' && opts.target !== undefined && opts.target !== '' ? opts.target : undefined;
     if (target !== undefined) checkReferenceForm(target, 'target');
     const parentId = opts.extends !== undefined && opts.extends !== '' ? opts.extends : undefined;
@@ -1614,8 +1628,11 @@ export class LikeC4Mutator {
    *    once — `parent`;
    *  - `file` is given for a child node, or is not a loaded file — `file`;
    *  - the new node would change what an existing reference links to (a
-   *    deployment relationship endpoint, a deployment view rule, ...) —
-   *    `name`.
+   *    deployment relationship endpoint, a deployment view rule, ...), or a
+   *    construct the library does not resolve (a `global` block, an import,
+   *    an opaque flow block, text the parser could not recover) names its
+   *    name as a bare identifier or the leading segment of a dotted name
+   *    (FR-004, D107) — `name`.
    *
    * @param parentId - Deployment id of the parent node, or null for a root node
    * @param opts     - Name, kind and properties of the new node
@@ -1640,6 +1657,7 @@ export class LikeC4Mutator {
       // anywhere in the project.
       throw new InvalidWriteError('name', `a node or instance '${id}' is already declared (in a loaded file)`);
     }
+    this.rejectCapturedName(opts.name, 'element', 'name', `a deployment node named '${opts.name}'`);
 
     const { file: _file, ...props } = opts;
     const snippet = (indent: string): string => generateDeploymentNode({ indent, ...props });
@@ -1822,8 +1840,12 @@ export class LikeC4Mutator {
    *  - a node or instance of any loaded file already has the new id
    *    (children declared in `extend` blocks included) — `name`;
    *  - the new instance would change what an existing reference links to (a
-   *    deployment relationship endpoint, a deployment view rule, ...) —
-   *    `name`.
+   *    deployment relationship endpoint, a deployment view rule, ...), or a
+   *    construct the library does not resolve (a `global` block, an import,
+   *    an opaque flow block, text the parser could not recover) names its
+   *    id's last segment — the given name or the one taken from `element` —
+   *    as a bare identifier or the leading segment of a dotted name (FR-004,
+   *    D107) — `name`.
    *
    * @param nodeId - Deployment id of the node the instance is deployed in
    * @param opts   - Element, name and properties of the new instance
@@ -1865,6 +1887,7 @@ export class LikeC4Mutator {
           : `a node or instance '${id}' is already declared (in a loaded file)`,
       );
     }
+    this.rejectCapturedName(name, 'element', 'name', `an instance named '${name}'`);
 
     const { file: _file, ...props } = opts;
     const doc = this.document(node.file);
@@ -2308,6 +2331,7 @@ export class LikeC4Mutator {
     this.views = new ViewIndex(documents);
     this.viewReferenceResolver = undefined;
     this.catalogue = undefined;
+    this.unmodelled = undefined;
     this.queries = new Map();
     for (const [filename, doc] of this.documents) {
       this.queries.set(filename, new C4Query(doc.ast, this.workspace));
@@ -2589,6 +2613,28 @@ export class LikeC4Mutator {
    */
   private referenceSnapshot(removed?: ReadonlySet<object>): ReferenceSnapshot {
     return takeReferenceSnapshot(this.referenceCatalogue(), this.deployments, removed);
+  }
+
+  /**
+   * Throw when a construct the library does not resolve names `name`, the
+   * new name of an addition of class `nameClass`, as a bare identifier or the
+   * leading segment of a dotted name (new mode of the unmodelled-name
+   * inventory; FR-004, D101, D107): the new declaration would capture that
+   * reference, and the library could neither check nor rewrite it.
+   *
+   * @param field   - The field the error names
+   * @param subject - The declaration for the message, e.g. `an element named 'api'`
+   * @throws {InvalidWriteError} on `field`
+   */
+  private rejectCapturedName(name: string, nameClass: UnmodelledNameClass, field: string, subject: string): void {
+    this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
+    const [hit] = newNameCaptures(this.unmodelled, name, nameClass);
+    if (!hit) return;
+    throw new InvalidWriteError(
+      field,
+      `${subject} would capture the reference '${hit.segments.map((segment) => segment.name).join('.')}' at '${hit.file}:${hit.line}', ` +
+        `written where the library does not resolve references (a global block, an import, an opaque flow block or unparsed text)`,
+    );
   }
 
   /** The reference catalogue of the current indices, built on first use. */

@@ -324,6 +324,18 @@ interface ReferenceContext {
   containers: ViewAstNode[];
 }
 
+/**
+ * Whether `node` opens an unmodelled place — the unmodelled boundary of
+ * lc4m-15.30: a `SubflowStep` whose kind is not `par` or `parallel`, an
+ * `AltSteps`, a `TryBlock`, `CatchBlock` or `FinallyBlock`, a `Globals`
+ * block or an `ImportsFromPoject`.  What it holds is never cascaded,
+ * rewritten or counted as content.
+ */
+export function isUnmodelledPlace(node: { $type?: string; [k: string]: unknown }): boolean {
+  const type = node.$type ?? '';
+  return (type === 'SubflowStep' && !MODELLED_FLOWS.has(String(node['kind']))) || UNMODELLED_TYPES.has(type);
+}
+
 /** The context of the reference `node`: one walk up its containers. */
 function contextOf(node: ViewAstNode, declarations: ReadonlyMap<object, ViewDeclaration>): ReferenceContext {
   const context: ReferenceContext = {
@@ -339,8 +351,7 @@ function contextOf(node: ViewAstNode, declarations: ReadonlyMap<object, ViewDecl
   let inBody = false;
   for (let child = node, up = node.$container; up; child = up, up = up.$container) {
     const type = up.$type ?? '';
-    if (type === 'SubflowStep' && !MODELLED_FLOWS.has(String(up['kind']))) context.unmodelled = true;
-    if (UNMODELLED_TYPES.has(type)) {
+    if (isUnmodelledPlace(up)) {
       context.unmodelled = true;
       if (type === 'Globals' || type === 'ImportsFromPoject') context.global = true;
     }
