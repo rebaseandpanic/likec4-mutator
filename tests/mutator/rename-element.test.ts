@@ -388,6 +388,33 @@ model {
   });
 });
 
+describe('the same text in two views (row 81)', () => {
+  it('rewrites the reference of the view whose target is renamed and keeps the other view byte-equal', SLOW, async () => {
+    const MODEL = `${SPEC}model {
+  app = system 'App' {
+    api = service 'API'
+  }
+  other = system 'Other' {
+    api = service 'Other API'
+  }
+}
+`;
+    const before: Files = { 'm.c4': `${MODEL}views {\n  view a of app {\n    include api\n  }\n  view b of other {\n    include api\n  }\n}\n` };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.renameElement('app.api', 'gateway');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      replaced(before['m.c4']!, [
+        ["    api = service 'API'\n", "    gateway = service 'API'\n"],
+        ['  view a of app {\n    include api\n', '  view a of app {\n    include gateway\n'],
+      ]),
+    );
+    await expectSigmaImage(before, after, { 'app.api': 'app.gateway' });
+    await expectAcceptedWrite(before, after);
+  });
+});
+
 describe('references paired by view (row 81)', () => {
   it('SIG tells apart two views whose references swap targets, which a multiset of targets does not', SLOW, async () => {
     const MODEL = `${SPEC}model {
