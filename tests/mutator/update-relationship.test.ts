@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { LikeC4Mutator, RelationshipAmbiguityError } from '../../src/mutator/mutator.js';
+import { InvalidWriteError } from '../../src/mutator/write-checks.js';
 
 const baseSource = `specification {
   element service
@@ -80,9 +81,23 @@ views {
 }
 `;
     const m = newMutator(ambiguous);
-    expect(() => m.updateRelationship({ source: 'a', target: 'b' }, { description: 'x' })).toThrow(
-      /Multiple relationships match/,
-    );
+    const before = { files: m.serialize(), relationships: m.getRelationships() };
+    let error: unknown;
+    try {
+      m.updateRelationship({ source: 'a', target: 'b' }, { description: 'x' });
+    } catch (err) {
+      error = err;
+    }
+    // lc4m-15.30, D87: ambiguity is an InvalidWriteError listing every candidate with its 1-based position.
+    expect(error).toBeInstanceOf(RelationshipAmbiguityError);
+    expect(error).toBeInstanceOf(InvalidWriteError);
+    expect((error as RelationshipAmbiguityError).field).toBe('source');
+    expect((error as RelationshipAmbiguityError).candidates).toEqual([
+      { file: 'model.c4', line: 7, column: 3, title: 'first', bidirectional: false },
+      { file: 'model.c4', line: 8, column: 3, title: 'second', bidirectional: false },
+    ]);
+    expect(m.serialize()).toEqual(before.files);
+    expect(m.getRelationships()).toEqual(before.relationships);
   });
 
   it('disambiguates via matchTitle', () => {

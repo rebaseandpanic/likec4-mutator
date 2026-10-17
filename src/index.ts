@@ -59,6 +59,7 @@ export type { DeploymentTarget, LinkedTarget } from './query/deployment-resolver
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';
 export { InvalidWriteError } from './mutator/write-checks.js';
+export { RelationshipAmbiguityError } from './mutator/relationship-selector.js';
 export type { ViewRuleText } from './mutator/write-checks.js';
 export type {
   AddDeploymentExtendOpts,
@@ -77,6 +78,10 @@ export type {
   RemoveDeploymentNodeResult,
   RemoveDeploymentRelationshipResult,
   RemoveElementResult,
+  RemoveRelationshipResult,
+  RelationshipCandidate,
+  RelationshipPosition,
+  RelationshipSelector,
   UpdateDeploymentInstancePatch,
   UpdateDeploymentInstanceResult,
   UpdateDeploymentNodePatch,

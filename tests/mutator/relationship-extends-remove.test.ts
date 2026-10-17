@@ -75,7 +75,8 @@ describe('removeRelationship removes the extend blocks of the relationship', () 
   it('removes the blocks that applied only to the removed relationship', async () => {
     const m = LikeC4Mutator.fromFiles(FILES);
     expect(await diagnostics(FILES)).toEqual([]);
-    m.removeRelationship('x', 'y');
+    // `x -> y 'inner'` also matches the endpoints: the relationship is selected by its title (lc4m-15.30, D70).
+    m.removeRelationship({ source: 'x', target: 'y', matchTitle: 'reads' });
     expect(m.serialize()['ext.c4']).toBe(without(EXT, "extend x -> y 'reads'"));
     expect(await diagnostics(m.serialize())).toEqual([]);
   });
@@ -86,7 +87,9 @@ describe('removeRelationship removes the extend blocks of the relationship', () 
       'ext.c4': 'model {\n  extend x -> y {\n    #a\n  }\n}\n',
     };
     const m = LikeC4Mutator.fromFiles(files);
-    m.removeRelationship('x', 'y');
+    // The two relationships are identical: the first is selected by its position (lc4m-15.30, D81).
+    m.removeRelationship({ source: 'x', target: 'y', position: { file: 'base.c4', line: 9, column: 3 } });
+    expect(m.serialize()['base.c4']).toBe(`${SPEC}model {\n  x = service\n  y = service\n  x -> y\n}\n`);
     expect(m.serialize()['ext.c4']).toBe(files['ext.c4']);
     expect(m.getRelationships()[0].tags).toEqual(['a']);
   });

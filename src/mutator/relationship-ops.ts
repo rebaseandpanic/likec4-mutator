@@ -182,13 +182,19 @@ export interface UpdateRelationshipPatch {
  * @returns A list of TextEdits — empty when no patch field actually produces a
  *          change (e.g. tags === [] for a relation that has no tags).
  */
-export function updateRelationshipEdit(
-  doc: ParsedDocument,
-  matcher: UpdateRelationshipMatcher,
-  patch: UpdateRelationshipPatch,
-  workspace?: WorkspaceIndex,
-): TextEdit[] {
-  // Empty-patch guard.
+/**
+ * Build the TextEdits that apply `patch` to the selected relation `node` of
+ * `doc` (see {@link relationPatchEdits}), after the checks of
+ * {@link updateRelationshipEdit}: a patch without any field is
+ * `nothing to update`, an empty metadata array is rejected.
+ */
+export function selectedRelationshipPatchEdits(doc: ParsedDocument, node: unknown, patch: UpdateRelationshipPatch): TextEdit[] {
+  checkRelationshipPatch(patch);
+  return relationPatchEdits(node as RelationAstNode, doc.fullText, patch, { inlineStrings: 'rewrite' });
+}
+
+/** Throw `nothing to update` for a patch without any field, and for an empty metadata array. */
+function checkRelationshipPatch(patch: UpdateRelationshipPatch): void {
   const hasAny =
     patch.label !== undefined ||
     patch.description !== undefined ||
@@ -200,8 +206,6 @@ export function updateRelationshipEdit(
   if (!hasAny) {
     throw new Error('nothing to update');
   }
-
-  // Validate metadata empty-array up-front.
   if (patch.metadata) {
     for (const [k, v] of Object.entries(patch.metadata)) {
       if (Array.isArray(v) && v.length === 0) {
@@ -211,6 +215,15 @@ export function updateRelationshipEdit(
       }
     }
   }
+}
+
+export function updateRelationshipEdit(
+  doc: ParsedDocument,
+  matcher: UpdateRelationshipMatcher,
+  patch: UpdateRelationshipPatch,
+  workspace?: WorkspaceIndex,
+): TextEdit[] {
+  checkRelationshipPatch(patch);
 
   const { ast, fullText } = doc;
 
@@ -390,28 +403,34 @@ export interface RelationAstNode {
  * `api -> db` written inside `app { ... }`).  `byText` holds relations whose
  * endpoints, as written in the source, equal the matcher — the pre-resolution
  * behaviour, kept so that callers addressing a relation by its local
- * reference text (`api -> db`) still find it.  `matchKind` / `matchTitle`
- * filter both lists.
+ * reference text (`api -> db`) still find it.  A bidirectional relationship
+ * matches its endpoints in either order.  `matchKind` / `matchTitle` /
+ * `matchBidirectional` filter both lists.
  *
  * @param workspace - Index of all documents of the project (defaults to an
  *                    index of `ast` alone)
  */
 export function findMatchingRelations(
   ast: unknown,
-  matcher: UpdateRelationshipMatcher,
+  matcher: UpdateRelationshipMatcher & { matchBidirectional?: boolean },
   workspace?: WorkspaceIndex,
 ): { byFqn: ResolvedRelation[]; byText: ResolvedRelation[] } {
   const docAst = ast as { models?: Array<{ elements?: unknown[] }> };
   const resolved = resolveRelations(docAst, workspace ?? new WorkspaceIndex([docAst]));
   const byFqn: ResolvedRelation[] = [];
   const byText: ResolvedRelation[] = [];
+  const endpoints = (source: string, target: string, bidirectional: boolean): boolean =>
+    (source === matcher.source && target === matcher.target) ||
+    (bidirectional && source === matcher.target && target === matcher.source);
   for (const rel of resolved) {
-    const r = rel.node as RelationAstNode;
+    const r = rel.node as RelationAstNode & { isBidirectional?: boolean };
+    const bidirectional = r.isBidirectional === true;
     if (matcher.matchKind !== undefined && relationKind(r) !== matcher.matchKind) continue;
     if (matcher.matchTitle !== undefined && r.title !== matcher.matchTitle) continue;
-    if (rel.sourceFqn === matcher.source && rel.targetFqn === matcher.target) {
+    if (matcher.matchBidirectional !== undefined && bidirectional !== matcher.matchBidirectional) continue;
+    if (endpoints(rel.sourceFqn, rel.targetFqn, bidirectional)) {
       byFqn.push(rel);
-    } else if (rel.sourceText === matcher.source && rel.targetText === matcher.target) {
+    } else if (endpoints(rel.sourceText, rel.targetText, bidirectional)) {
       byText.push(rel);
     }
   }

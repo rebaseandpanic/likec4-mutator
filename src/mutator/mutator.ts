@@ -115,17 +115,21 @@ import {
 } from './deployment-ops.js';
 import {
   addRelationshipEdit,
-  removeRelationshipEdit,
   removeRelationNodeEdit,
-  updateRelationshipEdit,
-  findMatchingRelations,
-  matchResolvedRelations,
+  selectedRelationshipPatchEdits,
   buildExtendRelationTitleEdit,
-  formatNotFoundError,
   relationPatchEdits,
   type UpdateRelationshipMatcher,
   type UpdateRelationshipPatch,
 } from './relationship-ops.js';
+import {
+  RelationshipAmbiguityError,
+  selectRelationship,
+  type RelationshipCandidate,
+  type RelationshipPosition,
+  type RelationshipSelector,
+  type SelectedRelationship,
+} from './relationship-selector.js';
 import {
   addViewEdit,
   addViewRuleEdits,
@@ -182,6 +186,14 @@ export type { AddDeploymentExtendOpts, DeploymentExtendSelector };
 export type { ElementStyle };
 export type { RelationshipStyle };
 export type { UpdateRelationshipMatcher, UpdateRelationshipPatch };
+export type { RelationshipCandidate, RelationshipPosition, RelationshipSelector };
+export { RelationshipAmbiguityError };
+
+/** Result of {@link LikeC4Mutator.removeRelationship}. */
+export interface RemoveRelationshipResult {
+  /** Files whose text changed, in load order: the relationship's, and those of removed orphaned `extend` blocks */
+  changedFiles: string[];
+}
 
 /**
  * Options of {@link LikeC4Mutator.addView}: the view fields of the code
@@ -879,31 +891,22 @@ export class LikeC4Mutator {
    * reported by {@link validate}).  The operation is atomic in memory: when
    * any step fails, every file is restored and the error is rethrown.
    *
-   * @param matcher - Source/target plus optional matchKind/matchTitle disambiguators
-   * @param patch   - Update payload (at least one field must be specified)
+   * The relationship is the one `selector` addresses (see
+   * {@link selectRelationship}): no match is an `InvalidWriteError` on
+   * `source` (on `position` when a position is given); more than one is a
+   * {@link RelationshipAmbiguityError} on `source` listing every candidate
+   * with its 1-based position, which selects it when passed back.
+   *
+   * @param selector - Source/target plus optional matchKind, matchTitle, matchBidirectional and position
+   * @param patch    - Update payload (at least one field must be specified)
    * @returns The files that changed.
    */
-  updateRelationship(matcher: UpdateRelationshipMatcher, patch: UpdateRelationshipPatch): UpdateRelationshipResult {
+  updateRelationship(selector: RelationshipSelector, patch: UpdateRelationshipPatch): UpdateRelationshipResult {
     checkTags(patch.tags, this.workspace);
     checkStyle(patch.style, 'relationship', this.workspace);
-    const matches = this.locateRelations(matcher);
-    if (matches.length === 0) {
-      throw new Error(formatNotFoundError(matcher));
-    }
-    if (matches.length > 1) {
-      const fileList = [...new Set(matches)].join(', ');
-      throw new Error(
-        `Multiple relationships match (${matches.length} found across files: ${fileList}). ` +
-          `Specify matchKind and/or matchTitle to disambiguate.`,
-      );
-    }
-
-    const filename = matches[0];
+    const { file: filename, relation } = this.selectRelationship(selector);
     const doc = this.document(filename);
-    // Validates the patch and selects exactly one relationship in `doc`.
-    const relationEdits = updateRelationshipEdit(doc, matcher, patch, this.workspace);
-    const [relation] = matchResolvedRelations(doc.ast, matcher, this.workspace);
-    if (!relation) throw new Error(formatNotFoundError(matcher));
+    const relationEdits = selectedRelationshipPatchEdits(doc, relation.node, patch);
 
     const clearing = {
       tags: patch.tags !== undefined,
@@ -978,13 +981,18 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Remove a relationship matching the given source and target identifiers.
+   * Remove the relationship `selector` addresses (see
+   * {@link selectRelationship}); `removeRelationship(source, target)` is the
+   * selector with endpoints only.
    *
    * Endpoints are compared as absolute FQNs (`app.api` matches `api` written
-   * inside `app { ... }`).  When no relationship matches by FQN, the reference
-   * text as written in the source is compared instead.  Every loaded file is
-   * searched; when several relationships match, the first one in file order
-   * is removed.
+   * inside `app { ... }`), a bidirectional relationship in either order; when
+   * no relationship matches by FQN, the reference text as written is compared
+   * instead.  Every loaded file is searched.  No match is an
+   * `InvalidWriteError` on `source` (on `position` when a position is
+   * given); more than one is a {@link RelationshipAmbiguityError} on `source`
+   * listing every candidate with its 1-based position, which selects it when
+   * passed back (D70, D81, D87).  Both leave every file unchanged.
    *
    * `extend a -> b { ... }` blocks that applied to the removed relationship
    * and apply to no remaining one are removed too, in every loaded file: they
@@ -992,17 +1000,20 @@ export class LikeC4Mutator {
    * Blocks that matched nothing before are left alone.  The operation is
    * atomic: when any step fails, no file is changed.
    *
+   * @returns The files that changed, in load order.
+   */
+  removeRelationship(selector: RelationshipSelector): RemoveRelationshipResult;
+  /**
    * @param source - Source FQN (or reference text as written)
    * @param target - Target FQN (or reference text as written)
    */
-  removeRelationship(source: string, target: string): void {
-    const [filename] = this.locateRelations({ source, target });
-    if (!filename) throw new Error(`Relationship '${source} -> ${target}' not found`);
-
-    const doc = this.document(filename);
-    const edit = removeRelationshipEdit(doc, source, target, this.workspace);
-    const [removed] = matchResolvedRelations(doc.ast, { source, target }, this.workspace);
-    const keys = this.relationKeys((rel) => rel.node === removed?.node);
+  removeRelationship(source: string, target: string): RemoveRelationshipResult;
+  removeRelationship(selectorOrSource: RelationshipSelector | string, target?: string): RemoveRelationshipResult {
+    const selector: RelationshipSelector =
+      typeof selectorOrSource === 'string' ? { source: selectorOrSource, target: target ?? '' } : selectorOrSource;
+    const { file: filename, relation } = this.selectRelationship(selector);
+    const edit = removeRelationNodeEdit(this.document(filename).fullText, relation.node);
+    const keys = this.relationKeys((rel) => rel.node === relation.node);
 
     const snapshot = this.snapshot();
     try {
@@ -1012,6 +1023,7 @@ export class LikeC4Mutator {
       this.restore(snapshot);
       throw err;
     }
+    return { changedFiles: [...this.sources].filter(([file, text]) => snapshot.sources.get(file) !== text).map(([file]) => file) };
   }
 
   /**
@@ -2366,15 +2378,20 @@ export class LikeC4Mutator {
    * edit builders apply, so the file chosen here holds the relation they
    * select.
    */
-  private locateRelations(matcher: UpdateRelationshipMatcher): string[] {
-    const byFqn: string[] = [];
-    const byText: string[] = [];
-    for (const [filename, doc] of this.documents) {
-      const found = findMatchingRelations(doc.ast, matcher, this.workspace);
-      for (let i = 0; i < found.byFqn.length; i++) byFqn.push(filename);
-      for (let i = 0; i < found.byText.length; i++) byText.push(filename);
-    }
-    return byFqn.length > 0 ? byFqn : byText;
+  /**
+   * The one model relationship `selector` addresses, searched in every loaded
+   * file in LikeC4's document order (see `selectRelationship` of
+   * `relationship-selector.ts`).
+   *
+   * @throws {InvalidWriteError} when nothing matches
+   * @throws {RelationshipAmbiguityError} when more than one relationship matches
+   */
+  private selectRelationship(selector: RelationshipSelector): SelectedRelationship {
+    const documents = this.views.documents.map(({ file }) => {
+      if (file === undefined) throw new Error('Internal error: a loaded document has no file name');
+      return { file, doc: this.document(file) };
+    });
+    return selectRelationship(documents, selector, this.workspace);
   }
 
   /**
