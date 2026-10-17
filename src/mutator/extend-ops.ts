@@ -75,14 +75,14 @@ export function generateElementExtend(indent: string, fqn: string, contributions
 
 /**
  * The header of an `extend` block of the relationships of `identity`:
- * the endpoints as absolute FQNs, the connector — `-[kind]->` with the
- * kind, `->` without, `<->` for a bidirectional relationship, which
- * LikeC4 1.59.4's grammar writes without a kind — and the title when there
- * is one.
+ * the endpoints as absolute FQNs, the bracket connector of LikeC4's
+ * `RelationConnector` carrying the kind and the direction — `-[kind]->`,
+ * `-[kind]<->`, or `->` / `<->` without a kind — and the title when there
+ * is one.  LikeC4 matches the block by all of them.
  */
 export function relationExtendHeader(identity: RelationIdentity): string {
   const kind = identity.kind;
-  const arrow = identity.isBidirectional ? '<->' : kind ? `-[${kind}]->` : '->';
+  const arrow = kind ? `-[${kind}]${identity.isBidirectional ? '<->' : '->'}` : identity.isBidirectional ? '<->' : '->';
   return `${identity.sourceFqn} ${arrow} ${identity.targetFqn}${identity.title !== '' ? ` '${escapeString(identity.title)}'` : ''}`;
 }
 
