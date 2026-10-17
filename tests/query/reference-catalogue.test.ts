@@ -3,7 +3,9 @@
  * linker (rows 2–4 of lc4m-15.30): every FR-001 role is present, the
  * catalogue equals `linkedCatalogueReferences` one to one on
  * (file, offset, role, text, target, unmodelled), resolved and unresolved,
- * and text the parser could not recover stays outside both.
+ * and text the parser could not recover stays outside both.  The place
+ * resolver (`resolveAt`) links a text written at an entry's place as LikeC4
+ * links it there (row 77).
  *
  * FX are the reference fixtures `refs-catalog`, `refs-flows` and
  * `refs-import` (D116, D118); each gets an unresolved copy in which a few
@@ -19,7 +21,7 @@ import { CstUtils } from 'langium';
 import { describe, expect, it } from 'vitest';
 import { C4Parser } from '../../src/parser/parser.js';
 import { DeploymentIndex } from '../../src/query/deployment-index.js';
-import { buildReferenceCatalogue, type CatalogueEntry } from '../../src/query/reference-catalogue.js';
+import { buildReferenceCatalogue, type CatalogueEntry, type ReferenceCatalogue } from '../../src/query/reference-catalogue.js';
 import { ViewIndex } from '../../src/query/view-index.js';
 import { WorkspaceIndex } from '../../src/query/workspace-index.js';
 import {
@@ -349,6 +351,97 @@ views {
     expect(expected.length).toBeGreaterThan(0);
     expect(catalogue(workspace.files).map(tuple).sort()).toEqual(expected);
   });
+});
+
+describe('resolveAt agrees with LikeC4 at every place kind (row 77)', () => {
+  /** The catalogue of `workspace`, parsed standalone. */
+  const built = (workspace: Workspace): ReferenceCatalogue => {
+    const documents = Object.entries(workspace.files).map(([file, source]) => ({ file, ast: new C4Parser().parse(source).ast }));
+    return buildReferenceCatalogue(new WorkspaceIndex(documents), new DeploymentIndex(documents), new ViewIndex(documents));
+  };
+  /** A written reference text as a plain dotted name: whitespace and comments after a dot removed. */
+  const plain = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '').replace(/\s+/g, '');
+  /** The kind of place an entry is written at: its role and the construct whose scopes enclose it. */
+  const placeKind = (entry: CatalogueEntry): string => {
+    for (let up = entry.node.$container; up; up = up.$container) {
+      if (PLACE_CONSTRUCTS.has(up.$type ?? '')) return `${entry.role} in ${up.$type}`;
+    }
+    return entry.role;
+  };
+  const PLACE_CONSTRUCTS: ReadonlySet<string> = new Set([
+    'Element',
+    'ExtendElement',
+    'Model',
+    'DeployedInstance',
+    'DeploymentNode',
+    'ExtendDeployment',
+    'ModelDeployments',
+    'ElementView',
+    'DynamicView',
+    'DeploymentView',
+    'Globals',
+    'ModelViews',
+    'ImportsFromPoject',
+  ]);
+
+  it.each([...FX, ...UNRESOLVED].map((workspace) => [workspace.name, workspace] as const))(
+    'resolves the text of every entry of %s to its target',
+    (_, workspace) => {
+      const catalogue = built(workspace);
+      expect(catalogue.entries().length).toBeGreaterThan(0);
+      const differing = catalogue
+        .entries()
+        .filter((entry) => JSON.stringify(catalogue.resolveAt(entry.place, plain(entry.text)) ?? null) !== JSON.stringify(entry.target ?? null))
+        .map((entry) => `${entry.file}:${entry.line} ${entry.role} '${entry.text}'`);
+      expect(differing).toEqual([]);
+    },
+  );
+
+  /**
+   * One entry per place kind whose target is an element, a node or an
+   * instance, with the bare name, the last two segments and the full id of
+   * its target as alternative texts.
+   */
+  const ALTERNATIVES = FX.flatMap((workspace) => {
+    const seen = new Set<string>();
+    const catalogue = built(workspace);
+    return catalogue
+      .entries()
+      .flatMap((entry) => {
+        const target = entry.target;
+        if (target === undefined || 'view' in target) return [];
+        const kind = placeKind(entry);
+        if (seen.has(kind)) return [];
+        seen.add(kind);
+        const id = 'model' in target ? target.model : target.element !== undefined ? `${target.deployment}.${target.element.split('.').pop()}` : target.deployment;
+        const segments = id.split('.');
+        const texts = [...new Set([segments.at(-1)!, segments.slice(-2).join('.'), id])];
+        return texts.map((text) => [kind, text, workspace, catalogue, entry] as const);
+      });
+  });
+
+  it('covers every place kind of the fixtures', () => {
+    const kinds = new Set(ALTERNATIVES.map(([kind]) => kind));
+    // P: the roles with element, node or instance targets are all there.
+    for (const role of ROLES.filter((role) => !['navigate-to', 'view-extends'].includes(role))) {
+      expect([...kinds].some((kind) => kind.startsWith(`${role} `) || kind === role), role).toBe(true);
+    }
+    expect(kinds.size).toBeGreaterThan(ROLES.length);
+  });
+
+  it.each(ALTERNATIVES)(
+    'resolves %s written as %s as LikeC4 links it there',
+    async (_, text, workspace, catalogue, entry) => {
+      const source = workspace.files[entry.file]!;
+      const copy = { ...workspace.files, [entry.file]: source.slice(0, entry.offset) + text + source.slice(entry.end) };
+      const linked = (await linkedCatalogueReferences(copy, workspace.projects ? { projects: workspace.projects } : {})).filter(
+        (r) => r.file === entry.file && r.offset === entry.offset,
+      );
+      expect(linked.map((r) => r.text)).toEqual([text]);
+      expect(catalogue.resolveAt(entry.place, text) ?? null).toEqual(linked[0]!.target);
+    },
+    60_000,
+  );
 });
 
 /**
