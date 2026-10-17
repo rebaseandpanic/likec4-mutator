@@ -22,7 +22,9 @@ import {
 import { DeploymentResolver } from '../query/deployment-resolver.js';
 import {
   compareReferenceSnapshots,
+  pairReferenceSnapshots,
   takeReferenceSnapshot,
+  type ReferenceRecord,
   type ReferenceSnapshot,
   type TextRange,
 } from '../query/reference-snapshot.js';
@@ -30,6 +32,7 @@ import { buildReferenceCatalogue, type CatalogueEntry, type CatalogueRole, type 
 import { affectedNameHits, newNameCaptures, unmodelledInventory, type UnmodelledName, type UnmodelledNameClass } from '../query/unmodelled.js';
 import { buildFqnIndex, forEachElementDeclaration, readStrictFqnRef, resolveFqnRef } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
+import { GrammarUtils } from 'langium';
 import {
   WorkspaceIndex,
   resolveReferenceText,
@@ -38,6 +41,16 @@ import {
   type ResolvedRelation,
 } from '../query/workspace-index.js';
 import { buildRemovalEdit, removalEditsForRanges } from './cst-helpers.js';
+import {
+  elementSubstitution,
+  expectedPrefix,
+  fullText,
+  renamedInstances,
+  Substitution,
+  writtenForm,
+  writtenSegments,
+  type PairingStage,
+} from './rename-ops.js';
 import { relationFingerprint, relationIdentity, type RelationIdentity } from '../query/relation-extends.js';
 import { removeIndent } from '../query/likec4-text.js';
 import { readContribution, type Decorations } from '../query/extend-merge.js';
@@ -162,6 +175,7 @@ import { planCascade, planNavigateToCascade, type CascadePlan } from './cascade-
 import {
   InvalidWriteError,
   ReferencedRemovalError,
+  type RelatedConstruct,
   type RemovalReference,
   checkAutoLayout,
   checkElementName,
@@ -227,6 +241,19 @@ export interface RemoveElementResult {
    * before the write.  Absent without `cascade`.
    */
   cascaded?: CascadedReference[];
+}
+
+/** Result of {@link LikeC4Mutator.renameElement}. */
+export interface RenameElementResult {
+  /** The element's FQN after the write */
+  fqn: string;
+  /**
+   * Files whose text changed, without duplicates, in the order the files
+   * were loaded: the file of the declaration and every file with a
+   * rewritten reference.  Describes the in-memory state: nothing is written
+   * to disk.
+   */
+  changedFiles: string[];
 }
 
 /** A reference a cascade removed with its construct; positions are 1-based, in the state before the write. */
@@ -873,6 +900,84 @@ export class LikeC4Mutator {
       ...(policy.deploymentRelationships.length > 0 && { removedDeploymentRelationships: policy.deploymentRelationships }),
       cascaded: policy.cascaded,
     };
+  }
+
+  /**
+   * Rename the element `fqn` to `newName` in place (lc4m-15.30 US-3): the
+   * name token of its declaration is replaced — in `name = kind` and in
+   * `kind name` form alike — and so is every reference whose target the
+   * rename changes, in every file (σ, FR-010): the element and every
+   * element below it get the new FQN, and an instance written without a
+   * name (`instanceOf a.b`), which LikeC4 names after the element, gets the
+   * new id, with the deployment paths under it (D97).
+   *
+   * A rewritten reference keeps its text when that still resolves to the
+   * new target at its place; else the segments that name the renamed
+   * element (or such an instance) are replaced, keeping any selector suffix
+   * (`api.*` → `gateway.*`); else the full FQN or id is written (FR-011).
+   * References that did not resolve before are left as they are (D93).
+   * Every other reference must keep resolving to what it resolved to.
+   *
+   * Rejected before anything changes, with an {@link InvalidWriteError}:
+   *  - on `fqn`: no element `fqn` is declared; a construct the library does
+   *    not model (a `global` block, an import, a dynamic-view flow block
+   *    other than `par` / `parallel`, text the parser could not recover)
+   *    names the old name as an identifier or a dotted segment, or holds a
+   *    reference into the element's subtree (FR-004, D92);
+   *  - on `newName`: it is not a valid element name; an element of that
+   *    FQN is already declared; a construct the library does not model
+   *    names it as a bare identifier or the leading segment of a dotted
+   *    name (D110); an instance named after the element would get an id a
+   *    sibling of its node already has, in any file (D97); a reference
+   *    cannot be rewritten to a text that resolves to its new target; the
+   *    rename would change what another reference links to.
+   *
+   * The operation is atomic in memory: when any step fails, every file is
+   * restored and the error is rethrown.
+   *
+   * @param fqn     - FQN of the element to rename
+   * @param newName - Its new name (one identifier)
+   * @returns The new FQN and the files that changed.
+   */
+  renameElement(fqn: string, newName: string): RenameElementResult {
+    checkElementName(newName, 'newName');
+    const file = this.findFileContaining(fqn);
+    const declaration = file === null ? undefined : buildFqnIndex(this.document(file).ast).get(fqn)?.node;
+    const nameToken = declaration && GrammarUtils.findNodeForProperty(declaration.$cstNode, 'name');
+    if (file === null || !nameToken) {
+      throw new InvalidWriteError('fqn', `no element '${fqn}' is declared in a loaded file`);
+    }
+    const dot = fqn.lastIndexOf('.');
+    const parent = dot === -1 ? undefined : fqn.slice(0, dot);
+    const newFqn = parent === undefined ? newName : `${parent}.${newName}`;
+    if (this.workspace.has(newFqn)) {
+      // LikeC4 reports `Duplicate element name` for two declarations of one FQN.
+      throw new InvalidWriteError(
+        'newName',
+        `an element '${newFqn}' is already declared${parent !== undefined ? ` in '${parent}'` : ' at the model root'} (in a loaded file)`,
+      );
+    }
+    this.rejectAffectedNames(new Set([fqn.slice(dot + 1)]), 'fqn', `renaming '${fqn}'`);
+    this.rejectCapturedName(newName, 'element', 'newName', `the new name '${newName}'`);
+
+    const elements = elementSubstitution(this.workspace, fqn, newFqn);
+    const instances = renamedInstances(this.referenceCatalogue(), this.deployments, elements);
+    for (const instance of instances) {
+      if (!this.deployments.has(instance.newId)) continue;
+      // LikeC4 reports `Duplicate node name` / `Duplicate instance name` (spikes 05, 06).
+      const at = instance.file === undefined ? '' : ` at '${instance.file}:${this.position(instance.file, instance.offset).line}'`;
+      throw new InvalidWriteError(
+        'newName',
+        `the instance '${instance.id}'${at}, declared without a name, takes its id from the element and would become '${instance.newId}', ` +
+          `which a node or instance of '${instance.parentId ?? 'the deployment root'}' already has (in a loaded file)`,
+      );
+    }
+    const sigma = new Substitution(elements, new Map(instances.map((instance) => [instance.id, instance.newId])));
+    const changedFiles = this.rewriteReferences(sigma, new Map([[file, [{ offset: nameToken.offset, end: nameToken.end, newText: newName }]]]), {
+      field: 'newName',
+      action: `renaming '${fqn}' to '${newName}'`,
+    });
+    return { fqn: newFqn, changedFiles };
   }
 
   /**
@@ -3045,6 +3150,157 @@ export class LikeC4Mutator {
       `${subject} would capture the reference '${hit.segments.map((segment) => segment.name).join('.')}' at '${hit.file}:${hit.line}', ` +
         `written where the library does not resolve references (a global block, an import, an opaque flow block or unparsed text)`,
     );
+  }
+
+  /**
+   * Throw when a construct the library does not resolve names one of
+   * `names` — the names a rename or move takes away — as an identifier or a
+   * segment of a dotted name (affected mode of the unmodelled-name
+   * inventory; FR-004, D92): the library could neither check nor rewrite
+   * that reference.
+   *
+   * @param action - The write for the message, e.g. `renaming 'app.api'`
+   * @throws {InvalidWriteError} on `field`
+   */
+  private rejectAffectedNames(names: ReadonlySet<string>, field: string, action: string): void {
+    this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
+    const [hit] = affectedNameHits(this.unmodelled, names, 'element');
+    if (!hit) return;
+    throw new InvalidWriteError(
+      field,
+      `${action} would leave the reference '${hit.segments.map((segment) => segment.name).join('.')}' at '${hit.file}:${hit.line}' behind, ` +
+        `written where the library does not resolve references (a global block, an import, an opaque flow block or unparsed text)`,
+    );
+  }
+
+  /**
+   * Write the declaration edits of a rename or move and rewrite every
+   * reference whose target σ changes (FR-010, FR-011), then check that every
+   * surviving reference resolves to σ of its old target (INV-3).  The
+   * pipeline of lc4m-15.30:
+   *  1. on the state before the write: a reference σ changes at a place the
+   *     library does not model is rejected (on `fqn`), and so is a
+   *     deployment path whose element σ takes out of its instance's
+   *     element (FR-010, listed in `related`);
+   *  2. the declaration edits, together with the `extend X` targets σ
+   *     changes (they decide where the elements declared in the blocks
+   *     live);
+   *  3. a first pass over the changed references without a deployment part
+   *     — `instanceOf` included — each paired with its place in the edited
+   *     state by the pairing rule and written in the form of FR-011; then a
+   *     second pass over deployment references, whose ids may follow a
+   *     rewritten `instanceOf` (spike 05);
+   *  4. the stability check by the pairing rule.
+   * Atomic: on any failure every file is restored and the error rethrown.
+   *
+   * @param declarationEdits - Per file, the edits of the declaration itself
+   * @param write            - The field the errors name and the write for the messages
+   * @returns The files whose text changed, in load order.
+   */
+  private rewriteReferences(
+    sigma: Substitution,
+    declarationEdits: ReadonlyMap<string, readonly TextEdit[]>,
+    write: { field: string; action: string },
+  ): string[] {
+    const catalogue = this.referenceCatalogue();
+    const before = this.referenceSnapshot();
+    const instanceElement = (id: string): string | undefined => catalogue.instanceElement(id);
+    const changed = before.records.filter((record) => record.entry.target !== undefined && sigma.changes(record.entry.target));
+
+    const withoutImage: RelatedConstruct[] = [];
+    for (const { entry } of changed) {
+      const target = entry.target!;
+      if (entry.unmodelled) {
+        throw new InvalidWriteError(
+          'fqn',
+          `${write.action} changes the target of the ${entry.description} '${entry.text}' at '${entry.file}:${entry.line}', ` +
+            `written where the library does not resolve references (a global block, an import or an opaque flow block)`,
+        );
+      }
+      if ('deployment' in target && target.element !== undefined) {
+        const deployed = instanceElement(target.deployment);
+        if (deployed === undefined || !isSameOrDescendant(sigma.element(target.element), sigma.element(deployed))) {
+          withoutImage.push({ ...this.position(entry.file, entry.offset), construct: 'deployment-path' });
+        }
+      }
+    }
+    if (withoutImage.length > 0) {
+      throw new InvalidWriteError(
+        write.field,
+        `${write.action} takes elements out of the instances that deploy them while deployment paths name them through those instances: ` +
+          withoutImage.map((path) => `${path.file}:${path.line}:${path.column}`).join(', '),
+        withoutImage,
+      );
+    }
+
+    // The `extend X` targets are strict paths: they are written as σ of X.
+    const texts = new Map<ReferenceRecord, string>();
+    const edits = new Map<string, TextEdit[]>([...declarationEdits].map(([file, list]) => [file, [...list]]));
+    for (const record of changed) {
+      if (record.entry.role !== 'extend-element-target' || !('model' in record.entry.target!)) continue;
+      const path = sigma.element(record.entry.target.model).split('.');
+      const segments = writtenSegments(record.entry.node);
+      addEditGroup(
+        edits,
+        record.file,
+        segments.length === path.length
+          ? segments.flatMap((segment, i) => (segment.name === path[i] ? [] : [{ offset: segment.offset, end: segment.end, newText: path[i]! }]))
+          : [{ offset: record.entry.offset, end: record.entry.end, newText: path.join('.') }],
+      );
+      texts.set(record, path.join('.'));
+    }
+    const stage = (instances: boolean): PairingStage => ({ sigma, declarations: true, instances, texts });
+
+    const state = this.snapshot();
+    try {
+      const changedFiles = new Set<string>();
+      const apply = (groups: Map<string, TextEdit[]>): void =>
+        refusedOn(write.field, () => {
+          for (const file of this.applyEditGroups(groups)) changedFiles.add(file);
+        });
+      apply(edits);
+      for (const deploymentPass of [false, true]) {
+        const current = this.referenceCatalogue();
+        const pairs = pairReferenceSnapshots(before, this.referenceSnapshot(), new Map(), {
+          expectedPrefix: (record) => expectedPrefix(record, stage(deploymentPass)),
+        });
+        const passEdits = new Map<string, TextEdit[]>();
+        for (const [old, now] of pairs) {
+          const target = old.entry.target;
+          if (target === undefined || !sigma.changes(target) || texts.has(old) || ('deployment' in target) !== deploymentPass) continue;
+          const form = writtenForm(old.entry, catalogue, now.entry, current, sigma, fullText(target, sigma, instanceElement));
+          if (!form) {
+            throw new InvalidWriteError(
+              write.field,
+              `${write.action}: the ${old.role} '${old.text}' at '${old.file}:${old.entry.line}' cannot be rewritten — ` +
+                `neither its text, nor its text with the renamed segments, nor the full name of its new target resolves to that target there`,
+            );
+          }
+          texts.set(old, form.text);
+          addEditGroup(passEdits, now.file, form.edits);
+        }
+        apply(passEdits);
+      }
+      const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(), new Map(), {
+        expectedPrefix: (record) => expectedPrefix(record, stage(true)),
+        expectedTarget: (record) => sigma.key(record.target!.key),
+      });
+      if (change) {
+        throw new InvalidWriteError(
+          write.field,
+          `${write.action} changes what an existing reference links to: the ${change.role} '${change.text}' in '${change.file}' ` +
+            `links to ${change.before.display} and would ${
+              change.after === undefined
+                ? 'no longer resolve (LikeC4 would report: Could not resolve reference)'
+                : `link to ${change.after.display} instead`
+            }`,
+        );
+      }
+      return [...this.sources.keys()].filter((file) => changedFiles.has(file));
+    } catch (err) {
+      this.restore(state);
+      throw err;
+    }
   }
 
   /** The reference catalogue of the current indices, built on first use. */

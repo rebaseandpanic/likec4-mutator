@@ -94,6 +94,15 @@ export class ViewReferenceResolver {
     return this.documentResolver(view.document).resolve(resolveFqnRef(ref), 'views');
   }
 
+  /**
+   * The element a reference written as `text` in the `of` of `view` links
+   * to, as {@link viewOf} links the written one; undefined when it does not
+   * resolve.
+   */
+  resolveOfText(view: ViewDeclaration, text: string): string | undefined {
+    return this.documentResolver(view.document).resolve(text, 'views');
+  }
+
   /** The view id written after `extends`; undefined when none. */
   extendsText(view: ViewDeclaration): string | undefined {
     return (view.node.extends as { view?: { $refText?: string } } | undefined)?.view?.$refText;

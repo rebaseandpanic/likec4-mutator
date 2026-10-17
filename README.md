@@ -132,6 +132,9 @@ mutator.removeRelationship('app.api', 'app.db');
 mutator.removeElement('app.db'); // rejected while other constructs refer to it — see "Removing referenced elements"
 mutator.removeElement('app.db', { cascade: true }); // removes the referring view items, steps and instances too
 
+// Rename (=> { fqn, changedFiles }); every reference to the element and its subtree is rewritten — see "Renaming elements"
+mutator.renameElement('app.api', 'gateway');
+
 // Validate & serialize
 const errors = mutator.validate(); // [] = valid
 const files = mutator.serialize(); // { 'model.c4': '...' }
@@ -1558,13 +1561,33 @@ A cascade is also rejected when a view would lose its last content-producing sta
 
 A rejection is a `ReferencedRemovalError` (an `InvalidWriteError` on `fqn`) whose `references` lists every reference: `{ file, line, column, role, cascadable, view? }`, 1-based, `role` naming the place (`instance-of`, `predicate-item`, `step-endpoint`, `style-target`, `rank-target`, `view-of`, `view-extends`, `opaque-flow`, `global-or-import`, `unrecovered`, …), `cascadable` whether `cascade` removes it, `view` the view it is written in. With `cascade: true` the result has `cascaded`: every reference the cascade removed, `{ file, line, column, role }`, at its position before the write; without `cascade` the result has no such key. When the cascade removes deployment relationships with the instances it removes (or one that steps through an instance into the subtree), the result also has `removedDeploymentRelationships`, listed as `removeDeploymentInstance` reports them (`{ source, target, title? }`, endpoints `{ id, element? }`). Nothing is written on a rejection.
 
+## Renaming elements
+
+`renameElement(fqn, newName)` replaces the name of the element's declaration (`api = service` and `service api` alike) and rewrites, in every loaded file, each reference whose target the rename changes: the element, everything below it, and an instance declared without a name (`instanceOf app.api`), which LikeC4 names after the element — its id changes with the name, and so do the deployment paths through it (`prod.vm.api.handler`). It returns `{ fqn, changedFiles }` with the new FQN.
+
+Each rewritten reference keeps the shortest change that still links to the new target at its place:
+
+1. its text, when that still resolves there (`handler` inside the renamed element's body stays `handler`);
+2. else its text with the segments that name the renamed element (or such an instance) replaced, a selector suffix kept (`app.api.*` → `app.gateway.*`, `api -> db` → `gateway -> db`);
+3. else the full FQN (or deployment id) of the new target;
+4. else the rename is rejected.
+
+The targets of `extend app.api { … }` blocks are rewritten too. References that did not resolve before the call are left as they are; every other reference must still link to what it linked to before.
+
+Rejected, with nothing changed (`InvalidWriteError`):
+
+| Field | When |
+| --- | --- |
+| `fqn` | no element `fqn` is declared; a construct the library does not resolve — a `global` block, an import, an opaque flow block of a dynamic view (`opt`, `loop`, `alt`, `try` / `catch` / `finally`, `break`), text the parser could not recover — writes the old name as an identifier or any dotted segment, or holds a reference into the renamed subtree |
+| `newName` | not a valid element name (see [Rejected writes](#rejected-writes)); an element with the new FQN is already declared; such a construct writes the new name as a bare identifier or the leading segment of a dotted name (`opt { gateway -> other }` blocks renaming to `gateway`); an instance declared without a name would get the id of another node or instance of its node, `extend` blocks of the node in any file included (LikeC4: `Duplicate node name` / `Duplicate instance name`); a reference cannot be written so that it links to its new target; another reference would link to something else |
+
 ## Rejected writes
 
 Every write call checks the values it introduces before anything changes. A rejected call throws an `InvalidWriteError` (exported): `field` names the offending option in the terms of the call (`name`, `kind`, `id`, `target`, `source`, `autoLayout`, `tags[1]`, `style.color`, `includes[0]`), `detail` says what is wrong, and no file changes. `apply` reports the same as `mutations[i].<field>` (the element name of `addElement` is its `id`) with exit code 1 and writes nothing; the single-purpose CLI commands name the option (`--id`, `--kind`, `--tags`, ...).
 
 | Value | Accepted |
 | --- | --- |
-| element `name` (`addElement`), view `id` (`addView`) | One LikeC4 identifier (letters, digits, `_`, `-`; not starting with a digit or `-`; no `.`; not a keyword such as `title`), not a reserved word (`this`, `it`, `self`, `super`, `likec4lib`, `global`), and not used yet: no element of a loaded file has the same FQN (a sibling in the parent's body or in an `extend` of the parent, or another root element), no view of any type has the same id. |
+| element `name` (`addElement`), `newName` (`renameElement`), view `id` (`addView`) | One LikeC4 identifier (letters, digits, `_`, `-`; not starting with a digit or `-`; no `.`; not a keyword such as `title`), not a reserved word (`this`, `it`, `self`, `super`, `likec4lib`, `global`), and not used yet: no element of a loaded file has the same FQN (a sibling in the parent's body or in an `extend` of the parent, or another root element), no view of any type has the same id. |
 | node `name` (`addDeploymentNode`), instance `name` (`addDeploymentInstance`) | One LikeC4 identifier, not a reserved word, and an id (the parent's id + `.` + name; for an unnamed instance the last segment of `element`) no node or instance of a loaded file has — children declared in `extend` blocks included. |
 | `kind` (`addElement`, `addDeploymentNode`) | One identifier. |
 | `element` (`addDeploymentInstance`), endpoint `id` and `element` (deployment relationships), `node` (`addDeploymentExtend`, `removeDeploymentExtend`) | Identifiers joined by `.`. |
@@ -1592,6 +1615,7 @@ Writes LikeC4 would reject are refused the same way:
 | every view write | the edited file would not parse; a surviving reference would link to something else (see [Views › Writing](#writing-3)). |
 | `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
+| `renameElement` | see [Renaming elements](#renaming-elements). |
 | `removeElement` | `fqn` is not a declared element, or an edit would leave a file that does not parse (`InvalidWriteError`); a reference into the subtree that the mode does not remove (`ReferencedRemovalError`, see [Removing referenced elements](#removing-referenced-elements)). Field `fqn`. |
 | `updateDeploymentNode` | `id` is not one declared node; a tag is not declared; `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating nodes](#updating-nodes)). |
 | `updateDeploymentInstance` | `id` is not one declared instance; a tag is not declared; a patched metadata key would not read as requested, as LikeC4 cannot hold an empty own map (`metadata.<key>`); `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating instances](#updating-instances)). |

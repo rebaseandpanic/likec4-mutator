@@ -47,6 +47,8 @@ export interface ReferenceRecord {
   key: string;
   /** File the reference is written in */
   file: string;
+  /** Its frame path: the enclosing frame descriptors, outermost first, each with its ordinal (`el:app#0`) */
+  frames: readonly string[];
   /** What the reference is, e.g. `relationship source`, `instanceOf target` */
   role: string;
   /** The reference as written */
@@ -55,6 +57,8 @@ export interface ReferenceRecord {
   target: ReferenceTarget | undefined;
   /** Offset of the written reference */
   offset: number | undefined;
+  /** Its entry in the reference catalogue the snapshot was taken from */
+  entry: CatalogueEntry;
 }
 
 /** Every surviving reference of a workspace at one point in time. */
@@ -121,16 +125,18 @@ export function takeReferenceSnapshot(
     for (const entry of byDocument.get(document) ?? []) {
       const frames = framesOf.get(anchor(entry.node as AstLike));
       if (frames === undefined) continue; // inside a removed node
-      const prefix = JSON.stringify([file, frames, entry.description, entry.text]);
+      const prefix = referencePrefix(file, frames, entry.description, entry.text);
       const occurrence = occurrences.get(prefix) ?? 0;
       occurrences.set(prefix, occurrence + 1);
       const record: ReferenceRecord = {
         key: `${prefix}#${occurrence}`,
         file,
+        frames,
         role: entry.description,
         text: entry.text,
         target: referenceTarget(entry),
         offset: entry.offset,
+        entry,
       };
       records.push(record);
       byKey.set(record.key, record);
@@ -203,18 +209,36 @@ export function takeReferenceSnapshot(
   }
 }
 
+/** The key prefix of a reference: its file, frame path, role and text (the key without the occurrence). */
+export function referencePrefix(file: string, frames: readonly string[], role: string, text: string): string {
+  return JSON.stringify([file, frames, role, text]);
+}
+
 /**
- * The surviving references of `before` whose target changed in `after`.
- * References that did not resolve before are not considered: a write does
- * not change them.
+ * How the references of the snapshot before a write are expected to look
+ * after it.  A write that renames or moves (the pairing rule of lc4m-15.30)
+ * translates them: frames and texts change with σ, and so do targets.
+ */
+export interface PairingOptions {
+  /** The key prefix a reference of `before` is expected to have after the write; its own by default */
+  expectedPrefix?: (record: ReferenceRecord) => string;
+  /** The target key a reference of `before` that resolved is expected to have after the write; its own by default */
+  expectedTarget?: (record: ReferenceRecord) => string;
+}
+
+/**
+ * Pair every surviving reference of `before` with the same reference of
+ * `after`.
  *
- * The references of one key prefix (file, frames, role, text) are paired in
- * order.  A reference of `after` outside the inserted text is a survivor and
- * takes the next reference of `before`.  One inside it is the write's own,
- * unless the references of `before` still to be paired outnumber the
- * survivors still to come — text a write rewrites around its insertion (a
- * one-line body laid out again) holds survivors too.  So a reference
- * inserted before an equal one does not take its place.
+ * References are grouped by key prefix — the expected prefix on the
+ * `before` side, the actual one on the `after` side — and the references of
+ * one group are paired in source order.  A reference of `after` outside the
+ * inserted text is a survivor and takes the next reference of `before`.
+ * One inside it is the write's own, unless the references of `before` still
+ * to be paired outnumber the survivors still to come — text a write
+ * rewrites around its insertion (a one-line body laid out again) holds
+ * survivors too.  So a reference inserted before an equal one does not take
+ * its place.
  *
  * @param insertedRanges - Per file, the ranges of the post-write text that
  *                         the write inserted or rewrote
@@ -222,29 +246,31 @@ export function takeReferenceSnapshot(
  *   after the write, or a reference found only after the write lies outside
  *   the inserted text
  */
-export function compareReferenceSnapshots(
+export function pairReferenceSnapshots(
   before: ReferenceSnapshot,
   after: ReferenceSnapshot,
   insertedRanges: ReadonlyMap<string, readonly TextRange[]>,
-): ReferenceChange[] {
+  options: PairingOptions = {},
+): Array<[ReferenceRecord, ReferenceRecord]> {
   const inserted = (record: ReferenceRecord): boolean =>
     (insertedRanges.get(record.file) ?? []).some(
       (range) => record.offset !== undefined && record.offset >= range.offset && record.offset < range.end,
     );
-  const prefixOf = (record: ReferenceRecord): string => record.key.slice(0, record.key.lastIndexOf('#'));
-  const group = (records: readonly ReferenceRecord[]): Map<string, ReferenceRecord[]> => {
+  const ownPrefix = (record: ReferenceRecord): string => record.key.slice(0, record.key.lastIndexOf('#'));
+  const group = (records: readonly ReferenceRecord[], prefixOf: (record: ReferenceRecord) => string): Map<string, ReferenceRecord[]> => {
     const groups = new Map<string, ReferenceRecord[]>();
     for (const record of records) {
-      const list = groups.get(prefixOf(record));
+      const prefix = prefixOf(record);
+      const list = groups.get(prefix);
       if (list) list.push(record);
-      else groups.set(prefixOf(record), [record]);
+      else groups.set(prefix, [record]);
     }
     return groups;
   };
-  const was = group(before.records);
-  const now = group(after.records);
+  const was = group(before.records, options.expectedPrefix ?? ownPrefix);
+  const now = group(after.records, ownPrefix);
 
-  const changes: ReferenceChange[] = [];
+  const pairs: Array<[ReferenceRecord, ReferenceRecord]> = [];
   for (const [prefix, olds] of was) {
     const news = now.get(prefix) ?? [];
     // Once per group: which references lie in inserted text, and how many
@@ -259,10 +285,7 @@ export function compareReferenceSnapshots(
       } else if (next >= olds.length) {
         throw new Error(`Internal error: the ${record.role} '${record.text}' in '${record.file}' appeared outside the written text`);
       }
-      const old = olds[next++]!;
-      if (old.target !== undefined && record.target?.key !== old.target.key) {
-        changes.push({ file: old.file, role: old.role, text: old.text, before: old.target, after: record.target });
-      }
+      pairs.push([olds[next++]!, record]);
     });
     if (next < olds.length) {
       const old = olds[next]!;
@@ -274,6 +297,33 @@ export function compareReferenceSnapshots(
     const outside = news.find((record) => !inserted(record));
     if (outside) {
       throw new Error(`Internal error: the ${outside.role} '${outside.text}' in '${outside.file}' appeared outside the written text`);
+    }
+  }
+  return pairs;
+}
+
+/**
+ * The surviving references of `before` whose target in `after` is not the
+ * expected one (see {@link pairReferenceSnapshots} for the pairing):
+ * re-targeted or left unresolved.  References that did not resolve before
+ * are not considered: a write does not change them.
+ *
+ * @param insertedRanges - Per file, the ranges of the post-write text that
+ *                         the write inserted or rewrote
+ * @throws {Error} (internal) as {@link pairReferenceSnapshots}
+ */
+export function compareReferenceSnapshots(
+  before: ReferenceSnapshot,
+  after: ReferenceSnapshot,
+  insertedRanges: ReadonlyMap<string, readonly TextRange[]>,
+  options: PairingOptions = {},
+): ReferenceChange[] {
+  const changes: ReferenceChange[] = [];
+  for (const [old, record] of pairReferenceSnapshots(before, after, insertedRanges, options)) {
+    if (old.target === undefined) continue;
+    const expected = options.expectedTarget ? options.expectedTarget(old) : old.target.key;
+    if (record.target?.key !== expected) {
+      changes.push({ file: old.file, role: old.role, text: old.text, before: old.target, after: record.target });
     }
   }
   return changes;

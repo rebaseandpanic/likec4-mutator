@@ -80,6 +80,7 @@ export type {
   RemoveDeploymentNodeResult,
   RemoveDeploymentRelationshipResult,
   RemoveElementResult,
+  RenameElementResult,
   RemoveRelationshipResult,
   RelationshipCandidate,
   RelationshipPosition,

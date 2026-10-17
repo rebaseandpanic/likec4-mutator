@@ -181,6 +181,19 @@ export class DeploymentResolver {
   }
 
   /**
+   * The node a strict path written as `text` (the target of `extend <text>`)
+   * links to, as {@link extendTarget} links a parsed one; undefined
+   * otherwise.
+   */
+  resolveStrictText(text: string): string | undefined {
+    let ref: RefLike | undefined;
+    for (const segment of text.split('.')) {
+      ref = ref === undefined ? { value: { $refText: segment } } : { parent: ref, value: { $refText: segment } };
+    }
+    return this.strictTarget(ref);
+  }
+
+  /**
    * Every topmost reference in the rules of the deployment views of one
    * document (by its position in document order), with its target.
    */

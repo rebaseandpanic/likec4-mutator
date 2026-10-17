@@ -513,6 +513,7 @@ export function resolveReferenceText(
  * not change.
  */
 export class DocumentReferenceResolver {
+  private readonly models: unknown[];
   private readonly modelScopes: LocalScope[];
   private readonly resolver: EndpointResolver;
   private readonly frameScopes = new Map<string, LocalScope>();
@@ -521,8 +522,43 @@ export class DocumentReferenceResolver {
     ast: WorkspaceDocumentAst,
     private readonly workspace: WorkspaceIndex,
   ) {
+    this.models = ast.models ?? [];
     this.modelScopes = (ast.models ?? []).map((m) => computeLocalScope(m.elements ?? [], null).scope);
     this.resolver = new EndpointResolver(workspace, uniqueAcross(this.modelScopes));
+  }
+
+  /**
+   * The absolute FQN `reference` links to when written directly in
+   * `container`, a node of a `model` block of the document: the block
+   * itself, a relation, an `extend a -> b` block, or anything inside an
+   * element or `extend X` body.  The scopes are those of a relationship
+   * endpoint written there (see {@link resolveRelations}): the bodies
+   * around `container`, innermost first — an element body binds `this` /
+   * `it` to the element, an `extend X` body adds X and its unique
+   * descendants — then the `model` block, the document scope and the root
+   * elements of the project.  Undefined when it does not resolve.
+   */
+  resolveInModel(reference: string, container: object): string | undefined {
+    const chain: ScopeFrame[] = [];
+    for (let up = container as AstNodeLike | undefined; up; up = up['$container'] as AstNodeLike | undefined) {
+      if (up.$type === 'Element') {
+        const fqn = declaredFqn(up);
+        if (fqn === undefined) return undefined;
+        chain.push({ scope: computeLocalScope(up.body?.elements ?? [], fqn).scope, self: fqn });
+      } else if (up.$type === 'ExtendElement') {
+        const extended = readStrictFqnRef(up.element);
+        if (extended === undefined) return undefined;
+        chain.push({ scope: computeLocalScope(up.body?.elements ?? [], extended).scope, self: extended, extended });
+      } else if (up.$type === 'Model') {
+        const scope = this.modelScopes[this.models.indexOf(up)];
+        if (scope) chain.push({ scope });
+      }
+    }
+    let ref: RefLike | undefined;
+    for (const segment of reference.split('.')) {
+      ref = ref === undefined ? { value: { $refText: segment } } : { parent: ref, value: { $refText: segment } };
+    }
+    return this.resolver.resolveEndpoint(ref, chain);
   }
 
   /** The absolute FQN `reference` written at `position` links to; undefined when it does not resolve. */
@@ -833,6 +869,29 @@ function computeLocalScope(
     if (!direct.has(name)) scope.set(name, fqn);
   }
   return { scope };
+}
+
+/**
+ * The FQN LikeC4 gives the element declaration `element`: the names of the
+ * enclosing element declarations, below the X of an enclosing `extend X`;
+ * undefined when a name or the `extend` target is missing.
+ */
+function declaredFqn(element: AstNodeLike): string | undefined {
+  const names: string[] = [];
+  for (let up: AstNodeLike | undefined = element; up; up = up['$container'] as AstNodeLike | undefined) {
+    if (up.$type === 'Element') {
+      if (!up.name) return undefined;
+      names.unshift(up.name);
+    } else if (up.$type === 'ExtendElement') {
+      const extended = readStrictFqnRef(up.element);
+      if (extended === undefined) return undefined;
+      names.unshift(extended);
+      break;
+    } else if (up.$type === 'Model') {
+      break;
+    }
+  }
+  return names.join('.');
 }
 
 /** Names that occur in exactly one of the given scopes. */

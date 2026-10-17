@@ -30,6 +30,9 @@
  *  - **Statement class and containers.**  The FR-003 class of the view
  *    statement the reference is written in, and the chain of constructs a
  *    cascade edits around it (item, rule, groups; step statement, `par`).
+ *  - **Place.**  Where the reference is written, so that another text can be
+ *    resolved there as LikeC4 would link it written in its stead
+ *    ({@link ReferenceCatalogue.resolveAt}; the place resolver of FR-011).
  *
  * The catalogue reads the unlinked AST of the standalone parser and is
  * bound to one generation of the indices it is built from.
@@ -39,7 +42,7 @@ import type { DeploymentAstNode, DeploymentIndex } from './deployment-index.js';
 import { resolveFqnRef } from './fqn.js';
 import type { ViewAstNode, ViewDeclaration, ViewIndex } from './view-index.js';
 import { ViewReferenceResolver, type ViewTargetRole } from './view-resolver.js';
-import { resolveDocumentReferences, type WorkspaceIndex } from './workspace-index.js';
+import { DocumentReferenceResolver, resolveDocumentReferences, type WorkspaceIndex } from './workspace-index.js';
 
 /**
  * Where a reference is written, by the rows of FR-001 (lc4m-15.30):
@@ -94,6 +97,17 @@ export type CatalogueTarget = LinkedTarget | { view: string };
  */
 export type StatementClass = 'rule' | 'step' | 'opaque' | 'property';
 
+/**
+ * Where a reference is written: the document and the reference node, whose
+ * containers decide the scopes a text written there is resolved in.
+ */
+export interface ReferencePlace {
+  /** Position of the document in LikeC4's document order */
+  document: number;
+  /** The reference node as written */
+  node: ViewAstNode;
+}
+
 /** One reference of the catalogue. */
 export interface CatalogueEntry {
   /** File the reference is written in */
@@ -128,6 +142,8 @@ export interface CatalogueEntry {
   containers: ViewAstNode[];
   /** It lies at an unmodelled place: never cascaded, rewritten or counted as content */
   unmodelled: boolean;
+  /** Where it is written, for {@link ReferenceCatalogue.resolveAt} */
+  place: ReferencePlace;
 }
 
 /** Flow blocks of a dynamic view that are modelled: their statements are step statements. */
@@ -163,11 +179,29 @@ export class ReferenceCatalogue {
   /**
    * @param documents - The documents the entries are written in, in LikeC4's document order
    * @param list      - Every entry, per document in source order
+   * @param places    - Resolves texts at the places of the entries
    */
   constructor(
     readonly documents: ReadonlyArray<{ file: string; ast: object }>,
     private readonly list: readonly CatalogueEntry[],
+    private readonly places: PlaceResolver,
   ) {}
+
+  /**
+   * What a reference written as `text` (`api`, `app.api`, `prod.vm.api`)
+   * at `place` would link to in the state the catalogue was built from —
+   * the same scopes, and the same resolvers, as the entries' targets — or
+   * undefined when it would not resolve.  `text` is a dotted name without
+   * spaces or comments; for a view reference it is the view id.
+   */
+  resolveAt(place: ReferencePlace, text: string): CatalogueTarget | undefined {
+    return this.places.resolveAt(place, text);
+  }
+
+  /** The element the instance `id` deploys; undefined when `id` is not an instance or its `instanceOf` does not resolve. */
+  instanceElement(id: string): string | undefined {
+    return this.places.instanceElement(id);
+  }
 
   /** Every entry, per document in source order, documents in LikeC4's document order. */
   entries(): readonly CatalogueEntry[] {
@@ -217,6 +251,8 @@ export function buildReferenceCatalogue(
     if (ref && typeof ref === 'object') extendTargets.set(ref, deploymentResolver.extendTarget(extend));
   }
 
+  const places = new PlaceResolver(workspace, deployments, views, deploymentResolver, viewResolver, declarations);
+
   const documents = views.documents.map(({ file, ast }) => ({ file: file ?? '', ast: ast as object }));
   const list: CatalogueEntry[] = [];
   documents.forEach(({ file, ast }, document) => {
@@ -250,6 +286,7 @@ export function buildReferenceCatalogue(
         ...(context.statementClass && { statementClass: context.statementClass }),
         containers: context.containers,
         unmodelled: context.unmodelled,
+        place: { document, node },
       });
       // An import list nests the earlier names; a reference chain holds no other reference.
       return node.$type === 'Imported';
@@ -306,7 +343,99 @@ export function buildReferenceCatalogue(
       return targets.get(node);
     }
   });
-  return new ReferenceCatalogue(documents, list);
+  return new ReferenceCatalogue(documents, list, places);
+}
+
+/** Resolves texts at the places of catalogue references (see {@link ReferenceCatalogue.resolveAt}). */
+class PlaceResolver {
+  private readonly documentResolvers = new Map<number, DocumentReferenceResolver>();
+
+  constructor(
+    private readonly workspace: WorkspaceIndex,
+    private readonly deployments: DeploymentIndex,
+    private readonly views: ViewIndex,
+    private readonly deploymentResolver: DeploymentResolver,
+    private readonly viewResolver: ViewReferenceResolver,
+    private readonly declarations: ReadonlyMap<object, ViewDeclaration>,
+  ) {}
+
+  resolveAt(place: ReferencePlace, text: string): CatalogueTarget | undefined {
+    const node = place.node;
+    switch (node.$type) {
+      case 'Imported':
+        return model(this.workspace.rootElement(text));
+      case 'ElementViewRef':
+        return view(this.viewResolver.resolveViewText(text, 'element'));
+      case 'ViewRef':
+        return view(this.viewResolver.resolveViewText(text, 'any'));
+      case 'DynamicViewRef':
+        return view(this.viewResolver.resolveViewText(text, 'dynamic'));
+      case 'StrictFqnRef':
+        return deployment(this.deploymentResolver.resolveStrictText(text));
+      case 'StrictFqnElementRef':
+        return model(this.workspace.has(text) ? text : undefined);
+    }
+    // A topmost `FqnRef`: the text is written in its stead, in the same containers.
+    const written = writtenAt(node, text);
+    const context = contextOf(node, this.declarations);
+    if (context.view) {
+      const declaration = context.view;
+      if (declaration.type === 'deployment') return this.viewResolver.resolveDeploymentRef(written);
+      if (node.$container?.$type === 'ElementRef' && node.$container.$container === declaration.node) {
+        return model(this.viewResolver.resolveOfText(declaration, text));
+      }
+      return model(this.viewResolver.resolveElementText(declaration, text));
+    }
+    switch (context.block) {
+      case 'Globals':
+      case 'ModelViews':
+        return this.deploymentResolver.resolveGlobalReference(written);
+      case 'ModelDeployments': {
+        const instance = node.$container?.$type === 'ElementRef' ? node.$container.$container : undefined;
+        if (instance?.$type === 'DeployedInstance') {
+          return model(this.deploymentResolver.resolveElementText(text, instance as DeploymentAstNode));
+        }
+        return this.deploymentResolver.resolveReference(written);
+      }
+      case 'Model':
+        return model(this.documentResolver(place.document).resolveInModel(text, node.$container ?? {}));
+    }
+    return undefined;
+  }
+
+  instanceElement(id: string): string | undefined {
+    const declaration = this.deployments.declarations(id)[0];
+    return declaration?.type === 'instance' ? this.deploymentResolver.instanceElement(declaration.node) : undefined;
+  }
+
+  private documentResolver(document: number): DocumentReferenceResolver {
+    let resolver = this.documentResolvers.get(document);
+    if (!resolver) {
+      resolver = new DocumentReferenceResolver(this.views.documents[document]!.ast, this.workspace);
+      this.documentResolvers.set(document, resolver);
+    }
+    return resolver;
+  }
+}
+
+/**
+ * The `FqnRef` chain of `text` (`a.b.c`) standing where `node` is written:
+ * its topmost link has `node`'s container, each link contains its parent,
+ * as in a parsed chain.
+ */
+function writtenAt(node: ViewAstNode, text: string): ViewAstNode {
+  let chain: ViewAstNode | undefined;
+  for (const segment of text.split('.')) {
+    const link: ViewAstNode = { $type: 'FqnRef', value: { $refText: segment }, ...(chain && { parent: chain }) };
+    if (chain) chain.$container = link;
+    chain = link;
+  }
+  chain!.$container = node.$container;
+  return chain!;
+}
+
+function model(fqn: string | undefined): CatalogueTarget | undefined {
+  return fqn === undefined ? undefined : { model: fqn };
 }
 
 /** Where a reference sits, from its AST containers. */
