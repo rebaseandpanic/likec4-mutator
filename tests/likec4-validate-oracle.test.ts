@@ -16,7 +16,7 @@
  * predicates and `navigateTo`, dynamic and deployment views.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { expectValidLikeC4, validateLikeC4 } from './helpers/likec4-model.js';
 
@@ -332,7 +332,7 @@ describe('validateLikeC4 agrees with likec4 validate', () => {
   });
 });
 
-/** Every `.c4` file of a fixture workspace, keyed by its path relative to the workspace, in lexical walk order. */
+/** Every `.c4` file of a fixture workspace, keyed by its `/`-separated path relative to the workspace, in lexical walk order. */
 function readWorkspace(name: string): Record<string, string> {
   const root = join(import.meta.dirname, 'fixtures', name);
   const files: Record<string, string> = {};
@@ -340,7 +340,7 @@ function readWorkspace(name: string): Record<string, string> {
     for (const entry of readdirSync(dir).sort()) {
       const path = join(dir, entry);
       if (statSync(path).isDirectory()) walk(path);
-      else if (path.endsWith('.c4')) files[relative(root, path)] = readFileSync(path, 'utf8');
+      else if (path.endsWith('.c4')) files[relative(root, path).split(sep).join('/')] = readFileSync(path, 'utf8');
     }
   };
   walk(root);
@@ -352,10 +352,14 @@ function readWorkspace(name: string): Record<string, string> {
 // `refs-import` holds two projects, `main` importing from `other` (D116).
 describe('reference fixtures pass likec4 validate', () => {
   it.each(['refs-catalog', 'refs-flows'])('%s', async (fixture) => {
-    await expectValidLikeC4(readWorkspace(fixture));
+    const files = readWorkspace(fixture);
+    expect(Object.keys(files).length, `.c4 files of ${fixture}`).toBeGreaterThan(0);
+    await expectValidLikeC4(files);
   });
 
   it('refs-import, with its folders as projects', async () => {
-    await expectValidLikeC4(readWorkspace('refs-import'), { projects: ['main', 'other'] });
+    const files = readWorkspace('refs-import');
+    expect(Object.keys(files).length, '.c4 files of refs-import').toBeGreaterThan(0);
+    await expectValidLikeC4(files, { projects: ['main', 'other'] });
   });
 });
