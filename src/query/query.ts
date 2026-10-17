@@ -13,6 +13,8 @@ import {
   type MarkdownOrString,
 } from './likec4-text.js';
 import { toSourceRange } from './source-range.js';
+import { mergeStyle, readElementStyle, readRelationshipStyle, withBidirectionalTail } from './style-read.js';
+import type { ElementStyle, RelationshipStyle } from '../mutator/codegen.js';
 
 /**
  * Minimal structural shape of the parsed LikeC4 document AST consumed by
@@ -212,6 +214,12 @@ export class C4Query {
       ...readDeclared(b.node.body),
     }));
 
+    // Styles (D74): own — the first `style { }` plus a body `icon` — and the
+    // kind's style overridden by it (`MergedSpecification.toModelElement`).
+    const kindStyle = kind?.style as ElementStyle | undefined;
+    const ownStyle = readElementStyle(node.body?.props as unknown[] | undefined);
+    const style = mergeStyle(kindStyle, ownStyle);
+
     return {
       fqn: entry.fqn,
       name: entry.name,
@@ -223,7 +231,11 @@ export class C4Query {
       tags: effective.tags,
       links: effective.links,
       metadata: effective.metadata,
-      ...(defaults && { fromSpecification: structuredClone(defaults) }),
+      ...(ownStyle && { ownStyle }),
+      ...(style && { style }),
+      ...(defaults && {
+        fromSpecification: { ...structuredClone(defaults), ...(kindStyle && { style: structuredClone(kindStyle) }) },
+      }),
       declared: readDeclared(node.body),
       extendedBy,
       // Children declared in `extend` blocks of other documents count too.
@@ -303,18 +315,33 @@ function toRelationshipInfo(resolved: ResolvedRelation, workspace: WorkspaceInde
     bidirectional: b.node.isBidirectional === true,
   }));
 
+  // Styles (D74): own — the first `style { }` — and the kind's overridden by
+  // it, with a tail for a bidirectional relationship (`toModelRelation`).
+  const bidirectional = (item as { isBidirectional?: boolean }).isBidirectional === true;
+  const kindStyle = kindSpec?.style as RelationshipStyle | undefined;
+  const ownStyle = readRelationshipStyle(item.body?.props as unknown[] | undefined);
+  const style = withBidirectionalTail(mergeStyle(kindStyle, ownStyle), bidirectional);
+
   return {
     sourceFqn,
     targetFqn,
     title,
     kind,
-    bidirectional: (item as { isBidirectional?: boolean }).isBidirectional === true,
+    bidirectional,
     technology,
     description,
     tags: effective.tags,
     links: effective.links,
     metadata: effective.metadata,
-    ...(defaults && { fromSpecification: structuredClone(defaults) }),
+    ...(ownStyle && { ownStyle }),
+    ...(style && { style }),
+    ...(defaults && {
+      fromSpecification: {
+        ...structuredClone(defaults),
+        ...(kindStyle && { style: structuredClone(kindStyle) }),
+        ...(kindSpec?.multiple !== undefined && { multiple: kindSpec.multiple }),
+      },
+    }),
     declared: readDeclared(decorationSource),
     extendedBy,
     sourceRange: toSourceRange(cst),

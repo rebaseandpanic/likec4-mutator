@@ -113,6 +113,15 @@ export function mergeStyle<T extends ElementStyle | RelationshipStyle>(
   return nonEmpty({ ...base, ...own } as T);
 }
 
+/**
+ * LikeC4's `applyBidirectional`: the effective style of a bidirectional
+ * relationship has a tail — the one written, else the head, else
+ * `'normal'`.  A one-way relationship's style is returned unchanged.
+ */
+export function withBidirectionalTail(style: RelationshipStyle | undefined, bidirectional: boolean): RelationshipStyle | undefined {
+  return bidirectional ? { ...style, tail: style?.tail ?? style?.head ?? 'normal' } : style;
+}
+
 function readElementStyleBlock(props: readonly unknown[] | undefined): ElementStyle {
   const block = (props ?? []).find((p) => (p as StylePropNode).$type === 'ElementStyleProperty') as
     | StylePropNode

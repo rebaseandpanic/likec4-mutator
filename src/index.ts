@@ -26,6 +26,8 @@ export type {
   ElementInfo,
   ExtendContribution,
   KindDefaults,
+  ElementKindDefaults,
+  RelationshipKindDefaults,
   RelationshipInfo,
   SourceRange,
   SpecificationInfo,

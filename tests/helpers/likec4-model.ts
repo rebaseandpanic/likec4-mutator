@@ -382,11 +382,22 @@ export interface ReportedRelationship extends EffectiveValues {
   kind?: string;
   /** Direction: compared with LikeC4's `isBidirectional` (D69) */
   bidirectional: boolean;
+  /** Effective style: compared with LikeC4's `line`, `color`, `head`, `tail` before theme defaults (D74) */
+  style?: ReportedRelationshipStyle;
+}
+
+/** A relationship style as the library reports it: the fields LikeC4's model holds on a relation. */
+export interface ReportedRelationshipStyle {
+  line?: string;
+  color?: string;
+  head?: string;
+  tail?: string;
 }
 
 /**
  * Assert that the library reports the same relationships — endpoints, kind,
- * direction (`bidirectional` against LikeC4's `isBidirectional`), effective title, description, technology, tags, links and metadata — as
+ * direction (`bidirectional` against LikeC4's `isBidirectional`), effective
+ * style (`line`, `color`, `head`, `tail` before theme defaults), effective title, description, technology, tags, links and metadata — as
  * LikeC4 computes for `files`,
  * which must build without errors.  Warnings are allowed: LikeC4's validator
  * warns about an `extend a -> b` block whose relationship takes its title from
@@ -406,6 +417,7 @@ export async function expectRelationshipsAgreeWithLikeC4(
     target: string;
     kind?: string;
     bidirectional: boolean;
+    style?: ReportedRelationshipStyle;
     title?: string;
     description?: string;
     technology?: string;
@@ -418,6 +430,7 @@ export async function expectRelationshipsAgreeWithLikeC4(
       r.target,
       r.kind ?? null,
       r.bidirectional,
+      [r.style?.line ?? null, r.style?.color ?? null, r.style?.head ?? null, r.style?.tail ?? null],
       r.title ?? '',
       r.description ?? null,
       r.technology ?? null,
@@ -431,6 +444,7 @@ export async function expectRelationshipsAgreeWithLikeC4(
       target: r.target.model,
       kind: r.kind,
       bidirectional: r.isBidirectional === true,
+      style: { line: r.line, color: r.color, head: r.head, tail: r.tail },
       title: r.title,
       description: plainText(r.description),
       technology: r.technology,

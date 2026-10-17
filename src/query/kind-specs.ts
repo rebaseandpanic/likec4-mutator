@@ -26,6 +26,8 @@ export interface KindSpec {
    * kind writes none.  Not part of `defaults`, which logical reads report.
    */
   style?: ElementStyle | RelationshipStyle;
+  /** A relationship kind's `multiple` (the first one, as LikeC4 reads it); absent when not written */
+  multiple?: boolean;
 }
 
 /**
@@ -92,9 +94,13 @@ export function readKindSpec(node: KindNode, file: string | undefined, relations
   };
   const { tags, links } = readContribution(node);
   const style = relationship ? readKindRelationshipStyle(node.props) : readKindElementStyle(node.props);
+  const multiple = relationship
+    ? ((node.props ?? []).find((prop) => (prop as { $type?: string }).$type === 'MultipleProperty') as { value?: unknown } | undefined)
+    : undefined;
   return {
     defaults,
     contribution: { ...(tags && { tags }), ...(links && { links }) },
     ...(style && { style }),
+    ...(multiple && { multiple: multiple.value === true }),
   };
 }

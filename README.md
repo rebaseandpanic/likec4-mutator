@@ -694,6 +694,28 @@ The endpoints are resolved from the first `model` block of the chosen (top-level
 | head | normal, onormal, diamond, odiamond, crow, open, vee, dot, odot, none |
 | tail | Same as head |
 
+### Reading styles
+
+`getElement` / `listElements` and `getRelationships` report styles as LikeC4 1.59.4's model holds them before theme defaults:
+
+```typescript
+const api = mutator.getElement('app.api')!;
+api.ownStyle;                 // { color: 'red', icon: 'tech:go' } — the first style { } block, then a body-level icon
+api.fromSpecification?.style; // the kind's style { } block
+api.style;                    // effective: the kind's style overridden field by field by the own style
+
+const [rel] = mutator.getRelationships({ sourceFqn: 'app.api' });
+rel.ownStyle;                    // { line: 'dashed' } — the relationship's first style { } block
+rel.fromSpecification?.style;    // line, color, head and tail written in the relationship kind
+rel.fromSpecification?.multiple; // the relationship kind's multiple flag, as written
+rel.style;                       // effective; a bidirectional relationship always has a tail
+```
+
+- **Element.** The own style is the first `style { }` block (a later property overrides an earlier one), then a body-level `icon`. The body `icon` wins over `style { icon }`, as in LikeC4.
+- **Relationship.** The effective style is the kind's `line`, `color`, `head` and `tail` overridden by the relationship's own. A bidirectional relationship gets a `tail`: the one written, else the `head`, else `'normal'`.
+- **Values.** As written: opacity as `'40%'`, a size alias as its token. Theme defaults and configured `styles.defaults` are not applied. An absent field is no value.
+- **Where kind styles appear.** The kind's style and `multiple` are reported on the element or relationship, in `fromSpecification`. `getSpecification()` keeps reporting names only.
+
 ## Specification defaults
 
 A kind declared in a `specification` block can carry defaults, and LikeC4 applies them to every element or relationship of that kind:

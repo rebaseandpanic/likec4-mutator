@@ -23,7 +23,7 @@ import { mergeContributions, readContribution, readDeclared, type Decorations } 
 import { markdownAsString, markdownOrString, readMarkdownOrString, removeIndent, type MarkdownOrString } from './likec4-text.js';
 import { toSourceRange } from './source-range.js';
 import { relationDecorationSource, relationKind, type RelationNodeLike } from './relation-node.js';
-import { mergeStyle, readElementStyle, readRelationshipStyle } from './style-read.js';
+import { mergeStyle, readElementStyle, readRelationshipStyle, withBidirectionalTail } from './style-read.js';
 import type {
   DeploymentEndpoint,
   DeploymentInstanceInfo,
@@ -254,10 +254,7 @@ export class DeploymentQuery {
     const tags = unique([...(kindSpec?.contribution.tags ?? []), ...(contribution.tags ?? [])]);
     const links = contribution.links ?? copy(kindSpec?.contribution.links);
     const kindStyle = kindSpec?.style as RelationshipStyle | undefined;
-    let style = mergeStyle(kindStyle, readRelationshipStyle(node.body?.['props'] as unknown[] | undefined));
-    // `applyBidirectional`: a bidirectional relationship has a tail — the
-    // one written, else the head, else 'normal'.
-    if (bidirectional) style = { ...style, tail: style?.tail ?? style?.head ?? 'normal' };
+    const style = withBidirectionalTail(mergeStyle(kindStyle, readRelationshipStyle(node.body?.['props'] as unknown[] | undefined)), bidirectional);
     const fromSpecification: (KindDefaults & { style?: RelationshipStyle }) | undefined = kindSpec && {
       ...structuredClone(kindSpec.defaults),
       ...(kindStyle && { style: structuredClone(kindStyle) }),

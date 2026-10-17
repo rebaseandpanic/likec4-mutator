@@ -93,7 +93,10 @@ export interface KindDefaults {
  * declaration, then merged with every `extend` block of the element.
  * `fromSpecification`, `declared` and `extendedBy` tell where they come from.
  *
- * Not covered: style and notation (no fields here), and the technology
+ * `ownStyle` and `style` are its own and effective styles (D74); see
+ * {@link ElementInfo.style}.
+ *
+ * Not covered: notation (no field here), and the technology
  * LikeC4 derives from the element icon when the project setting
  * `inferTechnologyFromIcon` (on by default) is on and the element has no
  * technology or an empty one — the library does not read project settings.
@@ -167,11 +170,26 @@ export interface ElementInfo {
    */
   metadata?: Record<string, string | string[]>;
   /**
-   * The specification declaration of the element's kind and the defaults it
-   * writes; absent when no specification declares the kind (LikeC4 then
-   * leaves the element out of its model).
+   * Own style: the first `style { ... }` block of the declaration — later
+   * properties overriding earlier ones — then a body-level `icon`
+   * overriding `style.icon`.  Values as written (opacity `'40%'`), no theme
+   * defaults; absent when no field is set (D18, D74)
    */
-  fromSpecification?: KindDefaults;
+  ownStyle?: ElementStyle;
+  /**
+   * Effective style, as LikeC4's model holds it before theme defaults: the
+   * style of the element's kind ({@link ElementKindDefaults.style})
+   * overridden field by field by {@link ElementInfo.ownStyle}, so a body
+   * `icon` wins over `style { icon }`.  Theme defaults and configured
+   * `styles.defaults` are not applied (D74); absent when no field is set
+   */
+  style?: ElementStyle;
+  /**
+   * The specification declaration of the element's kind and the defaults it
+   * writes, its style included; absent when no specification declares the
+   * kind (LikeC4 then leaves the element out of its model).
+   */
+  fromSpecification?: ElementKindDefaults;
   /** Tags, links and metadata written in the element's own declaration body */
   declared: ElementDecorations;
   /**
@@ -258,11 +276,24 @@ export interface RelationshipInfo {
    */
   metadata?: Record<string, string | string[]>;
   /**
-   * The specification declaration of the relationship's kind and the
-   * defaults it writes; absent when the relationship has no kind or no
-   * specification declares it.
+   * Own style: the first `style { ... }` block of the relationship (`line`,
+   * `color`, `head`, `tail`), values as written; absent when no field is set
    */
-  fromSpecification?: KindDefaults;
+  ownStyle?: RelationshipStyle;
+  /**
+   * Effective style, as LikeC4's model holds it before theme defaults: the
+   * style of its kind ({@link RelationshipKindDefaults.style}) overridden
+   * field by field by {@link RelationshipInfo.ownStyle}.  A bidirectional
+   * relationship always has a `tail`: the one written, else the `head`,
+   * else `'normal'`.  No theme defaults (D74); absent when no field is set
+   */
+  style?: RelationshipStyle;
+  /**
+   * The specification declaration of the relationship's kind and the
+   * defaults it writes, its style and `multiple` included; absent when the
+   * relationship has no kind or no specification declares it.
+   */
+  fromSpecification?: RelationshipKindDefaults;
   /** Tags, links and metadata written in the relationship itself */
   declared: ElementDecorations;
   /**
@@ -303,6 +334,30 @@ export interface SpecificationInfo {
    * their defaults are read with `LikeC4Mutator.getDeploymentNodeKind`.
    */
   deploymentNodeKinds?: string[];
+}
+
+/**
+ * The declaration of an element kind and the defaults it writes (see
+ * {@link KindDefaults}), with its style (D89).
+ */
+export interface ElementKindDefaults extends KindDefaults {
+  /**
+   * Default style as written in the kind's `style { ... }` block: the first
+   * block, the last value of a repeated field, values as written (opacity
+   * as `'40%'`), no theme defaults
+   */
+  style?: ElementStyle;
+}
+
+/**
+ * The declaration of a relationship kind and the defaults it writes (see
+ * {@link KindDefaults}), with its style and `multiple` (D89).
+ */
+export interface RelationshipKindDefaults extends KindDefaults {
+  /** Default style: the `line`, `color`, `head` and `tail` written in the kind, values as written */
+  style?: RelationshipStyle;
+  /** The kind's `multiple` flag, as written; absent when not written */
+  multiple?: boolean;
 }
 
 /**
