@@ -1475,7 +1475,12 @@ export class LikeC4Mutator {
         offset: place.offset,
         reference: { ...this.position(place.file, place.offset), role: place.role, cascadable: false, ...this.viewAt(place.file, place.offset) } as RemovalReference,
       })),
-      ...unique.map((hit) => ({ offset: hit.segments[0]!.offset, reference: this.unmodelledReference(hit) })),
+      ...unique.map((hit) => {
+        // A tag use is positioned at its `#`, as at a modelled place; the inventory holds the name after it.
+        const offset = hit.segments[0]!.offset;
+        const at = this.document(hit.file).fullText[offset - 1] === '#' ? offset - 1 : offset;
+        return { offset: at, reference: { ...this.unmodelledReference(hit), ...this.position(hit.file, at) } };
+      }),
     ]
       .sort((a, b) => (documentOrder.get(a.reference.file) ?? 0) - (documentOrder.get(b.reference.file) ?? 0) || a.offset - b.offset)
       .map(({ reference }) => reference);
