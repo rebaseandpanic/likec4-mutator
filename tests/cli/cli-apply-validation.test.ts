@@ -26,16 +26,17 @@ views {
 `;
 
 /**
- * Run `apply --in-place` on a fresh copy of `source` with the given mutations
- * file content; return exit status, stderr and the resulting model text.
+ * Run `apply --in-place` on a fresh copy of `model` (`source` by default) with
+ * the given mutations file content; return exit status, stderr and the
+ * resulting model text.
  */
-function runApply(mutationsFile: unknown): {
+function runApply(mutationsFile: unknown, model: string = source): {
   status: number | null;
   stderr: string;
   model: string;
 } {
   const dir = mkdtempSync(join(tmpdir(), 'likec4-mutator-apply-validation-'));
-  writeFileSync(join(dir, 'model.c4'), source, 'utf-8');
+  writeFileSync(join(dir, 'model.c4'), model, 'utf-8');
   const mutationsPath = join(dir, 'mutations.json');
   writeFileSync(mutationsPath, JSON.stringify(mutationsFile), 'utf-8');
   const result = spawnSync(
@@ -388,5 +389,34 @@ model {
     expect(status).toBe(0);
     expect(model).toContain('      color red border dashed\n');
     await expectValidLikeC4({ 'model.c4': model });
+  });
+});
+
+describe('CLI apply rejects the lc4m-17 repro (row 9 of lc4m-15.30)', () => {
+  const MODEL = `specification {
+  element service
+}
+model {
+  app = service {
+    api = service
+  }
+  other = service {
+  }
+}
+`;
+  const STEPS = {
+    'a top-level step': '    api -> other\n',
+    'a step in opt': '    opt {\n      api -> other\n    }\n',
+    'a step in an alt branch': "    alt {\n      if 'ok' {\n        api -> other\n      }\n    }\n",
+  };
+
+  it.each(Object.entries(STEPS))('rejects addElement other.api with %s: exit 1, mutations[0].id, nothing written', async (_, step) => {
+    const model = `${MODEL}views {\n  view index {\n    include api\n  }\n  dynamic view d {\n${step}  }\n}\n`;
+    // P: the repro is valid LikeC4.
+    await expectValidLikeC4({ 'model.c4': model });
+    const result = runApply({ mutations: [{ op: 'addElement', parent: 'other', kind: 'service', id: 'api', title: 'API' }] }, model);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('mutations[0].id:');
+    expect(result.model).toBe(model);
   });
 });
