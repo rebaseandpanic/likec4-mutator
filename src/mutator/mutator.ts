@@ -216,6 +216,15 @@ export type { ViewStepPatch, ViewStepSpec };
 export interface RemoveElementResult {
   removedRelationships: Array<{ source: string; target: string; title?: string }>;
   /**
+   * The deployment relationships the removal closure removed with the
+   * instances of the subtree — those with an endpoint in such an instance or
+   * stepping through an instance into the subtree, and those declared in
+   * such an instance — listed as `removeDeploymentInstance` reports them
+   * (D124).  Present only when the closure removed one, so only with
+   * `cascade: true`.
+   */
+  removedDeploymentRelationships?: Array<{ source: DeploymentEndpoint; target: DeploymentEndpoint; title?: string }>;
+  /**
    * Only with `cascade: true` (D112): every reference the cascade removed
    * with its construct, in LikeC4's document order, positions in the state
    * before the write.  Absent without `cascade`.
@@ -771,7 +780,8 @@ export class LikeC4Mutator {
    *    relationships and, cascaded the same way, its deployment-view items;
    *  - a deployment relationship whose endpoint steps through an instance
    *    into the subtree is removed.
-   * The removed references are listed in `cascaded`.
+   * The removed references are listed in `cascaded`, the deployment
+   * relationships the closure removed in `removedDeploymentRelationships`.
    *
    * **Rejected in both modes**: a view `of` in the subtree (D56; the views
    * that extend such a view are listed with it), a reference at a place the
@@ -878,7 +888,12 @@ export class LikeC4Mutator {
       throw err;
     }
 
-    return cascade ? { removedRelationships, cascaded: policy.cascaded } : { removedRelationships };
+    if (!cascade) return { removedRelationships };
+    return {
+      removedRelationships,
+      ...(policy.deploymentRelationships.length > 0 && { removedDeploymentRelationships: policy.deploymentRelationships }),
+      cascaded: policy.cascaded,
+    };
   }
 
   /**
@@ -2750,7 +2765,13 @@ export class LikeC4Mutator {
     fqn: string,
     elementFile: string,
     cascade: boolean,
-  ): { instances: string[]; plan: CascadePlan | undefined; cascaded: CascadedReference[]; deleted: Set<object> } {
+  ): {
+    instances: string[];
+    plan: CascadePlan | undefined;
+    cascaded: CascadedReference[];
+    deleted: Set<object>;
+    deploymentRelationships: NonNullable<RemoveElementResult['removedDeploymentRelationships']>;
+  } {
     const catalogue = this.referenceCatalogue();
     const insideElement = (entry: CatalogueEntry): boolean =>
       this.removedRanges(fqn, elementFile, entry.file).some((range) => entry.offset >= range.offset && entry.end <= range.end);
@@ -2807,14 +2828,23 @@ export class LikeC4Mutator {
       this.removedRanges(fqn, elementFile, file).some((range) => within(range, offset, end)) ||
       instances.some((id) => this.deployments.declarations(id).some((d) => d.file === file && within((d.node as { $cstNode?: TextRange }).$cstNode, offset, end)));
     const { plan, cascaded } = this.settleRemoval(listed, names, { field: 'fqn', subject: `'${fqn}'`, cascade, instanceIds, owned });
-    if (!plan) return { instances: [], plan: undefined, cascaded: [], deleted: new Set() };
+    if (!plan) return { instances: [], plan: undefined, cascaded: [], deleted: new Set(), deploymentRelationships: [] };
 
     const deleted = new Set<object>([...plan.removed, ...instanceDeclarations]);
     const resolver = new DeploymentResolver(this.deployments, this.workspace);
+    const removedRelations = new Set<string>();
     for (const relation of this.deployments.relations()) {
-      if (this.closureRelation(relation, fqn, instances, resolver)) deleted.add(relation.node);
+      // Inside an instance of the closure (removed with it) or with an endpoint in the closure.
+      const inside = instances.some((id) => isNestedInSubtree(relation.frames, id));
+      if (!inside && !this.closureRelation(relation, fqn, instances, resolver)) continue;
+      deleted.add(relation.node);
+      const cst = (relation.node as { $cstNode?: { offset: number } }).$cstNode;
+      if (cst) removedRelations.add(`${relation.file ?? ''}:${cst.offset}`);
     }
-    return { instances, plan, cascaded, deleted };
+    const deploymentRelationships = this.listDeploymentRelationships()
+      .filter((r) => removedRelations.has(`${r.file ?? ''}:${r.sourceRange.offset}`))
+      .map(({ source, target, title }) => ({ source, target, ...(title !== undefined && { title }) }));
+    return { instances, plan, cascaded, deleted, deploymentRelationships };
   }
 
   /**
