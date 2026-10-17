@@ -366,3 +366,48 @@ views {
     await expectValidLikeC4(after);
   });
 });
+
+describe('views-block and global references, as LikeC4 links them (review fix of row 10)', () => {
+  const NESTED = `${SPEC}model {
+  app = service {
+    api = service {
+      leaf = service
+    }
+  }
+}
+`;
+
+  it.each(['api. leaf', 'api./* note */leaf'])(
+    "rejects a root addElement 'api' that re-targets the views-block style target '%s'",
+    async (text) => {
+      const files = { 'm.c4': `${NESTED}views {\n  style ${text} {\n    color red\n  }\n  view v {\n    include *\n  }\n}\n` };
+      const written = { 'm.c4': files['m.c4'].replace('model {\n', 'model {\n  api = service\n') };
+      // P: LikeC4 links the dotted name by its segments to `app.api.leaf`, and elsewhere in the text the write would produce.
+      await expectValidLikeC4(files);
+      expect((await linked(files, 'style-target', text)).target).toEqual({ model: 'app.api.leaf' });
+      expect((await linked(written, 'style-target', text)).target).not.toEqual({ model: 'app.api.leaf' });
+      expectRejected(LikeC4Mutator.fromFiles(files), 'name', (m) => m.addElement(null, { name: 'api', kind: 'service' }));
+    },
+  );
+
+  const DEPLOYED = `${SPEC}model {
+  app = service
+}
+deployment {
+  vm prod {
+    vm edge
+  }
+}
+`;
+
+  it.each([
+    ['a views-block style', 'style-target', 'views {\n  style edge {\n    color red\n  }\n  view v {\n    include *\n  }\n}\n'],
+    ['a global predicate', 'global-or-import', 'global {\n  predicateGroup g {\n    include edge\n  }\n}\nviews {\n  view v {\n    include *\n  }\n}\n'],
+  ])('rejects removeDeploymentNode of a node that %s outside deployment views names', async (_, role, rest) => {
+    const files = { 'm.c4': `${DEPLOYED}${rest}` };
+    // P: LikeC4 links the name, which exists only in the deployment model, to the node.
+    await expectValidLikeC4(files);
+    expect((await linked(files, role, 'edge')).target).toEqual({ deployment: 'prod.edge' });
+    expectRejected(LikeC4Mutator.fromFiles(files), 'id', (m) => m.removeDeploymentNode('prod.edge'));
+  });
+});

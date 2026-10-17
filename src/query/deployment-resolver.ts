@@ -71,7 +71,9 @@ type ResolutionMode =
   /** A reference of a deployment view rule: nodes, instances, then elements */
   | 'view'
   /** An element reference (`instanceOf`) */
-  | 'element';
+  | 'element'
+  /** A reference in a `global` block or a `views`-block style rule: elements, nodes, then instances */
+  | 'global';
 
 /** A deployment element a scope offers under a name (LikeC4 `AstNodeDescription`). */
 interface Description {
@@ -232,6 +234,18 @@ export class DeploymentResolver {
   }
 
   /**
+   * What a parsed `FqnRef` written in a `global` block or a `views`-block
+   * style rule links to.  LikeC4 offers a parentless name there as an
+   * element, then a deployment node, then a deployed instance
+   * (`genScopeForParentlessFqnRef`, `isFqnRefInsideGlobals`), so the target
+   * is a logical element, a node or instance, or an element reached through
+   * an instance.  Undefined when it does not resolve.
+   */
+  resolveGlobalReference(ref: RefLike): LinkedTarget | undefined {
+    return toTarget(this.resolveRef(ref, 'global'));
+  }
+
+  /**
    * Name → description of the deployment elements reachable by a single name
    * below `id`: direct children (nodes and instances) with a unique name,
    * then deeper descendants whose name is unique among all descendants and
@@ -316,10 +330,19 @@ export class DeploymentResolver {
   }
 
   private resolveName(name: string, from: AstLike, mode: ResolutionMode): Linked | undefined {
-    if (mode !== 'element') {
-      const found = this.lookup(name, from, 'DeploymentNode') ?? this.lookup(name, from, 'DeployedInstance');
+    const deployed = (): Description | undefined =>
+      this.lookup(name, from, 'DeploymentNode') ?? this.lookup(name, from, 'DeployedInstance');
+    if (mode === 'deployment' || mode === 'view') {
+      const found = deployed();
       if (found || mode === 'deployment') return found;
     }
+    const element = this.elementOf(name, from);
+    if (element || mode !== 'global') return element;
+    return deployed();
+  }
+
+  /** The element a parentless `name` written at `from` names: the document's model scope, then root elements. */
+  private elementOf(name: string, from: AstLike): Linked | undefined {
     const root = documentRoot(from);
     const document = root === undefined ? undefined : this.documentOf.get(root);
     if (root === undefined || document === undefined) return undefined;

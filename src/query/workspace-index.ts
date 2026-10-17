@@ -467,7 +467,10 @@ export function resolveRelations(
 export type ReferencePosition =
   /** Directly in the `model` block with this index (a model-level relation) */
   | { model: number }
-  /** In a `views` block, outside a view body (the element of `view ... of X`) */
+  /**
+   * In a `views` block outside a view body (the element of `view ... of X`,
+   * a `views`-block style target) or in a `global` block
+   */
   | 'views'
   /**
    * In the body of an element or dynamic view.  `frame` is the element whose

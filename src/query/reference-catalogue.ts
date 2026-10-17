@@ -21,8 +21,12 @@
  *    deployment model and deployment views through `DeploymentResolver`;
  *    element and dynamic view bodies, `extends` and `navigateTo` through
  *    `ViewReferenceResolver`; `views`-block style targets and `global`
- *    references in the document scope (no container scope, as a view `of`);
- *    an imported name as the root element of that name.
+ *    references through `DeploymentResolver` as LikeC4 scopes them there —
+ *    an element in the document scope (no container scope, as a view `of`),
+ *    then a deployment node, then an instance; an imported name as the root
+ *    element of that name.  A reference is resolved from its AST segments,
+ *    never from its written text, which may hold whitespace and comments
+ *    after a dot.
  *  - **Statement class and containers.**  The FR-003 class of the view
  *    statement the reference is written in, and the chain of constructs a
  *    cascade edits around it (item, rule, groups; step statement, `par`).
@@ -35,7 +39,7 @@ import type { DeploymentAstNode, DeploymentIndex } from './deployment-index.js';
 import { resolveFqnRef } from './fqn.js';
 import type { ViewAstNode, ViewDeclaration, ViewIndex } from './view-index.js';
 import { ViewReferenceResolver, type ViewTargetRole } from './view-resolver.js';
-import { DocumentReferenceResolver, resolveDocumentReferences, type WorkspaceIndex } from './workspace-index.js';
+import { resolveDocumentReferences, type WorkspaceIndex } from './workspace-index.js';
 
 /**
  * Where a reference is written, by the rows of FR-001 (lc4m-15.30):
@@ -220,12 +224,6 @@ export function buildReferenceCatalogue(
     for (const reference of resolveDocumentReferences(views.documents[document]!.ast, workspace)) {
       if (reference.ref) modelTargets.set(reference.ref, reference.fqn);
     }
-    let documentResolver: DocumentReferenceResolver | undefined;
-    const resolveInDocument = (text: string): string | undefined => {
-      documentResolver ??= new DocumentReferenceResolver(views.documents[document]!.ast, workspace);
-      return documentResolver.resolve(text, 'views');
-    };
-
     const found: CatalogueEntry[] = [];
     walk(ast as ViewAstNode, (node) => {
       const written = readReference(node);
@@ -288,7 +286,7 @@ export function buildReferenceCatalogue(
       switch (context.block) {
         case 'Globals':
         case 'ModelViews':
-          return model(resolveInDocument(text));
+          return deploymentResolver.resolveGlobalReference(node);
         case 'ModelDeployments': {
           const instance = node.$container?.$type === 'ElementRef' ? node.$container.$container : undefined;
           if (instance?.$type === 'DeployedInstance') return model(deploymentResolver.instanceElement(instance as DeploymentAstNode));

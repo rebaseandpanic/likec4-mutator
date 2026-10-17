@@ -279,6 +279,78 @@ describe('unrecovered text stays outside the equality (row 4)', () => {
   );
 });
 
+describe('global and views-block references link as LikeC4 scopes them there (row 3)', () => {
+  // LikeC4 offers a parentless name in a `global` block or a `views`-block style rule as an element,
+  // then a deployment node, then an instance; the names below exist only in the deployment model,
+  // and two dotted names hold whitespace or a comment after a dot.
+  const DEPLOYED: Workspace = {
+    name: 'refs-catalog, global and views-block references into the deployment model',
+    files: {
+      ...CATALOG.files,
+      'deployment.c4': `${CATALOG.files['deployment.c4']}global {
+  predicateGroup deployed {
+    include prod
+    include primary
+    include api1
+    include prod.primary.api1.handler
+  }
+  style deployedStyle primary {
+    color red
+  }
+}
+views {
+  style secondary, api1 {
+    color green
+  }
+  style prod.primary.api1.handler {
+    color amber
+  }
+  style shop. api, shop./* note */db {
+    color red
+  }
+}
+`,
+    },
+  };
+  // A root deployment node named like the root element `shop`: the element wins.
+  const SAME_NAME: Workspace = {
+    name: 'refs-catalog, an element and a deployment node of one name',
+    files: {
+      ...edited(CATALOG.files, 'deployment.c4', 'deployment {\n', 'deployment {\n  zone shop\n'),
+      'shared-name.c4': 'global {\n  predicateGroup named {\n    include shop\n  }\n}\nviews {\n  style shop {\n    color red\n  }\n}\n',
+    },
+  };
+  /** Workspace, file, role, written text and the target LikeC4 links every such reference to. */
+  const EXPECTED: Array<[Workspace, string, string, string, unknown]> = [
+    [DEPLOYED, 'deployment.c4', 'global-or-import', 'prod', { deployment: 'prod' }],
+    [DEPLOYED, 'deployment.c4', 'global-or-import', 'primary', { deployment: 'prod.primary' }],
+    [DEPLOYED, 'deployment.c4', 'global-or-import', 'api1', { deployment: 'prod.primary.api1' }],
+    [DEPLOYED, 'deployment.c4', 'global-or-import', 'prod.primary.api1.handler', { deployment: 'prod.primary.api1', element: 'shop.api.handler' }],
+    [DEPLOYED, 'deployment.c4', 'style-target', 'secondary', { deployment: 'prod.secondary' }],
+    [DEPLOYED, 'deployment.c4', 'style-target', 'api1', { deployment: 'prod.primary.api1' }],
+    [DEPLOYED, 'deployment.c4', 'style-target', 'prod.primary.api1.handler', { deployment: 'prod.primary.api1', element: 'shop.api.handler' }],
+    [DEPLOYED, 'deployment.c4', 'style-target', 'shop. api', { model: 'shop.api' }],
+    [DEPLOYED, 'deployment.c4', 'style-target', 'shop./* note */db', { model: 'shop.db' }],
+    [SAME_NAME, 'shared-name.c4', 'global-or-import', 'shop', { model: 'shop' }],
+    [SAME_NAME, 'shared-name.c4', 'style-target', 'shop', { model: 'shop' }],
+  ];
+
+  it.each(EXPECTED.map(([workspace, file, role, text, target]) => [`${role} '${text}'`, workspace.name, workspace, file, role, text, target] as const))(
+    'checks the oracle fact: LikeC4 links every %s of %s as expected',
+    async (_, __, workspace, file, role, text, target) => {
+      const found = (await oracle(workspace)).filter((r) => r.file === file && r.role === role && r.text === text);
+      expect(found.length, `${file} ${role} ${text}`).toBeGreaterThan(0);
+      expect(found.map((r) => r.target)).toEqual(found.map(() => target));
+    },
+  );
+
+  it.each([DEPLOYED, SAME_NAME].map((workspace) => [workspace.name, workspace] as const))('equals the oracle one to one on %s', async (_, workspace) => {
+    const expected = (await oracle(workspace)).map(tuple).sort();
+    expect(expected.length).toBeGreaterThan(0);
+    expect(catalogue(workspace.files).map(tuple).sort()).toEqual(expected);
+  });
+});
+
 /**
  * Match legacy references with oracle references one to one on file, line,
  * text and target, an oracle role being allowed for each legacy role.
