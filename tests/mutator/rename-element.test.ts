@@ -361,6 +361,54 @@ model {
   });
 });
 
+describe('a title equal to the old name (row 82)', () => {
+  it('keeps a kind title that equals the renamed element’s old name', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `specification {
+  element system
+  element tool {
+    title 'util'
+  }
+}
+model {
+  app = system 'App' {
+    util = tool
+  }
+}
+`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.renameElement('app.util', 'helper');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(before['m.c4']!, [['    util = tool\n', '    helper = tool\n']]));
+    expect(mutator.getElement('app.helper')?.title).toBe('util');
+    await expectSigmaImage(before, after, { 'app.util': 'app.helper' });
+    await expectAcceptedWrite(before, after);
+  });
+});
+
+describe('references paired by view (row 81)', () => {
+  it('SIG tells apart two views whose references swap targets, which a multiset of targets does not', SLOW, async () => {
+    const MODEL = `${SPEC}model {
+  app = system 'App' {
+    api = service 'API'
+  }
+  other = system 'Other' {
+    api = service 'Other API'
+  }
+}
+`;
+    const before: Files = { 'm.c4': `${MODEL}views {\n  view a of app {\n    include api\n  }\n  view b of other {\n    include api\n  }\n}\n` };
+    const swapped: Files = { 'm.c4': `${MODEL}views {\n  view a of app {\n    include other.api\n  }\n  view b of other {\n    include app.api\n  }\n}\n` };
+    // P: both are valid, and the targets as a multiset are the same.
+    await expectValidLikeC4(before);
+    await expectValidLikeC4(swapped);
+    await expectStable(before, swapped, {});
+    await expect(expectSigmaImage(before, swapped, {})).rejects.toThrow();
+  });
+});
+
 describe('an instance named after the element (row 83)', () => {
   const FILES: Files = {
     'a.c4': `${SPEC}model {
