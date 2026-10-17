@@ -180,15 +180,23 @@ export function removalEditsForRanges(fullText: string, ranges: ReadonlyArray<{ 
  * So a write that plans in steps — each step on the text of the steps
  * before — still edits a file once, with one group of edits of its original
  * text (D123, D126).  Line endings are taken as given: write the edits with
- * the file's line ending first.
+ * the file's line ending first.  Insertions at one offset keep the order
+ * {@link applyEdits} gives them: in the order of `later`.
  *
- * @throws {Error} (internal) when a later edit crosses the boundary of a base edit's new text
+ * @throws {Error} (internal) when a later edit crosses the boundary of a base
+ *   edit's new text.  A planning step edits only text the steps before left
+ *   whole — reference tokens they did not rewrite, or ranges inside the text
+ *   they inserted — so a crossing edit is a defect of the planner, not a
+ *   refused edit of the input.
  */
 export function composeEdits(base: readonly TextEdit[], later: readonly TextEdit[]): TextEdit[] {
   const composed = base.map((edit) => ({ ...edit })).sort((a, b) => a.offset - b.offset);
   const added: TextEdit[] = [];
-  // Descending: splicing into a base edit's text never moves a later edit still to come.
-  for (const edit of [...later].sort((a, b) => b.offset - a.offset || b.end - a.end)) {
+  // Descending: splicing into a base edit's text never moves a later edit still to come.  At one
+  // offset the edit later in the list goes first, so that the earlier one is spliced in front of it.
+  const order = later.map((edit, index) => ({ edit, index }));
+  order.sort((a, b) => b.edit.offset - a.edit.offset || b.edit.end - a.edit.end || b.index - a.index);
+  for (const { edit } of order) {
     let shift = 0;
     let spliced = false;
     for (const b of composed) {
@@ -210,7 +218,8 @@ export function composeEdits(base: readonly TextEdit[], later: readonly TextEdit
     }
     if (!spliced) added.push({ offset: edit.offset - shift, end: edit.end - shift, newText: edit.newText });
   }
-  return [...composed, ...added];
+  // `added` was filled backwards; applyEdits keeps insertions at one offset in list order.
+  return [...composed, ...added.reverse()];
 }
 
 /**
