@@ -1292,6 +1292,14 @@ export async function linkedCatalogueReferences(
   options: { projects?: readonly string[] } = {},
 ): Promise<LinkedCatalogueReference[]> {
   const { services, documents } = await buildWorkspace(files, undefined, options.projects);
+  return catalogueEntries(services, documents).map((entry) => entry.reference);
+}
+
+/** The references of {@link linkedCatalogueReferences} of built `documents`, each with its AST node. */
+function catalogueEntries(
+  services: Awaited<ReturnType<typeof buildWorkspace>>['services'],
+  documents: LangiumDocument[],
+): Array<{ reference: LinkedCatalogueReference; node: AstNode }> {
   const fqnIndex = services.likec4.FqnIndex;
   const fqn = (node: AstNode): string => fqnIndex.resolve(node as Parameters<typeof fqnIndex.resolve>[0]);
   const chainTarget = (resolved: AstNode | undefined, parents: Array<AstNode | undefined>): LinkedTarget | null => {
@@ -1309,10 +1317,10 @@ export async function linkedCatalogueReferences(
     const name = (ref.ref as (AstNode & { name?: string }) | undefined)?.name;
     return name ? { view: name } : null;
   };
-  const result: LinkedCatalogueReference[] = [];
+  const result: Array<{ reference: LinkedCatalogueReference; node: AstNode }> = [];
   for (const document of documents) {
     const file = fileName(document);
-    const found: LinkedCatalogueReference[] = [];
+    const found: Array<{ reference: LinkedCatalogueReference; node: AstNode }> = [];
     const report = (
       written: { offset: number; text: string; range: { start: { line: number } } },
       node: AstNode,
@@ -1326,13 +1334,16 @@ export async function linkedCatalogueReferences(
           ? 'global-or-import'
           : 'opaque-flow';
       found.push({
-        file,
-        offset: written.offset,
-        line: written.range.start.line + 1,
-        role,
-        text: written.text,
-        target,
-        unmodelled: boundary !== undefined,
+        node,
+        reference: {
+          file,
+          offset: written.offset,
+          line: written.range.start.line + 1,
+          role,
+          text: written.text,
+          target,
+          unmodelled: boundary !== undefined,
+        },
       });
     };
     for (const node of AstUtils.streamAst(document.parseResult.value)) {
@@ -1375,7 +1386,7 @@ export async function linkedCatalogueReferences(
         }
       }
     }
-    result.push(...found.sort((a, b) => a.offset - b.offset));
+    result.push(...found.sort((a, b) => a.reference.offset - b.reference.offset));
   }
   return result;
 }
@@ -1734,9 +1745,10 @@ export async function introducedWarnings(
 }
 
 /**
- * The accepted-write bundle: `after` passes `likec4 validate`
- * ({@link expectValidLikeC4}, INV-1), every named view LikeC4 computed for
- * `before` is still computed except `removedViewId`
+ * The accepted-write bundle: `before` is a non-empty file set that passes
+ * `likec4 validate` (the state the write starts from), `after` passes it
+ * too ({@link expectValidLikeC4}, INV-1), every named view LikeC4 computed
+ * for `before` is still computed except `removedViewId`
  * ({@link expectComputedViewsSurvive}, INV-9), and the write introduced no
  * INV-2 warning ({@link introducedWarnings}).
  */
@@ -1745,6 +1757,8 @@ export async function expectAcceptedWrite(
   after: Record<string, string>,
   options: { removedViewId?: string } = {},
 ): Promise<void> {
+  expect(Object.keys(before).length, 'files before the write').toBeGreaterThan(0);
+  expect(await validateLikeC4(before), 'before the write').toEqual([]);
   await expectValidLikeC4(after);
   await expectComputedViewsSurvive(before, after, options.removedViewId);
   expect(await introducedWarnings(before, after), 'introduced INV-2 warnings').toEqual([]);
@@ -1764,20 +1778,86 @@ function lastSegment(id: string): string {
   return id.slice(id.lastIndexOf('.') + 1);
 }
 
+/** Constructs that are neither moved nor renamed by an element σ, keyed by their ordinal among their kind in a file. */
+const ORDINAL_CONSTRUCTS: ReadonlySet<string> = new Set(['ExtendElement', 'ExtendRelation', 'ExtendDeployment']);
+
+/**
+ * The construct a catalogue reference of `document` is written in, for
+ * pairing references across a rename or move — a key that a correct σ
+ * write leaves unchanged once ids are mapped with `map`:
+ * - a named view: its name (view ids are not changed by σ);
+ * - otherwise the innermost element, deployment node or instance: its id
+ *   mapped by `map` (its text may move to another file);
+ * - otherwise an unnamed view or an `extend` block: the file and its
+ *   ordinal among the constructs of its type in the file;
+ * - otherwise the file and the top-level block keyword.
+ */
+function referenceConstructs(
+  document: LangiumDocument,
+  fqn: (node: AstNode) => string,
+  map: (id: string) => string,
+): (node: AstNode) => string {
+  const file = fileName(document);
+  const ordinals = new Map<AstNode, string>();
+  const counters = new Map<string, number>();
+  for (const node of AstUtils.streamAst(document.parseResult.value)) {
+    const unnamedView = /^(ElementView|DynamicView|DeploymentView)$/.test(node.$type) && !(node as AstNode & { name?: string }).name;
+    if (!unnamedView && !ORDINAL_CONSTRUCTS.has(node.$type)) continue;
+    const kind = unnamedView ? 'unnamed view' : node.$type;
+    const ordinal = counters.get(kind) ?? 0;
+    counters.set(kind, ordinal + 1);
+    ordinals.set(node, `${file} ${kind}#${ordinal}`);
+  }
+  return (node) => {
+    for (let up = node.$container; up; up = up.$container) {
+      switch (up.$type) {
+        case 'ElementView':
+        case 'DynamicView':
+        case 'DeploymentView': {
+          const name = (up as AstNode & { name?: string }).name;
+          return name ? `view ${name}` : ordinals.get(up)!;
+        }
+        case 'Element':
+        case 'DeploymentNode':
+        case 'DeployedInstance':
+          return `${up.$type} ${map(fqn(up))}`;
+        case 'ExtendElement':
+        case 'ExtendRelation':
+        case 'ExtendDeployment':
+          return ordinals.get(up)!;
+        case 'Model':
+        case 'ModelDeployments':
+        case 'ModelViews':
+        case 'Globals':
+        case 'ImportsFromPoject':
+          return `${file} ${up.$type}`;
+      }
+    }
+    throw new Error(`expectSigmaImage: no construct for a reference in ${node.$container?.$type}`);
+  };
+}
+
 /**
  * Assert that `after` is the image of `before` under σ (D76): `sigma` maps
  * every element FQN and deployment id that the write changes to its new
  * value, literally — an id not in it is unchanged.  Then:
  * - the computed elements of `after` are those of `before` with ids mapped,
  *   all values equal (own and kind-default ones, style included), except a
- *   title LikeC4 derived from the name (none written, equal to the old last
- *   segment), which follows the new name;
+ *   title LikeC4 derived from the name — none written on the element and
+ *   none on its kind (LikeC4 falls back to the name only then) — which
+ *   follows the new name;
  * - the computed deployment elements likewise, with an instance's
  *   `element` mapped;
  * - the explicit model and deployment relations, compared as multisets
  *   without their ids, with endpoints mapped;
- * - every resolved {@link linkedCatalogueReferences} target of `before`,
- *   mapped, by role, equals the resolved targets of `after` (multisets).
+ * - reference by reference, every {@link linkedCatalogueReferences} entry
+ *   of `before` has its partner in `after`, whose target is σ of its old
+ *   target (`null` stays `null`).  Partners are paired independently of
+ *   the library: references are grouped by the construct they are written
+ *   in (see {@link referenceConstructs}, ids mapped by σ on the `before`
+ *   side) and by role, and paired in source order within each group; the
+ *   groups and their sizes must be the same on both sides.  Offsets and
+ *   written texts are not compared — the write may rewrite them.
  * Both sides must build without errors.
  */
 export async function expectSigmaImage(
@@ -1786,18 +1866,34 @@ export async function expectSigmaImage(
   sigma: Record<string, string>,
 ): Promise<void> {
   const s = (id: string): string => sigma[id] ?? id;
-  const sides = await Promise.all(
-    [before, after].map(async (files) => {
-      const { services, documents } = await buildWorkspace(files);
-      expect(services.likec4.LanguageServices.getErrors()).toEqual([]);
-      return { model: await buildLikeC4Model(files), own: parsedElements(services, documents) };
-    }),
-  );
-  const [was, now] = sides as [(typeof sides)[0], (typeof sides)[0]];
+  const side = async (files: Record<string, string>, map: (id: string) => string) => {
+    const { services, documents } = await buildWorkspace(files);
+    expect(services.likec4.LanguageServices.getErrors()).toEqual([]);
+    const data = (await services.likec4.ModelBuilder.computeModel())!.$data as unknown as {
+      specification: { elements: Record<string, { title?: string | null }> };
+    };
+    const fqnIndex = services.likec4.FqnIndex;
+    const fqn = (node: AstNode): string => fqnIndex.resolve(node as Parameters<typeof fqnIndex.resolve>[0]);
+    const groups = new Map<string, LinkedCatalogueReference[]>();
+    const constructs = new Map(documents.map((d) => [fileName(d), referenceConstructs(d, fqn, map)]));
+    for (const { reference, node } of catalogueEntries(services, documents)) {
+      const key = `${constructs.get(reference.file)!(node)} | ${reference.role}`;
+      groups.set(key, [...(groups.get(key) ?? []), reference]);
+    }
+    return {
+      model: await buildLikeC4Model(files),
+      own: parsedElements(services, documents),
+      kindTitles: data.specification.elements,
+      groups,
+    };
+  };
+  const was = await side(before, s);
+  const now = await side(after, (id) => id);
 
   const elements = Object.fromEntries(
     Object.entries(was.model.elements).map(([id, element]) => {
-      const derived = !was.own.get(id)?.title && element.title === lastSegment(id);
+      const kind = (element as LikeC4ModelElement & { kind?: string }).kind;
+      const derived = !was.own.get(id)?.title && !(kind && was.kindTitles[kind]?.title);
       return [s(id), { ...element, id: s(id), ...(derived && { title: lastSegment(s(id)) }) }];
     }),
   );
@@ -1827,13 +1923,25 @@ export async function expectSigmaImage(
     mapped(was.model.deployments.relations),
   );
 
-  const targets = async (files: Record<string, string>, map: (t: LinkedViewTarget) => LinkedViewTarget): Promise<string[]> =>
-    (await linkedCatalogueReferences(files))
-      .filter((r) => r.target !== null)
-      .map((r) => `${r.role} ${stableJson(map(r.target!))}`)
-      .sort();
-  const mapTarget = (t: LinkedViewTarget): LinkedViewTarget => ('view' in t ? t : endpoint(t) as LinkedViewTarget);
-  expect(await targets(after, (t) => t), 'reference targets under σ').toEqual(await targets(before, mapTarget));
+  const sizes = (groups: Map<string, LinkedCatalogueReference[]>) =>
+    Object.fromEntries([...groups].map(([key, list]) => [key, list.length]));
+  expect(sizes(now.groups), 'references by construct and role under σ').toEqual(sizes(was.groups));
+  const mapTarget = (t: LinkedViewTarget | null): LinkedViewTarget | null =>
+    t === null || 'view' in t ? t : (endpoint(t) as LinkedViewTarget);
+  const changed: string[] = [];
+  for (const [key, list] of was.groups) {
+    list.forEach((old, i) => {
+      const partner = now.groups.get(key)![i]!;
+      const expected = mapTarget(old.target);
+      if (stableJson(partner.target) !== stableJson(expected)) {
+        changed.push(
+          `${old.file}:${old.line} ${old.text} (${key}) → ${partner.file}:${partner.line} ${partner.text}: ` +
+            `expected ${stableJson(expected)}, got ${stableJson(partner.target)}`,
+        );
+      }
+    });
+  }
+  expect(changed, 'references whose target is not σ of the old one').toEqual([]);
 }
 
 // ----- the library's view reads, as the comparisons read them --------------
