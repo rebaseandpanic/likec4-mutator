@@ -31,6 +31,7 @@ import {
 } from '../parser/grammar.js';
 import { resolveFqnRef } from '../query/fqn.js';
 import type { CatalogueRole } from '../query/reference-catalogue.js';
+import type { KindPlaceRole } from '../query/kind-places.js';
 import type { ViewBodyPlace, ViewReferenceResolver } from '../query/view-resolver.js';
 import type { WorkspaceIndex } from '../query/workspace-index.js';
 import { isLinkUrl, viewIncludeExpression, type ElementStyle, type RelationshipStyle } from './codegen.js';
@@ -70,10 +71,11 @@ export interface RelatedConstruct {
 
 /**
  * Where a reference that a removal is about is written: the place's FR-001
- * role (see {@link CatalogueRole}), or `unrecovered` for a name in text the parser
- * could not recover.
+ * role (see {@link CatalogueRole}); for a kind or tag removal, the FR-002
+ * place name `<construct>:<context>` (see {@link KindPlaceRole}, D128); or
+ * `unrecovered` for a name in text the parser could not recover.
  */
-export type RemovalReferenceRole = CatalogueRole | 'unrecovered';
+export type RemovalReferenceRole = CatalogueRole | KindPlaceRole | 'unrecovered';
 
 /** One reference listed by a {@link ReferencedRemovalError}; positions are 1-based. */
 export interface RemovalReference {

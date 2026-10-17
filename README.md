@@ -740,6 +740,50 @@ mutator.updateKind('relationship', 'async', { title: null, technology: 'Kafka' }
 | element `technology: S`, relationship `description: S` / `technology: S` | `S`, `''` included (an empty relationship description written after the title reads as the kind description) |
 | `metadata` | as without kind defaults |
 
+### Renaming and removing kinds and tags
+
+```typescript
+mutator.renameKind('element', 'vm', 'machine');   // => { changedFiles }
+mutator.renameTag('hot', 'warm');                 // names without '#'
+mutator.removeKind('relationship', 'calls');
+mutator.removeTag('legacy');
+```
+
+**Where a kind or tag is named.** A rename rewrites, and a removal looks for, every place where a reference names the kind or tag, in every loaded file:
+
+- the kind token of an element or deployment node declaration (`api = vm 'API'`, `vm api 'API'`);
+- the kind of a relationship connector (`-[calls]->`, `-[calls]<->`, `.calls`) of a model, deployment or `extend` relationship, a dynamic step or a relation predicate;
+- every tags list (`#hot`): of elements, relationships, deployment nodes, instances and deployment relationships, views, `extend` blocks and kind defaults;
+- the expressions `element.kind`, `element.tag`, `where … kind is`, `where … tag is`, relation `where` kind and tag conditions, participant kind and tag conditions (`source.kind is vm`) — negated forms (`!=`, `is not`, `not (…)`) included — in include and exclude rules, style rule targets and `rank` targets.
+
+Each place has a type: an element kind, a deployment node kind, a relationship kind or a tag. `where … kind is` and participant kind conditions name element kinds and deployment node kinds at once (LikeC4 matches them by name against both). A rename rewrites the places of the kind's own type and these shared conditions. A same-spelled name of another type (a tag `x` beside a kind `x`, an element kind `vm` beside a deployment node kind `vm`) is untouched, and so is text inside string and markdown values. A tag keeps its color block; each changed file is written once.
+
+**Element and deployment node kinds with one name.** When the old or the new name is also a kind of the other of these two types, LikeC4 would match a shared condition against both. Neither rewriting it nor keeping it preserves what it selects, so the rename is rejected while such a condition names the old or the new name. `related` lists the conditions (`construct: 'where-condition'`). The field is `name` when the old name is the other type's, else `newName`. Without such a condition the rename is accepted.
+
+**Removal.** Only a kind or tag that no place names is removed. The emptied `specification { }` block stays. A used one is rejected with a `ReferencedRemovalError` on `name` whose `references` list every use, all with `cascadable: false`. The `role` of a use is its place name, `<construct>:<context>`:
+
+| Construct | Contexts |
+| --- | --- |
+| `declaration` | `element`, `deploymentNode` |
+| `connector` | `model-relationship`, `deployment-relationship`, `extend-relationship`, `step`, `predicate` |
+| `tags` | `element`, `relationship`, `deploymentNode`, `instance`, `deployment-relationship`, `view`, `extend`, `kind-default` |
+| `element.kind`, `element.tag`, `where-kind`, `where-tag`, `relation-where-kind`, `relation-where-tag`, `participant-kind`, `participant-tag` | `predicate`, `style-target`, `rank-target` |
+
+For example, `connector:step` or `where-tag:predicate`. A name written where the library does not resolve references — a `global` block, an import, a dynamic view's flow block other than `par`, unparsed text — is a use with role `opaque-flow`, `global-or-import` or `unrecovered`. A use inside a named view carries its `view` id. The type `KindPlaceRole` is exported.
+
+**Rejected** (`InvalidWriteError`, nothing changed):
+- on `type`: not one of the three kind types;
+- on `name`:
+  - no such kind or tag is declared, or it is declared more than once;
+  - for a rename, a construct the library does not resolve names it;
+  - the shared-condition case above;
+- on `newName`:
+  - a name the grammar does not accept for the declaration, or one already declared for the type;
+  - the shared-condition case above;
+  - an edit that would not parse.
+
+A removal of an undeclared kind or tag is a plain `InvalidWriteError`, not a `ReferencedRemovalError`.
+
 ## `extend` blocks
 
 An element can get tags, links and metadata from `extend X { ... }` blocks, in the same or other files:
@@ -1716,6 +1760,7 @@ Writes LikeC4 would reject are refused the same way:
 | `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
 | `renameElement` | see [Renaming elements](#renaming-elements). |
 | `moveElement` | see [Moving elements](#moving-elements). |
+| `renameKind`, `renameTag`, `removeKind`, `removeTag` | see [Renaming and removing kinds and tags](#renaming-and-removing-kinds-and-tags). |
 | `removeElement` | `fqn` is not a declared element, or an edit would leave a file that does not parse (`InvalidWriteError`); a reference into the subtree that the mode does not remove (`ReferencedRemovalError`, see [Removing referenced elements](#removing-referenced-elements)). Field `fqn`. |
 | `updateDeploymentNode` | `id` is not one declared node; a tag is not declared; `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating nodes](#updating-nodes)). |
 | `updateDeploymentInstance` | `id` is not one declared instance; a tag is not declared; a patched metadata key would not read as requested, as LikeC4 cannot hold an empty own map (`metadata.<key>`); `tags`, `links` or `metadata` while a loaded file has syntax errors (see [Updating instances](#updating-instances)). |

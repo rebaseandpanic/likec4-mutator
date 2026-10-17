@@ -55,6 +55,13 @@ export type {
   ViewWriteResult,
 } from './query/types.js';
 export type { DeploymentTarget, LinkedTarget } from './query/deployment-resolver.js';
+export type {
+  KindConnectorContext,
+  KindExpressionConstruct,
+  KindExpressionContext,
+  KindPlaceRole,
+  KindTagsContext,
+} from './query/kind-places.js';
 
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';

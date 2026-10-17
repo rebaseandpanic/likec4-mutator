@@ -32,7 +32,8 @@ import { buildReferenceCatalogue, type CatalogueEntry, type CatalogueRole, type 
 import { affectedNameHits, newNameCaptures, unmodelledInventory, type UnmodelledName, type UnmodelledNameClass } from '../query/unmodelled.js';
 import { buildFqnIndex, forEachElementDeclaration, readStrictFqnRef, resolveFqnRef } from '../query/fqn.js';
 import { isSameHierarchy } from '@likec4/core/utils';
-import { GrammarUtils } from 'langium';
+import { GrammarUtils, type CstNode } from 'langium';
+import { kindPlaces, type KindPlace } from '../query/kind-places.js';
 import {
   WorkspaceIndex,
   resolveReferenceText,
@@ -1312,16 +1313,210 @@ export class LikeC4Mutator {
     return this.writeSpecification(new Map([[placement.file, [edit]]]), 'name');
   }
 
+  /**
+   * Rename the kind of `type` named `name` to `newName` (lc4m-15.30 US-7):
+   * the declaration and every FR-002 place of that kind type, or of the
+   * shared type (`where … kind is`, participant kind conditions, positive
+   * and negated), that names it, in every file.  Places of another kind
+   * type with the same spelling, and text inside string and markdown
+   * values, are untouched.  Each changed file is written once.
+   *
+   * Rejected, with nothing changed (`InvalidWriteError`):
+   *  - on `type`: not one of the three kind types;
+   *  - on `name`: no such kind is declared, or it is declared more than
+   *    once (D94); a construct the library does not resolve (a `global`
+   *    block, an import, an opaque flow block, unparsed text) names it
+   *    (FR-004, D92); a shared place names it or `newName` while `name` is
+   *    also a kind of the other of the element and deployment node types
+   *    (D78; `related` lists the conditions, `construct: 'where-condition'`);
+   *  - on `newName`: a name LikeC4's grammar does not accept for that
+   *    declaration, or a kind of that type already declared; a shared place
+   *    names `name` or `newName` while `newName` is a kind of the other type
+   *    (D78, `related` as above), or such a construct the library does not
+   *    resolve names `newName`; an edit that would not parse.
+   */
+  renameKind(type: KindType, name: string, newName: string): SpecificationWriteResult {
+    checkKindType(type);
+    const declaration = this.soleDeclaration(type, name);
+    if (!isSpecificationName(type, newName)) {
+      throw new InvalidWriteError('newName', `${JSON.stringify(newName)} is not accepted by LikeC4 as the name of ${type === 'element' ? 'an' : 'a'} ${type} kind`);
+    }
+    this.rejectDeclaredName(type, newName, 'newName');
+    const classes = kindNameClasses(type);
+    this.rejectAffectedNames(new Set([name]), 'name', `renaming the ${type} kind '${name}'`, classes);
+    const places = this.kindPlaceList();
+    if (type !== 'relationship') this.rejectSharedKindName(type, name, newName, places);
+    return this.writeRename(declaration, places.filter((place) => (place.kindType === type || place.kindType === 'shared') && place.name === name), newName);
+  }
+
+  /**
+   * Rename the tag `name` to `newName` (both without `#`; lc4m-15.30 US-7):
+   * the declaration and every tag reference (`#name`) in every file.  The
+   * tag's color block is kept; `#name` inside string and markdown values is
+   * untouched.  Each changed file is written once.
+   *
+   * Rejected, with nothing changed (`InvalidWriteError`): on `name`, no
+   * such tag is declared, it is declared more than once (D94), or a
+   * construct the library does not resolve names it (FR-004, D92); on
+   * `newName`, a name LikeC4's grammar does not accept for a tag, a tag
+   * already declared, or an edit that would not parse.
+   */
+  renameTag(name: string, newName: string): SpecificationWriteResult {
+    const declaration = this.soleDeclaration('tag', name);
+    if (!isSpecificationName('tag', newName)) {
+      throw new InvalidWriteError('newName', `${JSON.stringify(newName)} is not accepted by LikeC4 as the name of a tag`);
+    }
+    this.rejectDeclaredName('tag', newName, 'newName');
+    this.rejectAffectedNames(new Set([name]), 'name', `renaming the tag '${name}'`, ['tag']);
+    const places = this.kindPlaceList().filter((place) => place.kindType === 'tag' && place.name === name);
+    return this.writeRename(declaration, places, newName);
+  }
+
+  /**
+   * Remove the declaration of the kind of `type` named `name` (lc4m-15.30
+   * US-7).  An emptied `specification { }` block is kept (D94).
+   *
+   * Rejected, with nothing changed:
+   *  - `InvalidWriteError` on `type`: not one of the three kind types;
+   *  - `InvalidWriteError` on `name`: no such kind is declared, or it is
+   *    declared more than once (D94);
+   *  - {@link ReferencedRemovalError} on `name` while the kind is used:
+   *    `references` lists every FR-002 place of its type or of the shared
+   *    type that names it, `role` the place name (D128), and every construct
+   *    the library does not resolve that names it, `role` `opaque-flow`,
+   *    `global-or-import` or `unrecovered`; all with `cascadable: false`.
+   */
+  removeKind(type: KindType, name: string): SpecificationWriteResult {
+    checkKindType(type);
+    const declaration = this.soleDeclaration(type, name);
+    const uses = this.kindPlaceList().filter((place) => (place.kindType === type || place.kindType === 'shared') && place.name === name);
+    this.rejectUsedName(uses, name, kindNameClasses(type), `the ${type} kind '${name}'`);
+    return this.writeRemoval(declaration);
+  }
+
+  /**
+   * Remove the declaration of the tag `name` (without `#`; lc4m-15.30 US-7).
+   * An emptied `specification { }` block is kept (D94).
+   *
+   * Rejected, with nothing changed: `InvalidWriteError` on `name` when no
+   * such tag is declared or it is declared more than once (D94);
+   * {@link ReferencedRemovalError} on `name` while the tag is used, listing
+   * its uses as {@link removeKind} does.
+   */
+  removeTag(name: string): SpecificationWriteResult {
+    const declaration = this.soleDeclaration('tag', name);
+    const uses = this.kindPlaceList().filter((place) => place.kindType === 'tag' && place.name === name);
+    this.rejectUsedName(uses, name, ['tag'], `the tag '${name}'`);
+    return this.writeRemoval(declaration);
+  }
+
+  /** The one declaration of `name` of `type`; throws on `name` when there is none or more than one (D94). */
+  private soleDeclaration(type: KindType | 'tag', name: string): { file: string; node: ReturnType<typeof specificationDeclarations>[number] } {
+    const [declaration, ...more] = this.specificationDeclarations(type, name);
+    const subject = type === 'tag' ? `tag '${name}'` : `${type} kind '${name}'`;
+    if (!declaration) throw new InvalidWriteError('name', `no ${subject} is declared in a loaded file`);
+    if (more.length > 0) {
+      throw new InvalidWriteError('name', `the ${subject} is declared ${more.length + 1} times; LikeC4 reports each copy as a duplicate`);
+    }
+    return declaration;
+  }
+
+  /** The FR-002 places of the loaded files (lc4m-15.30), in load order. */
+  private kindPlaceList(): KindPlace[] {
+    return kindPlaces([...this.documents].map(([file, parsed]) => ({ file, parsed })));
+  }
+
+  /**
+   * Throw when a shared place (`where … kind is`, participant kind
+   * conditions) names `name` or `newName` and either is also a kind of the
+   * other of the element and deployment node types (FR-002 step 2, D78):
+   * LikeC4 matches those places by name against both types, so neither
+   * rewriting nor keeping the text keeps what they select.  A construct the
+   * library does not resolve that names `newName` as a shared kind counts
+   * too (the one naming `name` is rejected before).
+   *
+   * @throws {InvalidWriteError} on `name` when `name` is the other type's, else on `newName`; `related` lists the conditions
+   */
+  private rejectSharedKindName(type: 'element' | 'deploymentNode', name: string, newName: string, places: readonly KindPlace[]): void {
+    const other = type === 'element' ? 'deploymentNode' : 'element';
+    const shared = [name, newName].filter((kind) => this.specificationDeclarations(other, kind).length > 0);
+    if (shared.length === 0) return;
+    const field = shared.includes(name) ? 'name' : 'newName';
+    const conditions = places.filter((place) => place.kindType === 'shared' && (place.name === name || place.name === newName));
+    if (conditions.length > 0) {
+      const related: RelatedConstruct[] = conditions.map((place) => ({ ...this.position(place.file, place.constructOffset), construct: 'where-condition' }));
+      throw new InvalidWriteError(
+        field,
+        `'${shared.join("' and '")}' ${shared.length > 1 ? 'are' : 'is'} also ${other === 'element' ? 'an element' : 'a deployment node'} kind, and LikeC4 matches ` +
+          `the kind conditions ${related.map((r) => `at '${r.file}:${r.line}:${r.column}'`).join(', ')} against both types: renaming the ${type} kind '${name}' ` +
+          `to '${newName}' would change what they select`,
+        related,
+      );
+    }
+    if (shared.includes(newName)) {
+      this.rejectAffectedNames(new Set([newName]), 'newName', `renaming the ${type} kind '${name}' to '${newName}', also ${other === 'element' ? 'an element' : 'a deployment node'} kind,`, ['sharedKind']);
+    }
+  }
+
+  /**
+   * Throw a {@link ReferencedRemovalError} on `name` when the removed kind
+   * or tag `name` is used: at the FR-002 places `uses`, or by a construct
+   * the library does not resolve (names of `classes` in the unmodelled-name
+   * inventory, affected mode).  None is cascadable.
+   */
+  private rejectUsedName(uses: readonly KindPlace[], name: string, classes: readonly UnmodelledNameClass[], subject: string): void {
+    this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
+    const hits = classes.flatMap((nameClass) => affectedNameHits(this.unmodelled!, new Set([name]), nameClass));
+    const unique = [...new Map(hits.map((hit) => [`${hit.file}:${hit.segments[0]!.offset}`, hit])).values()];
+    if (uses.length === 0 && unique.length === 0) return;
+    const documentOrder = new Map(this.referenceCatalogue().documents.map(({ file }, i) => [file, i]));
+    const references = [
+      ...uses.map((place) => ({
+        offset: place.offset,
+        reference: { ...this.position(place.file, place.offset), role: place.role, cascadable: false, ...this.viewAt(place.file, place.offset) } as RemovalReference,
+      })),
+      ...unique.map((hit) => ({ offset: hit.segments[0]!.offset, reference: this.unmodelledReference(hit) })),
+    ]
+      .sort((a, b) => (documentOrder.get(a.reference.file) ?? 0) - (documentOrder.get(b.reference.file) ?? 0) || a.offset - b.offset)
+      .map(({ reference }) => reference);
+    throw new ReferencedRemovalError(
+      'name',
+      `${subject} cannot be removed while it is used: ${references.map((ref) => `${ref.role} at ${ref.file}:${ref.line}:${ref.column}`).join('; ')}`,
+      references,
+    );
+  }
+
+  /** Write a kind or tag rename: the declaration's name token and the name of each place in `places`, one write per file. */
+  private writeRename(declaration: { file: string; node: ReturnType<typeof specificationDeclarations>[number] }, places: readonly KindPlace[], newName: string): SpecificationWriteResult {
+    const node = declaration.node as { kind?: { $cstNode?: CstNode }; tag?: { $cstNode?: CstNode } };
+    const nameCst = GrammarUtils.findNodeForProperty((node.kind ?? node.tag)?.$cstNode, 'name');
+    if (!nameCst) throw new Error('Internal error: a kind or tag declaration without a name position');
+    const edits = new Map<string, TextEdit[]>([[declaration.file, [{ offset: nameCst.offset, end: nameCst.end, newText: newName }]]]);
+    for (const place of places) {
+      const offset = place.text.startsWith('#') ? place.offset + 1 : place.offset;
+      edits.set(place.file, [...(edits.get(place.file) ?? []), { offset, end: place.end, newText: newName }]);
+    }
+    return this.writeSpecification(edits, 'newName');
+  }
+
+  /** Write the removal of a kind or tag declaration; the block that held it stays. */
+  private writeRemoval(declaration: { file: string; node: ReturnType<typeof specificationDeclarations>[number] }): SpecificationWriteResult {
+    const cst = declaration.node.$cstNode;
+    if (!cst) throw new Error('Internal error: a kind or tag declaration without a position');
+    const edits = removalEditsForRanges(this.document(declaration.file).fullText, [{ offset: cst.offset, end: cst.end }]);
+    return this.writeSpecification(new Map([[declaration.file, edits]]), 'name');
+  }
+
   /** The declarations of `name` of `type` in every loaded file, in load order. */
   private specificationDeclarations(type: KindType | 'tag', name: string): Array<{ file: string; node: ReturnType<typeof specificationDeclarations>[number] }> {
     return [...this.documents].flatMap(([file, doc]) => specificationDeclarations(doc.ast, type, name).map((node) => ({ file, node })));
   }
 
-  /** Throw on `name` when a loaded file declares `name` for `type` (LikeC4: `Duplicate … kind` / `Duplicate tag`, spike 01). */
-  private rejectDeclaredName(type: KindType | 'tag', name: string): void {
+  /** Throw on `field` when a loaded file declares `name` for `type` (LikeC4: `Duplicate … kind` / `Duplicate tag`, spike 01). */
+  private rejectDeclaredName(type: KindType | 'tag', name: string, field = 'name'): void {
     const [declared] = this.specificationDeclarations(type, name);
     if (!declared) return;
-    throw new InvalidWriteError('name', `${type === 'tag' ? 'a tag' : `a ${type} kind`} '${name}' is already declared in '${declared.file}'`);
+    throw new InvalidWriteError(field,`${type === 'tag' ? 'a tag' : `${type === 'element' ? 'an' : 'a'} ${type} kind`} '${name}' is already declared in '${declared.file}'`);
   }
 
   /**
@@ -3648,16 +3843,21 @@ export class LikeC4Mutator {
    */
   private unmodelledReference(name: UnmodelledName): RemovalReference {
     const offset = name.segments[0]!.offset;
-    const view = this.views.declarations().find((declaration) => {
-      const cst = declaration.node.$cstNode;
-      return declaration.file === name.file && cst !== undefined && cst.offset <= offset && offset < cst.end;
-    });
     return {
       ...this.position(name.file, offset),
       role: name.place,
       cascadable: false,
-      ...(view?.id !== undefined && { view: view.id }),
+      ...this.viewAt(name.file, offset),
     };
+  }
+
+  /** `{ view }` with the id of the named view whose declaration holds `offset` of `file`; empty outside named views. */
+  private viewAt(file: string, offset: number): { view?: string } {
+    const view = this.views.declarations().find((declaration) => {
+      const cst = declaration.node.$cstNode;
+      return declaration.file === file && cst !== undefined && cst.offset <= offset && offset < cst.end;
+    });
+    return view?.id !== undefined ? { view: view.id } : {};
   }
 
   /** The 1-based line and column of `offset` in the current text of `file`. */
@@ -3713,12 +3913,19 @@ export class LikeC4Mutator {
    * inventory; FR-004, D92): the library could neither check nor rewrite
    * that reference.
    *
-   * @param action - The write for the message, e.g. `renaming 'app.api'`
+   * @param action  - The write for the message, e.g. `renaming 'app.api'`
+   * @param classes - The classes of `names` in the inventory (default: element)
    * @throws {InvalidWriteError} on `field`
    */
-  private rejectAffectedNames(names: ReadonlySet<string>, field: string, action: string): void {
+  private rejectAffectedNames(
+    names: ReadonlySet<string>,
+    field: string,
+    action: string,
+    classes: readonly UnmodelledNameClass[] = ['element'],
+  ): void {
     this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
-    const [hit] = affectedNameHits(this.unmodelled, names, 'element');
+    const inventory = this.unmodelled;
+    const [hit] = classes.flatMap((nameClass) => affectedNameHits(inventory, names, nameClass));
     if (!hit) return;
     throw new InvalidWriteError(
       field,
@@ -4321,6 +4528,18 @@ function planGeneration(documents: ReadonlyMap<string, ParsedDocument>): { catal
 }
 
 /** Throw on `type` when it is not a kind type (`element`, `relationship`, `deploymentNode`). */
+/** The classes of the unmodelled-name inventory a name of kind type `type` has: its own, and the shared one for element and deployment node kinds. */
+function kindNameClasses(type: KindType): UnmodelledNameClass[] {
+  switch (type) {
+    case 'element':
+      return ['elementKind', 'sharedKind'];
+    case 'deploymentNode':
+      return ['deploymentNodeKind', 'sharedKind'];
+    case 'relationship':
+      return ['relationshipKind'];
+  }
+}
+
 function checkKindType(type: unknown): asserts type is KindType {
   if (type !== 'element' && type !== 'relationship' && type !== 'deploymentNode') {
     throw new InvalidWriteError('type', `${JSON.stringify(type)} is not a kind type: expected element, relationship or deploymentNode`);
