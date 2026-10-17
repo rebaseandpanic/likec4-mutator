@@ -504,7 +504,8 @@ model {
 
 describe('LikeC4Mutator.addRelationship', () => {
   // The minimal model plus a file declaring the target `external` and a tag
-  // the minimal model does not declare.
+  // the minimal model does not declare.  external.c4 comes first in LikeC4's
+  // document order, so a new relationship is written there (FR-021, D62).
   const EXTERNAL = `specification {
   tag public
 }
@@ -546,7 +547,7 @@ model {
     const m = makeRelationshipMutator();
     m.addRelationship('app', 'external', 'calls', { description: 'Calls the external system' });
 
-    const src = m.serialize()['model.c4'];
+    const src = m.serialize()['external.c4'];
     expect(src).toContain("description 'Calls the external system'");
     expect(m.validate()).toHaveLength(0);
   });
@@ -558,7 +559,7 @@ model {
       tags: ['async', 'internal'],
     });
 
-    const src = m.serialize()['model.c4'];
+    const src = m.serialize()['external.c4'];
     expect(src).toContain("technology 'REST API'");
     expect(src).toContain('#async');
     expect(src).toContain('#internal');
@@ -571,7 +572,7 @@ model {
       style: { line: 'dashed', color: 'red' },
     });
 
-    const src = m.serialize()['model.c4'];
+    const src = m.serialize()['external.c4'];
     expect(src).toContain('style {');
     expect(src).toContain('line dashed');
     expect(src).toContain('color red');
@@ -589,7 +590,7 @@ model {
       style: { line: 'dashed', head: 'diamond' },
     });
 
-    const src = m.serialize()['model.c4'];
+    const src = m.serialize()['external.c4'];
     expect(src).toContain("description 'Routes traffic to external API'");
     expect(src).toContain("technology 'HTTPS'");
     expect(src).toContain('#public');
