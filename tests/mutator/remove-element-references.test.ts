@@ -1035,3 +1035,26 @@ describe('a removal after a write that shifts positions (row 56)', SLOW, () => {
     await expectAcceptedWrite(shifted, after);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review fix (codex C1): neighbouring removed constructs on one line
+// ---------------------------------------------------------------------------
+
+describe('two removed rules on one line (review fix of row 38)', SLOW, () => {
+  const VIEWS = '  view v {\n    include other\n    exclude app.api exclude app.api\n  }\n';
+
+  it.each([
+    ['LF', (text: string) => text],
+    ['CRLF', (text: string) => text.replace(/\n/g, '\r\n')],
+  ])('%s: the line goes, every other byte stays', async (_, eol) => {
+    const files: Files = { 'm.c4': eol(`${SPEC}${MODEL}views {\n${VIEWS}}\n`) };
+    await expectValidLikeC4(files);
+    const { result, after } = remove(files, 'app.api', true);
+    expect(result.cascaded).toEqual([
+      casc(files, 'm.c4', 'app.api exclude', 'predicate-item'),
+      casc(files, 'm.c4', 'app.api', 'predicate-item', 1),
+    ]);
+    expect(after['m.c4']).toBe(eol(`${SPEC}${MODEL.replace('    api = service\n', '')}views {\n  view v {\n    include other\n  }\n}\n`));
+    await expectAcceptedWrite(files, after);
+  });
+});
