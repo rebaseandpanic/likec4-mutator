@@ -64,6 +64,18 @@ export interface AddRelationshipMutation {
   links?: LinkSpec[];
   metadata?: Record<string, string | string[]>;
   style?: RelationshipStyle;
+  /** A declared relationship kind (lc4m-15.30 US-8) */
+  kind?: string;
+  /** How `kind` is written: `bracket` (`-[kind]->`, default) or `dot` (`.kind`) */
+  kindForm?: 'bracket' | 'dot';
+  /** Written `<->` */
+  bidirectional?: boolean;
+  /** `top` (default) or `nested` in the source's declaration body */
+  placement?: 'top' | 'nested';
+  /** The loaded file of a top-level relationship */
+  file?: string;
+  /** Accept an existing `extend a -> b` block of the same identity (D83) */
+  shared?: boolean;
 }
 
 export interface AddViewMutation {
@@ -1033,6 +1045,12 @@ const MUTATION_FIELDS = {
     'links',
     'metadata',
     'style',
+    'kind',
+    'kindForm',
+    'bidirectional',
+    'placement',
+    'file',
+    'shared',
   ],
   updateRelationship: [
     'op',
@@ -1304,6 +1322,12 @@ function validateMutation(m: JsonObject, path: string): void {
       optionalLinks(m, path);
       optionalStyle(m, path, 'relationship');
       optionalMetadata(m, path, false);
+      optionalString(m, 'kind', path);
+      optionalEnum(m, 'kindForm', path, ['bracket', 'dot']);
+      optionalBoolean(m, 'bidirectional', path);
+      optionalEnum(m, 'placement', path, ['top', 'nested']);
+      optionalString(m, 'file', path);
+      optionalBoolean(m, 'shared', path);
       formChecks('addRelationship', path, () => {
         checkReferenceForm(m.source as string, 'source');
         checkReferenceForm(m.target as string, 'target');

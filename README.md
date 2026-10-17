@@ -433,7 +433,15 @@ Rename or remove a kind or a tag, as the library's `renameKind(type, name, newNa
 
 #### addRelationship
 
-Adds a relationship between two elements. All fields except `op`, `source`, `target` are optional. It is written at the end of the first `model` block of the first file, in LikeC4's document order, that has one; else in a new `model` block at the end of the first file.
+Adds a relationship between two elements. All fields except `op`, `source`, `target` are optional. It is written at the end of the first `model` block of the first file, in LikeC4's document order, that has one; else in a new `model` block at the end of the first file. The fields `kind`, `kindForm` (`bracket` or `dot`), `bidirectional`, `placement` (`top` or `nested`), `file` and `shared` are those of the library (see [Relationship forms and placement](#relationship-forms-and-placement)); a rejection fails on `mutations[i].<field>` and nothing is written.
+
+```json
+[
+  { "op": "addRelationship", "source": "app.api", "target": "app.db", "label": "reads", "kind": "calls", "bidirectional": true },
+  { "op": "addRelationship", "source": "app.api", "target": "app.db", "label": "writes", "placement": "nested", "kind": "calls", "kindForm": "dot" },
+  { "op": "addRelationship", "source": "app", "target": "ext", "label": "uses", "file": "model/app.c4", "shared": true }
+]
+```
 
 ```json
 {

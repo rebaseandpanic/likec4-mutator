@@ -522,6 +522,12 @@ program
               links: m.links,
               metadata: m.metadata,
               style: m.style,
+              ...(m.kind !== undefined && { kind: m.kind }),
+              ...(m.kindForm !== undefined && { kindForm: m.kindForm }),
+              ...(m.bidirectional !== undefined && { bidirectional: m.bidirectional }),
+              ...(m.placement !== undefined && { placement: m.placement }),
+              ...(m.file !== undefined && { file: m.file }),
+              ...(m.shared !== undefined && { shared: m.shared }),
             });
             applied++;
             break;
