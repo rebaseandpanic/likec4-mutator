@@ -1331,6 +1331,7 @@ export class LikeC4Mutator {
       instanceIds: new Map(),
       nameClass: 'view',
       plan: (entries) => planNavigateToCascade(entries, (file) => this.document(file)),
+      owned: (file, offset, end) => file === view.file && within(view.node.$cstNode, offset, end),
     });
 
     const file = view.file;
@@ -2802,7 +2803,10 @@ export class LikeC4Mutator {
 
     // Names of the subtree at unmodelled places and in unrecovered text (affected mode, D92).
     const names = new Set([...this.subtreeFqns(fqn), ...instances].map((name) => name.slice(name.lastIndexOf('.') + 1)));
-    const { plan, cascaded } = this.settleRemoval(listed, names, { field: 'fqn', subject: `'${fqn}'`, cascade, instanceIds });
+    const owned = (file: string, offset: number, end: number): boolean =>
+      this.removedRanges(fqn, elementFile, file).some((range) => within(range, offset, end)) ||
+      instances.some((id) => this.deployments.declarations(id).some((d) => d.file === file && within((d.node as { $cstNode?: TextRange }).$cstNode, offset, end)));
+    const { plan, cascaded } = this.settleRemoval(listed, names, { field: 'fqn', subject: `'${fqn}'`, cascade, instanceIds, owned });
     if (!plan) return { instances: [], plan: undefined, cascaded: [], deleted: new Set() };
 
     const deleted = new Set<object>([...plan.removed, ...instanceDeclarations]);
@@ -2838,14 +2842,23 @@ export class LikeC4Mutator {
       nameClass?: UnmodelledNameClass;
       /** Plans the cascade of the cascadable entries (default: their view statements, {@link planCascade}) */
       plan?: (entries: CatalogueEntry[]) => CascadePlan;
+      /**
+       * Whether the text `[offset, end)` of `file` goes with what is removed
+       * (D43, D57): a name of the inventory wholly inside it is no reference
+       * that survives the removal
+       */
+      owned?: (file: string, offset: number, end: number) => boolean;
     },
   ): { plan: CascadePlan | undefined; cascaded: CascadedReference[] } {
     const { field, subject, cascade } = options;
     this.unmodelled ??= unmodelledInventory([...this.documents].map(([file, parsed]) => ({ file, parsed })));
     const at = new Set([...listed.keys()].map((entry) => `${entry.file}:${entry.offset}`));
-    const hits = affectedNameHits(this.unmodelled, names, options.nameClass ?? 'element').filter(
-      (hit) => !at.has(`${hit.file}:${hit.segments[0]!.offset}`),
-    );
+    const hits = affectedNameHits(this.unmodelled, names, options.nameClass ?? 'element').filter((hit) => {
+      const first = hit.segments[0]!;
+      const last = hit.segments[hit.segments.length - 1]!;
+      if (at.has(`${hit.file}:${first.offset}`)) return false;
+      return !options.owned?.(hit.file, first.offset, last.offset + last.name.length);
+    });
 
     const documentOrder = new Map(this.referenceCatalogue().documents.map(({ file }, i) => [file, i]));
     const references = [
@@ -3125,7 +3138,14 @@ export class LikeC4Mutator {
       listed.set(entry, isCascadableStatement(entry));
     }
     const names = new Set(subtree.map((member) => member.slice(member.lastIndexOf('.') + 1)));
-    return this.settleRemoval(listed, names, { field: 'id', subject: `'${id}'`, cascade: options.cascade, instanceIds });
+    // What goes with the construct, by file: its declaration and the removed extend blocks.
+    const ownedRanges = [
+      ...this.deployments.declarations(id).filter((d) => d.node === construct),
+      ...(options.extendBlocks ? this.deployments.allExtendBlocks().filter((extend) => removed.has(extend.node)) : []),
+    ].map((part) => ({ file: part.file, range: (part.node as { $cstNode?: TextRange }).$cstNode }));
+    const owned = (file: string, offset: number, end: number): boolean =>
+      ownedRanges.some((part) => part.file === file && within(part.range, offset, end));
+    return this.settleRemoval(listed, names, { field: 'id', subject: `'${id}'`, cascade: options.cascade, instanceIds, owned });
   }
 
   /** The deployment id `id` and the ids below it. */
@@ -3454,6 +3474,11 @@ function extendElementNodes(doc: ParsedDocument, fqn: string): object[] {
     }
   }
   return nodes;
+}
+
+/** Whether `[offset, end)` lies inside `range` (false without a range). */
+function within(range: { offset: number; end: number } | undefined, offset: number, end: number): boolean {
+  return range !== undefined && offset >= range.offset && end <= range.end;
 }
 
 /** True when `fqn` equals `ancestor` or is nested below it. */
