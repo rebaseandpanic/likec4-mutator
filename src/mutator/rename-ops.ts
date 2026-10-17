@@ -380,8 +380,9 @@ export function declarationText(fullText: string, offset: number, end: number): 
   const nextBreak = fullText.indexOf('\n', end);
   const lineEnd = nextBreak === -1 ? fullText.length : nextBreak;
   const trailing = /^[ \t]*(\/\/[^\r\n]*|\/\*[^\r\n]*?\*\/[ \t]*)?\r?$/.exec(fullText.slice(end, lineEnd));
+  const lineIndent = /^[ \t]*/.exec(fullText.slice(declarationLine))![0];
   if (!/^[ \t]*$/.test(fullText.slice(declarationLine, offset)) || !trailing) {
-    return { text: fullText.slice(offset, end).replace(/\r\n/g, '\n'), verbatim: [], offset, end };
+    return { ...carriedLines(fullText, offset, end, lineIndent), offset, end };
   }
   const cutEnd = trailing[1] ? end + fullText.slice(end, lineEnd).replace(/\r$/, '').length : end;
   const comments = commentRanges(fullText);
@@ -393,12 +394,21 @@ export function declarationText(fullText: string, offset: number, end: number): 
     start = comment.offset;
   }
   const first = lineStart(start);
-  const indent = /^[ \t]*/.exec(fullText.slice(declarationLine, offset))![0];
+  return { ...carriedLines(fullText, first, cutEnd, lineIndent), offset: first + /^[ \t]*/.exec(fullText.slice(first))![0].length, end: cutEnd };
+}
+
+/**
+ * The lines of `fullText` from `from` to `to`, line breaks as `\n`, each
+ * without up to `indent` of its leading indentation — except the lines that
+ * start inside a multi-line token of LikeC4's lexer (a multi-line string),
+ * which are part of its value and are kept as written (`verbatim`).
+ */
+function carriedLines(fullText: string, from: number, to: number, indent: string): { text: string; verbatim: number[] } {
   const strings = multiLineTokenRanges(fullText);
   const verbatim: number[] = [];
-  let at = first;
+  let at = from;
   const text = fullText
-    .slice(first, cutEnd)
+    .slice(from, to)
     .split('\n')
     .map((line, i) => {
       const lineOffset = at;
@@ -412,7 +422,7 @@ export function declarationText(fullText: string, offset: number, end: number): 
       return written.slice(Math.min(own.length, indent.length));
     })
     .join('\n');
-  return { text, verbatim, offset: first + /^[ \t]*/.exec(fullText.slice(first))![0].length, end: cutEnd };
+  return { text, verbatim };
 }
 
 /**
