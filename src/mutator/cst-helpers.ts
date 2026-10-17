@@ -172,6 +172,48 @@ export function removalEditsForRanges(fullText: string, ranges: ReadonlyArray<{ 
 }
 
 /**
+ * The edits of `original` that produce what `base`, then `later`, produce:
+ * `base` are non-overlapping edits of `original`, `later` non-overlapping
+ * edits of the text `base` produced.  A later edit outside the text a base
+ * edit inserted is moved back by the size changes of the base edits before
+ * it; one inside such inserted text is written into that edit's new text.
+ * So a write that plans in steps — each step on the text of the steps
+ * before — still edits a file once, with one group of edits of its original
+ * text (D123, D126).  Line endings are taken as given: write the edits with
+ * the file's line ending first.
+ *
+ * @throws {Error} (internal) when a later edit crosses the boundary of a base edit's new text
+ */
+export function composeEdits(base: readonly TextEdit[], later: readonly TextEdit[]): TextEdit[] {
+  const composed = base.map((edit) => ({ ...edit })).sort((a, b) => a.offset - b.offset);
+  const added: TextEdit[] = [];
+  // Descending: splicing into a base edit's text never moves a later edit still to come.
+  for (const edit of [...later].sort((a, b) => b.offset - a.offset || b.end - a.end)) {
+    let shift = 0;
+    let spliced = false;
+    for (const b of composed) {
+      const start = b.offset + shift;
+      const stop = start + b.newText.length;
+      const insertion = edit.offset === edit.end;
+      // An insertion touching a base edit's new text, or an edit inside it, is written into it.
+      if ((insertion && edit.offset >= start && edit.offset <= stop) || (!insertion && edit.offset >= start && edit.end <= stop)) {
+        b.newText = b.newText.slice(0, edit.offset - start) + edit.newText + b.newText.slice(edit.end - start);
+        spliced = true;
+        break;
+      }
+      if (edit.end <= start) break;
+      if (edit.offset >= stop) {
+        shift += b.newText.length - (b.end - b.offset);
+        continue;
+      }
+      throw new Error(`Internal error: a planned edit [${edit.offset}, ${edit.end}) crosses an earlier edit`);
+    }
+    if (!spliced) added.push({ offset: edit.offset - shift, end: edit.end - shift, newText: edit.newText });
+  }
+  return [...composed, ...added];
+}
+
+/**
  * The first leaf token of `node` that is not hidden (comment or whitespace)
  * and starts at or after `from`; undefined when there is none.
  */

@@ -40,7 +40,7 @@ import {
   type ExtendRelationBlockRef,
   type ResolvedRelation,
 } from '../query/workspace-index.js';
-import { buildRemovalEdit, removalEditsForRanges } from './cst-helpers.js';
+import { buildRemovalEdit, composeEdits, removalEditsForRanges } from './cst-helpers.js';
 import {
   declarationText,
   elementSubstitution,
@@ -3741,7 +3741,12 @@ export class LikeC4Mutator {
    *     deployment part, `instanceOf` included; then the deployment
    *     references, whose ids may follow a rewritten `instanceOf` (spike 05);
    *  4. the stability check by the pairing rule.
-   * Atomic: on any failure every file is restored and the error rethrown.
+   * Steps 2 and 3 run on generations held in memory — each step's edits
+   * applied to the text of the steps before, parsed and indexed there —
+   * and their edits are composed back onto the original text, so every
+   * changed file is written once, as one group of edits, before step 4
+   * (D123, D126).  Atomic: on any failure every file is restored and the
+   * error rethrown.
    *
    * A move carries the references written in the moved text to another
    * place: each is paired, in source order, with the reference at the same
@@ -3810,23 +3815,37 @@ export class LikeC4Mutator {
     const carried = new Map<ReferenceRecord, { file: string; frames: readonly string[] }>();
     const stage = (instances: boolean): PairingStage => ({ sigma, declarations: true, instances, texts, moved: carried });
 
+    // The planning generation: the text and parse of every file after the steps so far, and the
+    // edits of the original texts that produce them.
+    const planned = new Map(this.sources);
+    const parsed = new Map(this.documents);
+    const composed = new Map<string, TextEdit[]>();
+    let generation = { catalogue, snapshot: before };
+    const step = (groups: Map<string, TextEdit[]>): void => {
+      if (groups.size === 0) return;
+      for (const [file, edits] of groups) {
+        const text = planned.get(file)!;
+        const written = withLineEnding(edits, lineEndingOf(text));
+        const doc = this.parseEdited(file, applyEdits(text, written));
+        planned.set(file, doc.fullText);
+        parsed.set(file, doc);
+        composed.set(file, composeEdits(composed.get(file) ?? [], written));
+      }
+      generation = planGeneration(parsed);
+    };
+
     const state = this.snapshot();
     try {
-      const changedFiles = new Set<string>();
-      const apply = (groups: Map<string, TextEdit[]>): void =>
-        refusedOn(write.field, () => {
-          for (const file of this.applyEditGroups(groups)) changedFiles.add(file);
-        });
-      apply(edits);
+      refusedOn(write.field, () => step(edits));
       if (moved) {
-        const declaration = buildFqnIndex(this.document(moved.destination).ast).get(moved.fqn)?.node.$cstNode;
+        const declaration = buildFqnIndex(parsed.get(moved.destination)!.ast).get(moved.fqn)?.node.$cstNode;
         if (!declaration) throw new Error(`Internal error: the moved element '${moved.fqn}' is not found in '${moved.destination}'`);
         const inside = (records: readonly ReferenceRecord[], file: string, range: TextRange): ReferenceRecord[] =>
           records
             .filter((record) => record.file === file && record.offset !== undefined && record.offset >= range.offset && record.offset < range.end)
             .sort((a, b) => a.offset! - b.offset!);
         const olds = inside(before.records, moved.file, moved);
-        const news = inside(this.referenceSnapshot().records, moved.destination, declaration);
+        const news = inside(generation.snapshot.records, moved.destination, declaration);
         if (olds.length !== news.length) {
           throw new Error(`Internal error: the moved text of '${moved.fqn}' holds ${news.length} references instead of ${olds.length}`);
         }
@@ -3835,8 +3854,8 @@ export class LikeC4Mutator {
       const passOf = (entry: CatalogueEntry): 'view-of' | 'model' | 'deployment' =>
         'deployment' in entry.target! ? 'deployment' : entry.role === 'view-of' ? 'view-of' : 'model';
       for (const pass of ['view-of', 'model', 'deployment'] as const) {
-        const current = this.referenceCatalogue();
-        const pairs = pairReferenceSnapshots(before, this.referenceSnapshot(), new Map(), {
+        const current = generation.catalogue;
+        const pairs = pairReferenceSnapshots(before, generation.snapshot, new Map(), {
           expectedPrefix: (record) => expectedPrefix(record, stage(pass === 'deployment')),
         });
         const passEdits = new Map<string, TextEdit[]>();
@@ -3854,8 +3873,13 @@ export class LikeC4Mutator {
           texts.set(old, form.text);
           addEditGroup(passEdits, now.file, form.edits);
         }
-        apply(passEdits);
+        refusedOn(write.field, () => step(passEdits));
       }
+      // One group of edits per changed file, written once.
+      let changedFiles: string[] = [];
+      refusedOn(write.field, () => {
+        changedFiles = this.applyEditGroups(composed);
+      });
       const [change] = compareReferenceSnapshots(before, this.referenceSnapshot(), new Map(), {
         expectedPrefix: (record) => expectedPrefix(record, stage(true)),
         expectedTarget: (record) => sigma.key(record.target!.key),
@@ -3871,11 +3895,29 @@ export class LikeC4Mutator {
             }`,
         );
       }
-      return [...this.sources.keys()].filter((file) => changedFiles.has(file));
+      return changedFiles;
     } catch (err) {
       this.restore(state);
       throw err;
     }
+  }
+
+  /**
+   * Parse `text`, the planned text of `file`, refusing it as
+   * {@link applyEditsToFile} refuses an edit: parse errors or unbalanced
+   * braces.
+   *
+   * @throws {EditRefusedError}
+   */
+  private parseEdited(file: string, text: string): ParsedDocument {
+    const doc = this.parser.parse(text);
+    if (doc.errors.length > 0) {
+      const details = doc.errors.map((e) => `  ${file}:${e.line}:${e.column}: ${e.message}`).join('\n');
+      throw new EditRefusedError(`Edit produced parse errors in '${file}':\n${details}`);
+    }
+    const balanceError = checkBraceBalance(text);
+    if (balanceError !== null) throw new EditRefusedError(`Edit produced structural errors in '${file}': ${balanceError}`);
+    return doc;
   }
 
   /** The reference catalogue of the current indices, built on first use. */
@@ -4261,6 +4303,17 @@ function addEditGroup(editsByFile: Map<string, TextEdit[]>, file: string, edits:
 
 /** Roles a cascade edits: a rule item or a step statement at a modelled place (FR-001, FR-003). */
 const CASCADED_ROLES: ReadonlySet<CatalogueRole> = new Set(['predicate-item', 'step-endpoint', 'style-target', 'rank-target']);
+
+/**
+ * The reference catalogue and snapshot of a planning generation of the
+ * documents (a rename or move in progress, held in memory).
+ */
+function planGeneration(documents: ReadonlyMap<string, ParsedDocument>): { catalogue: ReferenceCatalogue; snapshot: ReferenceSnapshot } {
+  const docs = [...documents].map(([file, doc]) => ({ file, ast: doc.ast }));
+  const deployments = new DeploymentIndex(docs);
+  const catalogue = buildReferenceCatalogue(new WorkspaceIndex(docs), deployments, new ViewIndex(docs));
+  return { catalogue, snapshot: takeReferenceSnapshot(catalogue, deployments) };
+}
 
 /** Throw on `type` when it is not a kind type (`element`, `relationship`, `deploymentNode`). */
 function checkKindType(type: unknown): asserts type is KindType {
