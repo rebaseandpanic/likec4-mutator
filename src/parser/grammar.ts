@@ -93,10 +93,15 @@ const SPECIFICATION_DECLARATIONS: Readonly<Record<SpecificationDeclarationType, 
  * `type` in a `specification` block (D67): `specification { <type> <name> }`
  * parses without errors into exactly that one declaration, named `name`.
  * So `element model` is accepted and `element view` is not (spikes 02, 06),
- * and a name holding a comment, a space or a brace is not.
+ * and a name holding a comment, a space or a brace is not.  A kind name is
+ * also none of LikeC4's reserved words (`this`, `it`, `self`, `super`,
+ * `likec4lib`, `global`), which its validator rejects for the three kind
+ * types (`checkElementKind`, `checkDeploymentNodeKind`,
+ * `checkRelationshipKind`); its tag check has no such rule.
  */
 export function isSpecificationName(type: SpecificationDeclarationType, name: string): boolean {
   if (typeof name !== 'string' || name === '') return false;
+  if (type !== 'tag' && RESERVED_WORDS.has(name)) return false;
   const result = getServices().likec4.parser.LangiumParser.parse(`specification {\n  ${type} ${name}\n}\n`);
   if (result.parserErrors.length > 0 || result.lexerErrors.length > 0) return false;
   const blocks = (result.value as unknown as { specifications?: Array<Record<string, unknown>> }).specifications ?? [];
