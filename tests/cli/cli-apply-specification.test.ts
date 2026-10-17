@@ -1,6 +1,7 @@
 /**
- * `apply` with the specification writes (lc4m-15.30 US-6, US-12; row 116
- * of the test matrix): `addKind`, `updateKind` and `addTag` write what the
+ * `apply` with the specification writes (lc4m-15.30 US-6, US-7, US-12;
+ * rows 116 and 128 of the test matrix): `addKind`, `updateKind`, `addTag`,
+ * `renameKind`, `removeKind`, `renameTag` and `removeTag` write what the
  * library writes — valid LikeC4 (the accepted-write bundle) — and a
  * rejected op exits 1 on `mutations[i].<field>` and writes nothing.
  *
@@ -92,6 +93,65 @@ describe('rejected ops (row 116)', () => {
     const result = runApply([mutation]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(path);
+    expect(result.files).toEqual(FILES);
+  });
+});
+
+describe('rename and remove ops (row 128)', SLOW, () => {
+  it('renames a kind and a tag and removes an unused kind and tag', async () => {
+    const result = runApply([
+      { op: 'addTag', name: 'spare' },
+      { op: 'addKind', type: 'deploymentNode', name: 'pod' },
+      { op: 'renameKind', type: 'element', name: 'system', newName: 'unit' },
+      { op: 'renameKind', type: 'relationship', name: 'calls', newName: 'invokes' },
+      { op: 'renameTag', name: 'core', newName: 'main' },
+      { op: 'removeKind', type: 'deploymentNode', name: 'pod' },
+      { op: 'removeTag', name: 'spare' },
+    ]);
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.files).toEqual({
+      'spec.c4': `specification {
+  element unit
+  relationship invokes {
+    technology 'HTTP'
+  }
+  tag main
+}
+`,
+      'model.c4': `model {
+  a = unit 'A'
+  b = unit 'B'
+  a -[invokes]-> b
+}
+`,
+    });
+    await expectAcceptedWrite(FILES, result.files);
+  });
+
+  it.each([
+    ['a removal of a used kind', { op: 'removeKind', type: 'element', name: 'system' }, 'mutations[0].name:'],
+    ['a removal of an undeclared tag', { op: 'removeTag', name: 'nope' }, 'mutations[0].name:'],
+    ['a rename into a declared tag', { op: 'renameTag', name: 'core', newName: 'core' }, 'mutations[0].newName:'],
+    ['an invalid new kind name', { op: 'renameKind', type: 'relationship', name: 'calls', newName: 'a.b' }, 'mutations[0].newName:'],
+    ['an unknown kind type', { op: 'removeKind', type: 'node', name: 'system' }, 'mutations[0].type'],
+    ['a missing newName', { op: 'renameTag', name: 'core' }, 'mutations[0].newName'],
+    ['an unknown field of renameKind', { op: 'renameKind', type: 'element', name: 'system', newName: 'unit', file: 'spec.c4' }, 'mutations[0].file'],
+    ['an unknown field of removeTag', { op: 'removeTag', name: 'core', cascade: true }, 'mutations[0].cascade'],
+  ])('rejects %s and writes nothing', (_, mutation, path) => {
+    const result = runApply([mutation]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(path);
+    expect(result.files).toEqual(FILES);
+  });
+
+  it('writes nothing when a later op is rejected', () => {
+    const result = runApply([
+      { op: 'renameTag', name: 'core', newName: 'main' },
+      { op: 'removeKind', type: 'element', name: 'system' },
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('mutations[1].name:');
     expect(result.files).toEqual(FILES);
   });
 });
