@@ -1071,3 +1071,18 @@ describe('two removed rules on one line (review fix of row 38)', SLOW, () => {
     await expectAcceptedWrite(files, after);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review fix (fable F1): a par block left with discarded statements only (D40)
+// ---------------------------------------------------------------------------
+
+describe('a cascade that leaves a par block of discarded statements is RRE (review fix of row 38, D40)', () => {
+  it('lists the references like any other rejection', async () => {
+    // An empty opt block contributes no step; LikeC4 would drop the par block.
+    const files: Files = {
+      'm.c4': `${SPEC}${MODEL}views {\n  dynamic view d {\n    other -> app.db\n    par {\n      app.api -> other\n      opt {\n      }\n    }\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'app.api', true).references).toEqual([ref(files, 'm.c4', 'app.api -> other', 'step-endpoint', true, 'd')]);
+  });
+});
