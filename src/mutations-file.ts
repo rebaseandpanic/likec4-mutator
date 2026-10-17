@@ -201,6 +201,33 @@ export interface RemoveElementMutation {
   cascade?: boolean;
 }
 
+/** `addElementExtend` (lc4m-15.30 US-10): the library's `addElementExtend(fqn, { file, … })`. */
+export interface AddElementExtendMutation {
+  op: 'addElementExtend';
+  fqn: string;
+  file: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  metadata?: Record<string, string | string[]>;
+}
+
+/** `addRelationshipExtend` (lc4m-15.30 US-10): the selector of `updateRelationship`, then the block's file and contributions. */
+export interface AddRelationshipExtendMutation {
+  op: 'addRelationshipExtend';
+  source: string;
+  target: string;
+  matchKind?: string;
+  matchTitle?: string;
+  matchBidirectional?: boolean;
+  /** Refers to the sources after the preceding mutations (D102) */
+  position?: RelationshipPositionSpec;
+  file: string;
+  tags?: string[];
+  links?: LinkSpec[];
+  metadata?: Record<string, string | string[]>;
+  shared?: boolean;
+}
+
 /** A kind type of the specification writes (lc4m-15.30 US-6). */
 export type KindTypeName = 'element' | 'relationship' | 'deploymentNode';
 
@@ -413,6 +440,8 @@ export type Mutation =
   | RenameElementMutation
   | MoveElementMutation
   | AddKindMutation
+  | AddElementExtendMutation
+  | AddRelationshipExtendMutation
   | UpdateKindMutation
   | AddTagMutation
   | RemoveRelationshipMutation
@@ -942,6 +971,21 @@ const MUTATION_FIELDS = {
   addKind: ['op', 'type', 'name', 'file', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
   updateKind: ['op', 'type', 'name', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
   addTag: ['op', 'name', 'file'],
+  addElementExtend: ['op', 'fqn', 'file', 'tags', 'links', 'metadata'],
+  addRelationshipExtend: [
+    'op',
+    'source',
+    'target',
+    'matchKind',
+    'matchTitle',
+    'matchBidirectional',
+    'position',
+    'file',
+    'tags',
+    'links',
+    'metadata',
+    'shared',
+  ],
   addRelationship: [
     'op',
     'source',
@@ -1180,6 +1224,30 @@ function validateMutation(m: JsonObject, path: string): void {
     case 'addTag':
       requireString(m, 'name', path);
       optionalString(m, 'file', path);
+      return;
+    case 'addElementExtend':
+    case 'addRelationshipExtend':
+      if (m.op === 'addElementExtend') {
+        requireString(m, 'fqn', path);
+      } else {
+        requireString(m, 'source', path);
+        requireString(m, 'target', path);
+        optionalString(m, 'matchKind', path);
+        optionalString(m, 'matchTitle', path);
+        optionalBoolean(m, 'matchBidirectional', path);
+        optionalPosition(m, path);
+        optionalBoolean(m, 'shared', path);
+      }
+      requireString(m, 'file', path);
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      optionalMetadata(m, path, false);
+      formChecks(m.op, path, () => {
+        if (m.op === 'addElementExtend') checkReferenceForm(m.fqn as string, 'fqn');
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkLinks(m.links as LinkSpec[] | undefined);
+        checkMetadata(m.metadata as Record<string, string | string[]> | undefined);
+      });
       return;
     case 'addRelationship':
       requireString(m, 'source', path);

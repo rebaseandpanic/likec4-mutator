@@ -395,6 +395,17 @@ Moves an element under `parent` (an element FQN), or with `"parent": null` to th
 }
 ```
 
+#### addElementExtend, addRelationshipExtend
+
+Contribute through an `extend` block, as the library's `addElementExtend(fqn, { file, … })` and `addRelationshipExtend(selector, { file, … })` do (see [Creating blocks](#creating-blocks)). `addRelationshipExtend` takes the selector fields of `updateRelationship` (`source`, `target`, `matchKind`, `matchTitle`, `matchBidirectional`, `position`) and `shared`. A rejection fails on `mutations[i].<field>` and nothing is written.
+
+```json
+[
+  { "op": "addElementExtend", "fqn": "app", "file": "ext/ops.c4", "tags": ["internal"] },
+  { "op": "addRelationshipExtend", "source": "app.api", "target": "app.db", "matchTitle": "reads", "file": "ext/ops.c4", "metadata": { "runbook": "db-1" } }
+]
+```
+
 #### addKind, updateKind, addTag
 
 Declare a kind or a tag and change a kind's defaults, as the library's `addKind(type, name, { file, … })`, `updateKind(type, name, patch)` and `addTag(name, { file })` do (see [Specification defaults › Writing](#writing)). `type` is `element`, `relationship` or `deploymentNode`; in `updateKind` a string field set to `null` removes the default, and at least one field must be given. A rejection fails on `mutations[i].<field>` (`type`, `name`, `summary`, `title`, `tags[i]`, `links[i].url`, `file`) and nothing is written.

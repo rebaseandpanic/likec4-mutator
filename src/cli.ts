@@ -637,6 +637,32 @@ program
             applied++;
             break;
           }
+          case 'addElementExtend': {
+            const { op: _op, fqn, ...opts } = mutation;
+            const { merged } = mutator.addElementExtend(fqn, opts);
+            process.stdout.write(`  addElementExtend: ${merged ? 'merged into the extend block' : 'added an extend block'} of '${fqn}' in '${opts.file}'\n`);
+            applied++;
+            break;
+          }
+          case 'addRelationshipExtend': {
+            const { op: _op, source, target, matchKind, matchTitle, matchBidirectional, position, ...opts } = mutation;
+            const { merged } = mutator.addRelationshipExtend(
+              {
+                source,
+                target,
+                ...(matchKind !== undefined && { matchKind }),
+                ...(matchTitle !== undefined && { matchTitle }),
+                ...(matchBidirectional !== undefined && { matchBidirectional }),
+                ...(position !== undefined && { position }),
+              },
+              opts,
+            );
+            process.stdout.write(
+              `  addRelationshipExtend: ${merged ? 'merged into the extend block' : 'added an extend block'} of '${source}' -> '${target}' in '${opts.file}'\n`,
+            );
+            applied++;
+            break;
+          }
           case 'addKind': {
             const { op: _op, type, name, ...opts } = mutation;
             mutator.addKind(type, name, opts);
