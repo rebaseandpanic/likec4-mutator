@@ -25,7 +25,7 @@
  *    `./` or `../`, as LikeC4 1.59.4 tells relative paths apart) pins it to
  *    its file.
  */
-import { commentRanges } from '../parser/grammar.js';
+import { commentRanges, multiLineTokenRanges } from '../parser/grammar.js';
 import type { CatalogueEntry, CatalogueTarget, ReferenceCatalogue } from '../query/reference-catalogue.js';
 import type { DeploymentIndex } from '../query/deployment-index.js';
 import { referencePrefix, type ReferenceRecord } from '../query/reference-snapshot.js';
@@ -350,8 +350,14 @@ export function relativeValues(node: object): RelativeValue[] {
 
 /** The text of a declaration that a move carries, and the range of its file it is cut from. */
 export interface DeclarationText {
-  /** The lines, line breaks as `\n`, with the declaration's own indentation removed */
+  /**
+   * The lines, line breaks as `\n`, with the declaration's own indentation
+   * removed — except the lines that start inside a multi-line string, which
+   * are part of its value and are kept as written
+   */
   text: string;
+  /** Indices of the lines of `text` that start inside a multi-line string */
+  verbatim: readonly number[];
   /** Start of the cut: the first leading comment, else the declaration */
   offset: number;
   /** End of the cut: after a comment that ends the declaration's last line, else the declaration's end */
@@ -375,7 +381,7 @@ export function declarationText(fullText: string, offset: number, end: number): 
   const lineEnd = nextBreak === -1 ? fullText.length : nextBreak;
   const trailing = /^[ \t]*(\/\/[^\r\n]*|\/\*[^\r\n]*?\*\/[ \t]*)?\r?$/.exec(fullText.slice(end, lineEnd));
   if (!/^[ \t]*$/.test(fullText.slice(declarationLine, offset)) || !trailing) {
-    return { text: fullText.slice(offset, end).replace(/\r\n/g, '\n'), offset, end };
+    return { text: fullText.slice(offset, end).replace(/\r\n/g, '\n'), verbatim: [], offset, end };
   }
   const cutEnd = trailing[1] ? end + fullText.slice(end, lineEnd).replace(/\r$/, '').length : end;
   const comments = commentRanges(fullText);
@@ -388,22 +394,35 @@ export function declarationText(fullText: string, offset: number, end: number): 
   }
   const first = lineStart(start);
   const indent = /^[ \t]*/.exec(fullText.slice(declarationLine, offset))![0];
+  const strings = multiLineTokenRanges(fullText);
+  const verbatim: number[] = [];
+  let at = first;
   const text = fullText
     .slice(first, cutEnd)
-    .replace(/\r\n/g, '\n')
     .split('\n')
-    .map((line) => {
-      const own = /^[ \t]*/.exec(line)![0];
-      return line.slice(Math.min(own.length, indent.length));
+    .map((line, i) => {
+      const lineOffset = at;
+      at += line.length + 1;
+      const written = line.replace(/\r$/, '');
+      if (strings.some((range) => range.offset < lineOffset && lineOffset < range.end)) {
+        verbatim.push(i);
+        return written;
+      }
+      const own = /^[ \t]*/.exec(written)![0];
+      return written.slice(Math.min(own.length, indent.length));
     })
     .join('\n');
-  return { text, offset: first + /^[ \t]*/.exec(fullText.slice(first))![0].length, end: cutEnd };
+  return { text, verbatim, offset: first + /^[ \t]*/.exec(fullText.slice(first))![0].length, end: cutEnd };
 }
 
-/** `text` (lines without their indentation) indented with `indent`; blank lines stay empty. */
-export function indented(text: string, indent: string): string {
+/**
+ * `text` (lines without their indentation) indented with `indent`; blank
+ * lines stay empty, and the lines of `verbatim` (inside a multi-line string)
+ * are kept as they are.
+ */
+export function indented(text: string, indent: string, verbatim: readonly number[] = []): string {
   return text
     .split('\n')
-    .map((line) => (line.trim() === '' ? '' : indent + line))
+    .map((line, i) => (verbatim.includes(i) ? line : line.trim() === '' ? '' : indent + line))
     .join('\n');
 }

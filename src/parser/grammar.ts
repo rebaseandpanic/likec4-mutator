@@ -124,6 +124,18 @@ export function commentRanges(text: string): Array<{ offset: number; end: number
     .map((token) => ({ offset: token.startOffset, end: token.startOffset + token.image.length }));
 }
 
+/**
+ * The ranges of the tokens of `text` that span several lines and are not
+ * comments: the multi-line strings LikeC4's lexer reads, whose line breaks
+ * and indentation are part of their value.
+ */
+export function multiLineTokenRanges(text: string): Array<{ offset: number; end: number }> {
+  const { tokens } = getServices().likec4.parser.Lexer.tokenize(text);
+  return tokens
+    .filter((token) => token.image.includes('\n'))
+    .map((token) => ({ offset: token.startOffset, end: token.startOffset + token.image.length }));
+}
+
 /** View kinds an `include` rule can be written for. */
 export type IncludeViewType = 'element' | 'dynamic' | 'deployment';
 

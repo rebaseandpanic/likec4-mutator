@@ -1157,10 +1157,10 @@ export class LikeC4Mutator {
     }
     const edits = new Map<string, TextEdit[]>();
     if (inserts) {
-      inserts.append(indented(moved.text, inserts.innerIndent) + '\n');
+      inserts.append(indented(moved.text, inserts.innerIndent, moved.verbatim) + '\n');
       edits.set(destination, inserts.apply(sameFile ? [cutEdit] : []));
     } else {
-      edits.set(destination, [blockInsertEdit('model', destinationDoc, {}, (indent) => indented(moved.text, indent))]);
+      edits.set(destination, [blockInsertEdit('model', destinationDoc, {}, (indent) => indented(moved.text, indent, moved.verbatim))]);
     }
     if (!sameFile) edits.set(file, [cutEdit]);
 
