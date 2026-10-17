@@ -201,6 +201,44 @@ export interface RemoveElementMutation {
   cascade?: boolean;
 }
 
+/** A kind type of the specification writes (lc4m-15.30 US-6). */
+export type KindTypeName = 'element' | 'relationship' | 'deploymentNode';
+
+/** `addKind` (lc4m-15.30 US-6): the library's `addKind(type, name, { file, … })`. */
+export interface AddKindMutation {
+  op: 'addKind';
+  type: KindTypeName;
+  name: string;
+  file?: string;
+  title?: string;
+  /** Element and deployment node kinds only */
+  summary?: string;
+  description?: string;
+  technology?: string;
+  tags?: string[];
+  links?: LinkSpec[];
+}
+
+/** `updateKind` (lc4m-15.30 US-6): the library's `updateKind(type, name, patch)`; `null` removes a string. */
+export interface UpdateKindMutation {
+  op: 'updateKind';
+  type: KindTypeName;
+  name: string;
+  title?: string | null;
+  summary?: string | null;
+  description?: string | null;
+  technology?: string | null;
+  tags?: string[];
+  links?: LinkSpec[];
+}
+
+/** `addTag` (lc4m-15.30 US-6): the library's `addTag(name, { file })`. */
+export interface AddTagMutation {
+  op: 'addTag';
+  name: string;
+  file?: string;
+}
+
 /** `renameElement` (lc4m-15.30 US-3): the library's `renameElement(fqn, newName)`. */
 export interface RenameElementMutation {
   op: 'renameElement';
@@ -374,6 +412,9 @@ export type Mutation =
   | RemoveElementMutation
   | RenameElementMutation
   | MoveElementMutation
+  | AddKindMutation
+  | UpdateKindMutation
+  | AddTagMutation
   | RemoveRelationshipMutation
   | AddDeploymentNodeMutation
   | UpdateDeploymentNodeMutation
@@ -898,6 +939,9 @@ const MUTATION_FIELDS = {
   removeElement: ['op', 'fqn', 'cascade'],
   renameElement: ['op', 'fqn', 'newName'],
   moveElement: ['op', 'fqn', 'parent', 'file'],
+  addKind: ['op', 'type', 'name', 'file', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
+  updateKind: ['op', 'type', 'name', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
+  addTag: ['op', 'name', 'file'],
   addRelationship: [
     'op',
     'source',
@@ -1039,6 +1083,9 @@ type MutationFieldsAreExhaustive = AssertNever<FieldsNotListed>;
 
 const MUTATIONS_FILE_FIELDS = ['mutations'] as const satisfies ReadonlyArray<keyof MutationsFile>;
 
+/** The kind types of `addKind` / `updateKind`. */
+const KIND_TYPES: readonly KindTypeName[] = ['element', 'relationship', 'deploymentNode'];
+
 function isKnownOp(op: unknown): op is Mutation['op'] {
   return typeof op === 'string' && Object.prototype.hasOwnProperty.call(MUTATION_FIELDS, op);
 }
@@ -1104,6 +1151,34 @@ function validateMutation(m: JsonObject, path: string): void {
     case 'moveElement':
       requireString(m, 'fqn', path);
       if (m.parent !== null) requireString(m, 'parent', path);
+      optionalString(m, 'file', path);
+      return;
+    case 'addKind':
+    case 'updateKind': {
+      if (!KIND_TYPES.includes(m.type as KindTypeName)) {
+        throw new MutationsFileError(
+          `${path}.type`,
+          `expected one of ${KIND_TYPES.map((t) => `'${t}'`).join(', ')}, got ${typeof m.type === 'string' ? `'${m.type}'` : describeValue(m.type)}`,
+        );
+      }
+      requireString(m, 'name', path);
+      const strings = ['title', 'summary', 'description', 'technology'];
+      if (m.op === 'addKind') {
+        for (const key of [...strings, 'file']) optionalString(m, key, path);
+      } else {
+        for (const key of strings) optionalNullableString(m, key, path);
+        requirePatchField(m, path, [...strings, 'tags', 'links']);
+      }
+      optionalStringArray(m, 'tags', path);
+      optionalLinks(m, path);
+      formChecks(m.op, path, () => {
+        checkTags(m.tags as string[] | undefined, undefined);
+        checkLinks(m.links as LinkSpec[] | undefined);
+      });
+      return;
+    }
+    case 'addTag':
+      requireString(m, 'name', path);
       optionalString(m, 'file', path);
       return;
     case 'addRelationship':

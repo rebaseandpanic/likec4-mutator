@@ -637,6 +637,26 @@ program
             applied++;
             break;
           }
+          case 'addKind': {
+            const { op: _op, type, name, ...opts } = mutation;
+            mutator.addKind(type, name, opts);
+            process.stdout.write(`  addKind: declared the ${type} kind '${name}'\n`);
+            applied++;
+            break;
+          }
+          case 'updateKind': {
+            const { op: _op, type, name, ...patch } = mutation;
+            mutator.updateKind(type, name, patch);
+            applied++;
+            break;
+          }
+          case 'addTag': {
+            const m = mutation;
+            mutator.addTag(m.name, m.file !== undefined ? { file: m.file } : {});
+            process.stdout.write(`  addTag: declared the tag '${m.name}'\n`);
+            applied++;
+            break;
+          }
           case 'renameElement': {
             const m = mutation;
             const { fqn } = mutator.renameElement(m.fqn, m.newName);

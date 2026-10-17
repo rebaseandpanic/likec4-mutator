@@ -395,6 +395,18 @@ Moves an element under `parent` (an element FQN), or with `"parent": null` to th
 }
 ```
 
+#### addKind, updateKind, addTag
+
+Declare a kind or a tag and change a kind's defaults, as the library's `addKind(type, name, { file, … })`, `updateKind(type, name, patch)` and `addTag(name, { file })` do (see [Specification defaults › Writing](#writing)). `type` is `element`, `relationship` or `deploymentNode`; in `updateKind` a string field set to `null` removes the default, and at least one field must be given. A rejection fails on `mutations[i].<field>` (`type`, `name`, `summary`, `title`, `tags[i]`, `links[i].url`, `file`) and nothing is written.
+
+```json
+[
+  { "op": "addTag", "name": "backend" },
+  { "op": "addKind", "type": "element", "name": "service", "title": "Service", "tags": ["backend"], "file": "spec.c4" },
+  { "op": "updateKind", "type": "relationship", "name": "async", "title": null, "technology": "Kafka" }
+]
+```
+
 #### addRelationship
 
 Adds a relationship between two elements. All fields except `op`, `source`, `target` are optional. It is written at the end of the first `model` block of the first file, in LikeC4's document order, that has one; else in a new `model` block at the end of the first file.
