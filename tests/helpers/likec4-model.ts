@@ -6,7 +6,7 @@
  * computes from the same sources.
  */
 import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
-import { AstUtils, URI, type AstNode, type LangiumDocument } from 'langium';
+import { AstUtils, URI, type AstNode, type CstNode, type LangiumDocument } from 'langium';
 import { expect } from 'vitest';
 
 /** A string value of the LikeC4 model: plain, or `{ md }` / `{ txt }` for Markdown-or-string properties. */
@@ -1135,6 +1135,476 @@ export async function linkedViewReferences(
       }
     }
     result.push(...found.sort((a, b) => a.offset - b.offset).map((f) => f.reference));
+  }
+  return result;
+}
+
+// ----- the catalogue universe: every written cross-reference ---------------
+
+/**
+ * The role of one {@link LinkedCatalogueReference}: the FR-001 role enum of
+ * lc4m-15.30, the same values the library's reference catalogue uses.
+ */
+export type CatalogueReferenceRole =
+  /** model relationship endpoint, at any nesting level and in `extend` bodies */
+  | 'relationship-endpoint'
+  /** `extend <element>` target */
+  | 'extend-element-target'
+  /** `extend a -> b` endpoint */
+  | 'extend-relationship-endpoint'
+  /** deployment relationship endpoint, a path through an instance included */
+  | 'deployment-relationship-endpoint'
+  /** `extend <node>` target */
+  | 'extend-node-target'
+  | 'instance-of'
+  | 'view-of'
+  | 'view-extends'
+  /** include / exclude item of an element, dynamic or deployment view (top level or in a `group`), dynamic `include` */
+  | 'predicate-item'
+  /** `navigateTo` in any of its five containers */
+  | 'navigate-to'
+  | 'step-endpoint'
+  /** target of a view style rule or a `views`-block style rule */
+  | 'style-target'
+  | 'rank-target'
+  /** any reference at an unmodelled flow place */
+  | 'opaque-flow'
+  /** any reference in a `global` block or an `import` */
+  | 'global-or-import';
+
+/** One reference of {@link linkedCatalogueReferences}. */
+export interface LinkedCatalogueReference {
+  file: string;
+  /** Offset of the written reference in its file */
+  offset: number;
+  /** 1-based line of the written reference */
+  line: number;
+  role: CatalogueReferenceRole;
+  /** The reference as written (a whole dotted chain) */
+  text: string;
+  /** The target LikeC4's linker bound it to; `null` when it left the reference unresolved, an ambiguous name included */
+  target: LinkedViewTarget | null;
+  /** The reference lies at an unmodelled place (see {@link unmodelledContainer}) */
+  unmodelled: boolean;
+}
+
+/** Flow containers of a dynamic view that are modelled: their steps are steps (`SubflowStep` kinds). */
+const MODELLED_SUBFLOWS: ReadonlySet<string> = new Set(['par', 'parallel']);
+
+/**
+ * The container that makes `node` unmodelled, if any — the unmodelled
+ * boundary of lc4m-15.30: a `SubflowStep` whose kind is not `par` or
+ * `parallel` (`opt`, `loop`, `break`, `when`, `if`, `else`), an `AltSteps`,
+ * a `TryBlock`, `CatchBlock` or `FinallyBlock`, a `Globals` block or an
+ * `ImportsFromPoject`.  Decided from AST container types only.
+ */
+function unmodelledContainer(node: AstNode): AstNode | undefined {
+  for (let up = node.$container; up; up = up.$container) {
+    switch (up.$type) {
+      case 'SubflowStep':
+        if (MODELLED_SUBFLOWS.has((up as AstNode & { kind: string }).kind)) break;
+        return up;
+      case 'AltSteps':
+      case 'TryBlock':
+      case 'CatchBlock':
+      case 'FinallyBlock':
+      case 'Globals':
+      case 'ImportsFromPoject':
+        return up;
+    }
+  }
+  return undefined;
+}
+
+/** The role of a topmost `FqnRef` at a modelled place, from its containers. */
+function fqnRefRole(node: AstNode): CatalogueReferenceRole {
+  const container = node.$container!;
+  switch (container.$type) {
+    case 'Relation':
+      return 'relationship-endpoint';
+    case 'ExtendRelation':
+      return 'extend-relationship-endpoint';
+    case 'DeploymentRelation':
+      return 'deployment-relationship-endpoint';
+    case 'ElementRef':
+      switch (container.$container?.$type) {
+        case 'DeployedInstance':
+          return 'instance-of';
+        case 'ElementView':
+          return 'view-of';
+        case 'Step':
+        case 'StepSeries':
+          return 'step-endpoint';
+      }
+      break;
+    case 'FqnRefExpr':
+      for (let up = container.$container; up; up = up.$container) {
+        switch (up.$type) {
+          case 'ViewRuleStyle':
+          case 'DeploymentViewRuleStyle':
+            return 'style-target';
+          case 'ViewRuleRank':
+            return 'rank-target';
+          case 'ViewRulePredicate':
+          case 'DynamicViewIncludePredicate':
+          case 'DeploymentViewRulePredicate':
+            return 'predicate-item';
+        }
+      }
+      break;
+  }
+  throw new Error(`linkedCatalogueReferences: no role for a FqnRef in ${container.$type} (${node.$cstNode?.text})`);
+}
+
+/**
+ * Every written element, deployment, view and import cross-reference of
+ * `files`, resolved or not, with the target LikeC4's linker bound it to —
+ * the independent oracle of the library's reference catalogue.  Walks the
+ * linked AST (`AstUtils.streamAst`) and reports every topmost `FqnRef` chain,
+ * every topmost `StrictFqnRef` chain (`extend <node>`), every topmost
+ * `StrictFqnElementRef` chain (`extend <element>`), every view-reference
+ * wrapper (`ViewRef`, `DynamicViewRef`, `ElementViewRef`) and every
+ * `Imported` name.
+ *
+ * Targets: an element, deployment node or instance, or an imported element,
+ * is `FqnIndex.resolve` of the linked declaration (`{ model }` /
+ * `{ deployment }`); a path under an instance is `{ deployment, element }`,
+ * as in {@link linkedReferences}; a view is `{ view: <name> }`; `null` when
+ * unresolved.  The role is classified from AST container types only, and a
+ * reference at an unmodelled place is `opaque-flow` (flow blocks) or
+ * `global-or-import` (`global`, `import`) whatever its local container.
+ * An `FqnRef` at a modelled place the classification does not know throws,
+ * so a grammar change cannot go unreported.  Text the parser could not
+ * recover has no AST node and is not reported.  References are listed per
+ * file in source order.  Independent of the library.
+ *
+ * `options.projects` registers top-level folders as projects, as for
+ * {@link validateLikeC4}.
+ */
+export async function linkedCatalogueReferences(
+  files: Record<string, string>,
+  options: { projects?: readonly string[] } = {},
+): Promise<LinkedCatalogueReference[]> {
+  const { services, documents } = await buildWorkspace(files, undefined, options.projects);
+  const fqnIndex = services.likec4.FqnIndex;
+  const fqn = (node: AstNode): string => fqnIndex.resolve(node as Parameters<typeof fqnIndex.resolve>[0]);
+  const chainTarget = (resolved: AstNode | undefined, parents: Array<AstNode | undefined>): LinkedTarget | null => {
+    if (!resolved) return null;
+    if (resolved.$type === 'DeploymentNode' || resolved.$type === 'DeployedInstance') return { deployment: fqn(resolved) };
+    const via = parents.find((p) => p?.$type === 'DeployedInstance');
+    return via ? { deployment: fqn(via), element: fqn(resolved) } : { model: fqn(resolved) };
+  };
+  const fqnChainTarget = (ref: FqnRefNode): LinkedTarget | null => {
+    const parents: Array<AstNode | undefined> = [];
+    for (let step = ref.parent; step; step = step.parent) parents.push(step.value.ref);
+    return chainTarget(ref.value.ref, parents);
+  };
+  const viewTarget = (ref: LinkedRef): LinkedViewTarget | null => {
+    const name = (ref.ref as (AstNode & { name?: string }) | undefined)?.name;
+    return name ? { view: name } : null;
+  };
+  const result: LinkedCatalogueReference[] = [];
+  for (const document of documents) {
+    const file = fileName(document);
+    const found: LinkedCatalogueReference[] = [];
+    const report = (
+      written: { offset: number; text: string; range: { start: { line: number } } },
+      node: AstNode,
+      modelledRole: () => CatalogueReferenceRole,
+      target: LinkedViewTarget | null,
+    ): void => {
+      const boundary = unmodelledContainer(node);
+      const role: CatalogueReferenceRole = !boundary
+        ? modelledRole()
+        : boundary.$type === 'Globals' || boundary.$type === 'ImportsFromPoject'
+          ? 'global-or-import'
+          : 'opaque-flow';
+      found.push({
+        file,
+        offset: written.offset,
+        line: written.range.start.line + 1,
+        role,
+        text: written.text,
+        target,
+        unmodelled: boundary !== undefined,
+      });
+    };
+    for (const node of AstUtils.streamAst(document.parseResult.value)) {
+      switch (node.$type) {
+        case 'FqnRef':
+          if (node.$container?.$type === 'FqnRef') break;
+          report(node.$cstNode!, node, () => fqnRefRole(node), fqnChainTarget(node as FqnRefNode));
+          break;
+        case 'StrictFqnRef':
+          if (node.$container?.$type === 'StrictFqnRef') break;
+          report(node.$cstNode!, node, () => 'extend-node-target', fqnChainTarget(node as FqnRefNode));
+          break;
+        case 'StrictFqnElementRef': {
+          if (node.$container?.$type === 'StrictFqnElementRef') break;
+          const ref = node as AstNode & { el: LinkedRef; parent?: AstNode & { el: LinkedRef } };
+          report(node.$cstNode!, node, () => 'extend-element-target', chainTarget(ref.el.ref, []));
+          break;
+        }
+        case 'ViewRef':
+        case 'DynamicViewRef':
+        case 'ElementViewRef': {
+          const role = (): CatalogueReferenceRole => {
+            switch (node.$container?.$type) {
+              case 'ElementView':
+                return 'view-extends';
+              case 'NavigateToProperty':
+              case 'RelationNavigateToProperty':
+                return 'navigate-to';
+            }
+            throw new Error(`linkedCatalogueReferences: no role for a ${node.$type} in ${node.$container?.$type}`);
+          };
+          report(node.$cstNode!, node, role, viewTarget((node as AstNode & { view: LinkedRef }).view));
+          break;
+        }
+        case 'Imported': {
+          const imported = (node as AstNode & { imported: LinkedRef & { $refNode?: CstNode } }).imported;
+          const target = imported.ref ? { model: fqn(imported.ref) } : null;
+          report(imported.$refNode!, node, () => 'global-or-import', target);
+          break;
+        }
+      }
+    }
+    result.push(...found.sort((a, b) => a.offset - b.offset));
+  }
+  return result;
+}
+
+/** The kind type of a {@link LinkedKindReference}: `shared` names element and deployment node kinds at once. */
+export type LinkedKindType = 'element' | 'deploymentNode' | 'shared' | 'relationship' | 'tag';
+
+/**
+ * The FR-002 place of a {@link LinkedKindReference}: the construct, and
+ * where it is written.
+ * - `declaration`: the kind token of an element (`element`) or deployment
+ *   node (`deploymentNode`) declaration;
+ * - `connector`: `-[k]->`, `-[k]<->` or `.k` of a `model-relationship`,
+ *   `deployment-relationship`, `extend-relationship`, dynamic `step`, or a
+ *   relation `predicate`;
+ * - `tags`: a tags list of an `element`, `relationship`, `deploymentNode`,
+ *   `instance`, `deployment-relationship`, `view`, `extend` block or
+ *   `kind-default`;
+ * - an expression (`element.kind`, `element.tag`, `where-kind`, `where-tag`,
+ *   `relation-where-kind`, `relation-where-tag`, `participant-kind`,
+ *   `participant-tag`) in a `predicate`, `style-target` or `rank-target`.
+ */
+export type LinkedKindPlace =
+  | { construct: 'declaration'; context: 'element' | 'deploymentNode' }
+  | {
+      construct: 'connector';
+      context: 'model-relationship' | 'deployment-relationship' | 'extend-relationship' | 'step' | 'predicate';
+    }
+  | {
+      construct: 'tags';
+      context:
+        | 'element'
+        | 'relationship'
+        | 'deploymentNode'
+        | 'instance'
+        | 'deployment-relationship'
+        | 'view'
+        | 'extend'
+        | 'kind-default';
+    }
+  | { construct: KindExpressionConstruct; context: 'predicate' | 'style-target' | 'rank-target' };
+
+/** The expression constructs of {@link LinkedKindPlace}. */
+export type KindExpressionConstruct =
+  | 'element.kind'
+  | 'element.tag'
+  | 'where-kind'
+  | 'where-tag'
+  | 'relation-where-kind'
+  | 'relation-where-tag'
+  | 'participant-kind'
+  | 'participant-tag';
+
+/** One reference of {@link linkedKindReferences}. */
+export interface LinkedKindReference {
+  file: string;
+  /** Offset of the written name (`#t` for a tag) in its file */
+  offset: number;
+  /** 1-based line */
+  line: number;
+  /** The name as written (`#t` for a tag) */
+  text: string;
+  kindType: LinkedKindType;
+  /** The declared name LikeC4's linker bound it to; `null` when unresolved */
+  target: string | null;
+  place: LinkedKindPlace;
+  /**
+   * The view type the place is written in: `views` for a style rule of a
+   * `views` block, `global` inside a `global` block, `null` outside views.
+   */
+  viewType: 'element' | 'dynamic' | 'deployment' | 'views' | 'global' | null;
+  /** Written in a negated form: `!=`, `is not`, or inside a `not (…)` condition */
+  negated: boolean;
+  /** The reference lies at an unmodelled place (the boundary of {@link linkedCatalogueReferences}) */
+  unmodelled: boolean;
+}
+
+/** Reference types of the LikeC4 grammar that name a kind or a tag, with their kind type. */
+const KIND_REFERENCE_TYPES: Readonly<Record<string, LinkedKindType>> = {
+  ElementKind: 'element',
+  DeploymentNodeKind: 'deploymentNode',
+  DeploymentNodeOrElementKind: 'shared',
+  RelationshipKind: 'relationship',
+  Tag: 'tag',
+};
+
+const EXPRESSION_CONSTRUCTS: Readonly<Record<string, KindExpressionConstruct>> = {
+  ElementKindExpression: 'element.kind',
+  ElementTagExpression: 'element.tag',
+  WhereElementKind: 'where-kind',
+  WhereElementTag: 'where-tag',
+  WhereRelationKind: 'relation-where-kind',
+  WhereRelationTag: 'relation-where-tag',
+  WhereRelationParticipantKind: 'participant-kind',
+  WhereRelationParticipantTag: 'participant-tag',
+};
+
+const CONNECTOR_CONTEXTS: Readonly<Record<string, Extract<LinkedKindPlace, { construct: 'connector' }>['context']>> = {
+  Relation: 'model-relationship',
+  DeploymentRelation: 'deployment-relationship',
+  ExtendRelation: 'extend-relationship',
+  Step: 'step',
+  StepSeries: 'step',
+  OutgoingRelationExpr: 'predicate',
+};
+
+const TAGS_CONTEXTS: Readonly<Record<string, Extract<LinkedKindPlace, { construct: 'tags' }>['context']>> = {
+  Element: 'element',
+  Relation: 'relationship',
+  DeploymentNode: 'deploymentNode',
+  DeployedInstance: 'instance',
+  DeploymentRelation: 'deployment-relationship',
+  ElementView: 'view',
+  DynamicView: 'view',
+  DeploymentView: 'view',
+  ExtendElement: 'extend',
+  ExtendRelation: 'extend',
+  ExtendDeployment: 'extend',
+  SpecificationElementKind: 'kind-default',
+  SpecificationDeploymentNodeKind: 'kind-default',
+  SpecificationRelationshipKind: 'kind-default',
+};
+
+/** The view type `node` is written in — see {@link LinkedKindReference.viewType}. */
+function kindViewType(node: AstNode): LinkedKindReference['viewType'] {
+  for (let up: AstNode | undefined = node; up; up = up.$container) {
+    switch (up.$type) {
+      case 'ElementView':
+        return 'element';
+      case 'DynamicView':
+        return 'dynamic';
+      case 'DeploymentView':
+        return 'deployment';
+      case 'Globals':
+        return 'global';
+      case 'ModelViews':
+        return 'views';
+    }
+  }
+  return null;
+}
+
+/** The FR-002 place of a kind or tag reference held by `holder` (the node owning the reference property). */
+function kindPlace(holder: AstNode): LinkedKindPlace {
+  const fail = (): never => {
+    throw new Error(`linkedKindReferences: no place for a reference in ${holder.$type} (${holder.$cstNode?.text})`);
+  };
+  // A tag reference sits in a `TagRef`; a dot connector `.k` in a `RelationKindDotRef`.
+  const owner = holder.$type === 'TagRef' || holder.$type === 'RelationKindDotRef' ? holder.$container! : holder;
+  if (owner.$type === 'Element' && holder === owner) return { construct: 'declaration', context: 'element' };
+  if (owner.$type === 'DeploymentNode' && holder === owner) return { construct: 'declaration', context: 'deploymentNode' };
+  const connector = CONNECTOR_CONTEXTS[owner.$type];
+  if (connector) return { construct: 'connector', context: connector };
+  if (owner.$type === 'Tags') {
+    // `Tags` lists chain through `prev`, sit in a body or directly in their owner.
+    for (let up = owner.$container; up; up = up.$container) {
+      const context = TAGS_CONTEXTS[up.$type];
+      if (context) return { construct: 'tags', context };
+    }
+    return fail();
+  }
+  const construct = EXPRESSION_CONSTRUCTS[owner.$type];
+  if (!construct) return fail();
+  for (let up = owner.$container; up; up = up.$container) {
+    switch (up.$type) {
+      case 'ViewRuleStyle':
+      case 'DeploymentViewRuleStyle':
+      case 'GlobalStyle':
+        return { construct, context: 'style-target' };
+      case 'ViewRuleRank':
+        return { construct, context: 'rank-target' };
+      case 'ViewRulePredicate':
+      case 'DynamicViewIncludePredicate':
+      case 'DeploymentViewRulePredicate':
+        return { construct, context: 'predicate' };
+    }
+  }
+  return fail();
+}
+
+/** Whether the expression owning a kind or tag reference is written negated (operator, or an enclosing `not`). */
+function kindNegated(holder: AstNode): boolean {
+  const owner = holder.$type === 'TagRef' ? holder.$container! : holder;
+  const expression = owner as AstNode & { isEqual?: boolean; operator?: string; not?: boolean };
+  if (expression.isEqual === false || expression.operator === '!=' || expression.not === true) return true;
+  return AstUtils.getContainerOfType(
+    owner,
+    (n): n is AstNode => n.$type === 'WhereElementNegation' || n.$type === 'WhereRelationNegation',
+  ) !== undefined;
+}
+
+/**
+ * Every linked reference of `files` to an element kind, deployment node kind,
+ * the union of both (`where … kind is`, participant kind conditions),
+ * relationship kind or tag, resolved or not — the FR-002 places as LikeC4's
+ * linker sees them.  Found generically: every Langium cross-reference whose
+ * reference type (`AstReflection.getReferenceType`) is `ElementKind`,
+ * `DeploymentNodeKind`, `DeploymentNodeOrElementKind`, `RelationshipKind` or
+ * `Tag`; a reference of those types at a place the classification does not
+ * know throws.  Each carries its place, view type, negation and the
+ * unmodelled flag of {@link linkedCatalogueReferences}.  Text inside string
+ * and markdown values is never a reference.  Listed per file in source
+ * order.  Independent of the library.
+ */
+export async function linkedKindReferences(
+  files: Record<string, string>,
+  options: { projects?: readonly string[] } = {},
+): Promise<LinkedKindReference[]> {
+  const { services, documents } = await buildWorkspace(files, undefined, options.projects);
+  const reflection = services.shared.AstReflection;
+  const result: LinkedKindReference[] = [];
+  for (const document of documents) {
+    const file = fileName(document);
+    const found: LinkedKindReference[] = [];
+    for (const node of AstUtils.streamAst(document.parseResult.value)) {
+      for (const info of AstUtils.streamReferences(node)) {
+        const kindType = KIND_REFERENCE_TYPES[reflection.getReferenceType(info)];
+        if (!kindType) continue;
+        const written = info.reference.$refNode!;
+        const target = info.reference.ref as (AstNode & { name?: string }) | undefined;
+        found.push({
+          file,
+          offset: written.offset,
+          line: written.range.start.line + 1,
+          text: written.text,
+          kindType,
+          target: target?.name ?? null,
+          place: kindPlace(info.container),
+          viewType: kindViewType(info.container),
+          negated: kindNegated(info.container),
+          unmodelled: unmodelledContainer(info.container) !== undefined,
+        });
+      }
+    }
+    result.push(...found.sort((a, b) => a.offset - b.offset));
   }
   return result;
 }
