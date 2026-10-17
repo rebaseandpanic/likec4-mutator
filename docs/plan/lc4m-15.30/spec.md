@@ -215,7 +215,7 @@ Write: validate form → resolve the target (element, view, kind, relationship) 
 
 ### Significant non-functional constraints
 - Atomic in memory across files; formatting, comments and line endings kept as existing writers do.
-- A write builds its reference catalogue once before and once after its edits, and edits each file once; no numeric bound is set (SC-011 runs the suite in its usual time).
+- A write edits each file once: one atomic edit group per changed file. It builds its reference catalogue once before and once after its edits; a rename or move may additionally build in-memory catalogues of its intermediate states, because FR-011 chooses each written text at its place in the state after the preceding step (D126). No numeric bound is set (SC-011 runs the suite in its usual time).
 
 ### Rejected alternatives
 - Linking with the language server inside the library to find references (lc4m-15.31).
@@ -384,3 +384,7 @@ None.
 - `extend` relationship identity must use the title LikeC4's merge uses; with D82 the written block carries the relationship's own title (critique r1, claude).
 - Which leading comments belong to a moved declaration (FR-020; critique r1, claude).
 - `matchTitle` compares the raw inline title while the deployment selector compares the effective title; candidate lists and `extend` identity must use one on purpose (critique r1, claude).
+
+## Changelog
+
+- 2026-10-17 · D126 · the "edits each file once" constraint: a rename or move may build in-memory catalogues of its intermediate states; files are still written once. Found in wave 4 review (codex W1, fable F2); downstream: tests.md unchanged (no test asserts build counts), tasks lc4m-45.1 / 45.4 fixed in wave 4.
