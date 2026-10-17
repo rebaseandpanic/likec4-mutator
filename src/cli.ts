@@ -673,6 +673,7 @@ program
           case 'updateKind': {
             const { op: _op, type, name, ...patch } = mutation;
             mutator.updateKind(type, name, patch);
+            process.stdout.write(`  updateKind: changed the ${type} kind '${name}'\n`);
             applied++;
             break;
           }
