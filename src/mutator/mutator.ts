@@ -2926,11 +2926,18 @@ export class LikeC4Mutator {
     const plan = options.plan
       ? options.plan(cascadable)
       : planCascade(cascadable.filter(isCascadableStatement), (file) => this.document(file), this.viewResolver(), field);
+    const viewNames = (views: readonly ViewDeclaration[]): string => views.map((view) => `'${view.id ?? 'unnamed view'}'`).join(', ');
     if (plan.emptied.length > 0) {
-      const views = plan.emptied.map((view) => `'${view.id ?? 'unnamed view'}'`).join(', ');
       throw new ReferencedRemovalError(
         field,
-        `${subject} cannot be removed with cascade: views ${views} would lose their last content-producing statement (LikeC4 would show other content): ${describeAll(references)}`,
+        `${subject} cannot be removed with cascade: views ${viewNames(plan.emptied)} would lose their last content-producing statement (LikeC4 would show other content): ${describeAll(references)}`,
+        references,
+      );
+    }
+    if (plan.stranded.length > 0) {
+      throw new ReferencedRemovalError(
+        field,
+        `${subject} cannot be removed with cascade: views ${viewNames(plan.stranded)} would keep a par block of statements LikeC4 discards, and LikeC4 would drop the block: ${describeAll(references)}`,
         references,
       );
     }

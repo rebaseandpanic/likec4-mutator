@@ -26,6 +26,7 @@ import type { ViewAstNode, ViewDeclaration, ViewStepStatementEntry } from '../qu
 import type { ViewReferenceResolver } from '../query/view-resolver.js';
 import { buildRemovalEdit, removalEditsForRanges } from './cst-helpers.js';
 import { leaveParallel } from './step-ops.js';
+import { InvalidWriteError } from './write-checks.js';
 import type { TextEdit } from './text-edit.js';
 
 /** What a cascade removes and how. */
@@ -36,6 +37,11 @@ export interface CascadePlan {
   removed: Set<object>;
   /** The views that would lose their last content-producing statement (D77), in entry order */
   emptied: ViewDeclaration[];
+  /**
+   * The views with a `par` / `parallel` block the cascade would leave with
+   * only statements LikeC4 discards (D40), in entry order
+   */
+  stranded: ViewDeclaration[];
 }
 
 /** The `prev`-linked item list of each rule type that holds rule items. */
@@ -53,13 +59,13 @@ const INCLUDE_RULES: ReadonlySet<string> = new Set(['ViewRulePredicate', 'Deploy
 
 /**
  * Plan the removal of the view statements of `entries` — references at
- * modelled places whose statement class is `rule` or `step`.
+ * modelled places whose statement class is `rule` or `step`.  The views the
+ * plan would empty (D77) or leave with a `par` block of discarded
+ * statements only (D40) are reported, for the caller to reject.
  *
  * @param documentOf - The parsed document of a file
  * @param resolver   - Resolves view references, for the `par` check of D40
- * @param field      - The field a rejection names
- * @throws {InvalidWriteError} (from {@link leaveParallel}) on `field` when a
- *   `par` block would hold only statements LikeC4 discards
+ * @param field      - The field of the D40 check
  * @throws {Error} (internal) for an entry that is not cascadable
  */
 export function planCascade(
@@ -97,16 +103,23 @@ export function planCascade(
 
   // The `par` blocks that lose statements but stay must still contribute a step (D40).
   const views = distinct(entries.map((entry) => entry.view).filter((view): view is ViewDeclaration => view !== undefined));
-  for (const view of views) {
-    for (const block of parallelBlocks(view.steps)) {
-      if (removed.has(block.node)) continue;
+  const stranded = views.filter((view) =>
+    parallelBlocks(view.steps).some((block) => {
+      if (removed.has(block.node)) return false;
       const leaving = new Set(block.statements.filter((s) => removed.has(s.node)));
-      if (leaving.size > 0) leaveParallel(view, block, leaving, resolver, field);
-    }
-  }
+      if (leaving.size === 0) return false;
+      try {
+        leaveParallel(view, block, leaving, resolver, field);
+        return false;
+      } catch (err) {
+        if (err instanceof InvalidWriteError) return true;
+        throw err;
+      }
+    }),
+  );
 
   const emptied = views.filter((view) => contentCount(view, new Set()) > 0 && contentCount(view, removed) === 0);
-  return { edits: removalEdits(removed, fileOf, documentOf), removed, emptied };
+  return { edits: removalEdits(removed, fileOf, documentOf), removed, emptied, stranded };
 }
 
 /**
@@ -307,5 +320,5 @@ export function planNavigateToCascade(entries: readonly CatalogueEntry[], docume
       if (list[i]!.offset < list[i - 1]!.end) throw new Error(`Internal error: overlapping cascade edits in '${file}'`);
     }
   }
-  return { edits, removed, emptied: [] };
+  return { edits, removed, emptied: [], stranded: [] };
 }
