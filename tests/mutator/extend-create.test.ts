@@ -302,6 +302,21 @@ describe('a shared identity (row 156)', () => {
     await expectReadsAgree(after);
     expect(LikeC4Mutator.fromFiles(after).getRelationships().map((r) => r.tags)).toEqual([['edge'], ['edge']]);
   });
+  it('rejects with shared a metadata key that another relationship of the identity already has (D86)', () => {
+    const files: Files = {
+      'm.c4': replaced(SHARED['m.c4']!, [["  a .calls b 'x'\n", "  a .calls b 'x' {\n    metadata {\n      sla 'gold'\n    }\n  }\n"]]),
+    };
+    const mutator = LikeC4Mutator.fromFiles(files);
+    expectRejected(
+      mutator,
+      () =>
+        mutator.addRelationshipExtend(
+          { source: 'a', target: 'b', position: { file: 'm.c4', line: 13, column: 3 } },
+          { file: 'm.c4', metadata: { sla: 'silver' }, shared: true },
+        ),
+      'metadata.sla',
+    );
+  });
   it('accepts shared when the identity matches only the selected relationship', SLOW, async () => {
     const mutator = LikeC4Mutator.fromFiles(FILES);
     mutator.addRelationshipExtend({ source: 'app', target: 'db', matchTitle: 'reads' }, { file: 'c.c4', tags: ['edge'], shared: true });
