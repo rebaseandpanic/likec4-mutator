@@ -281,3 +281,26 @@ describe('an unknown id and a refused edit are plain InvalidWriteError (row 64, 
     expect(m.listDeploymentNodes()).toEqual(nodes);
   });
 });
+
+describe('a removed id in unrecovered text, by where the text is (row 62)', () => {
+  const BASE = `${SPEC}${MODEL}${DEPLOYMENT}`;
+  const STRAY = "x -> -> prod.inner 'q'";
+
+  it.each([false, true])('is RRE when the unrecovered id is in the same file outside the node, cascade %s', (cascade) => {
+    const files: Files = { 'm.c4': `${BASE}model {\n  ${STRAY}\n}\n` };
+    expect(expectRRE(files, 'node', 'prod.inner', cascade).references).toEqual([
+      { ...at(files, 'm.c4', 'prod.inner'), role: 'unrecovered', cascadable: false },
+    ]);
+  });
+
+  it.each([false, true])('is RRE when the unrecovered id is in another file at an offset inside the node, cascade %s', (cascade) => {
+    const body = `model {\n  ${STRAY}\n}\n`;
+    // Pad b.c4 so its `prod.inner` sits at an offset inside the declaration of prod.inner in m.c4.
+    const target = BASE.indexOf('vm inner {') + 4;
+    const files: Files = { 'm.c4': BASE, 'b.c4': '\n'.repeat(target - body.indexOf('prod.inner')) + body };
+    expect(files['b.c4']!.indexOf('prod.inner')).toBe(target);
+    expect(expectRRE(files, 'node', 'prod.inner', cascade).references).toEqual([
+      { ...at(files, 'b.c4', 'prod.inner'), role: 'unrecovered', cascadable: false },
+    ]);
+  });
+});
