@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.11.0] - 2026-10-18
+
+References, placement and the specification (lc4m-15.30): one reference policy for every removal, element rename and move, file choice for every creating write, kind and tag writes, relationship kinds, direction and nesting, a relationship selector, `extend` block creation and style reads. See [Placement and file choice](README.md#placement-and-file-choice), [Reference policy](README.md#reference-policy), [Renaming elements](README.md#renaming-elements), [Moving elements](README.md#moving-elements), [Specification defaults](README.md#specification-defaults), [Relationship forms and placement](README.md#relationship-forms-and-placement), [Selecting a relationship](README.md#selecting-a-relationship) and [Reading styles](README.md#reading-styles) in the README.
+
+### Changed
+- **Removals follow one reference policy.** `removeElement`, `removeDeploymentNode`, `removeDeploymentInstance` and `removeView` remove what the removed construct owns and reject every other reference. Rejected now, with nothing written, where references were left dangling before:
+  - `removeElement` while a view refers into the subtree: an include or exclude item (with its `with` and `where`), a dynamic step, a style or `rank` target, a view `of`. Before, the element was removed and LikeC4 then reported `Could not resolve reference`.
+  - any removal while a reference sits where the library does not resolve references (`global` blocks, imports, dynamic flow blocks other than `par`, unrecovered text), named there as a whole identifier or any dotted segment.
+- **The rejection type.** A rejection is a `ReferencedRemovalError`, an `InvalidWriteError` on `fqn` or `id`, whose `references` list every reference as `{ file, line, column, role, cascadable, view? }`. The earlier rejections of these removals have this type too: an `instanceOf`, a deployment relationship through an instance, a deployment view rule, a `navigateTo` or an `extends`.
+- **Cascades.** With `{ cascade: true }`, the references the policy allows are removed with the construct: view items (an emptied rule or `group` too), dynamic steps (an emptied `par` too), style and `rank` targets, `navigateTo` properties, instances, and deployment relationships through an instance. The result lists them in `cascaded`. Rejected in both modes: a view `of` or `extends`, a reference the library does not resolve, and a cascade that would remove a view's last content-producing statement. Content a view takes from `extends` or `global` predicates does not count.
+- **Error type of removals (D104).** `removeElement` reports an unknown element as an `InvalidWriteError` on `fqn` instead of a plain `Error`. Every removal reports an edit that would leave a file unparsable as an `InvalidWriteError` on its target's field.
+- **Relationship selection (D87).** `removeRelationship(source, target)` no longer removes the first match in load order. Several matches throw a `RelationshipAmbiguityError` (an `InvalidWriteError` on `source`) whose `candidates` give each match's `{ file, line, column }`. No match is an `InvalidWriteError` on `source`, or on `position` when one was given. `updateRelationship` reports no match and several matches the same way instead of a plain `Error`. `removeRelationship` returns `{ changedFiles }` instead of nothing.
+- **Default file (D62).** A model-level `addElement` and a top-level `addRelationship` without `file` write into the first `model` block of the first file in LikeC4's document order that has one, instead of the first such file in load order. The two differ only when the files were loaded in another order than LikeC4 sorts them.
+- **New rejections of additions (US-4).**
+  - `addElement` now resolves every reference again with the new element in place: view rules, dynamic steps, `navigateTo`, style and `rank` targets. It is rejected on `name` when one that resolved before would then resolve elsewhere or not at all. Before, only relationship, `extend`, view `of` and deployment references were checked.
+  - `addElement`, `addDeploymentNode` and `addDeploymentInstance` are rejected on `name`, and `addView` on `id`, when the new name is written as a bare identifier or the leading segment of a dotted name where the library does not resolve references. Such a reference would start resolving to the new declaration.
+- **New rejections of `addRelationship`.**
+  - A relationship whose identity — endpoints, kind, title, direction — an `extend a -> b` block already has is rejected on `shared` (D83), with `related` listing the blocks. Pass `shared: true` to let the blocks apply to it.
+  - An edit the file's parser refuses is an `InvalidWriteError` on `file`, or on `source` with `placement: 'nested'`, instead of a plain `Error`.
+- **Style icon (D75).** `updateElement({ style: { icon } })` on an element with a body-level `icon` rewrites that `icon` instead of adding a `style { icon }`, on which LikeC4 warned `Redundant as icon defined on element`.
+- **Standalone CLI (D84).** `remove-element` and `remove-relationship` keep their options and apply the new behaviour: a referenced element and an ambiguous relationship are rejected. The new options are on `apply` only.
+
+### Added
+- **Element rename and move.** `renameElement(fqn, newName)` and `moveElement(fqn, { parent, file? })` return `{ fqn, changedFiles }`. They rewrite every reference to the element and its subtree in every file, keeping the written text where it still resolves. A move to the top level may change the file. They are rejected on a name collision, a move into the element's own subtree, a no-op move, an invalid parent–child relationship or step, a cross-file move of a relative `icon` or `link`, and a reference the library does not resolve.
+- **Placement and file choice.**
+  - `addElement` into a parent without a body creates the body, keeping the parent's declaration form.
+  - A model-level `addElement` and a top-level `addRelationship` take `file`.
+  - A missing `model` block is created.
+  - `file` must be a loaded file and no file is created.
+- **Kind and tag writes.**
+  - `addKind(type, name, defaults)`, `updateKind(type, name, patch)` and `addTag(name)` work for element, relationship and deployment node kinds. A `specification` block is created when the target file has none.
+  - `renameKind`, `renameTag`, `removeKind` and `removeTag` rewrite or check every place that names a kind or tag: declarations, connectors, tags lists, and kind and tag expressions and conditions, negated ones included.
+  - Removing a used kind or tag is a `ReferencedRemovalError`, each use with a `KindPlaceRole` role.
+  - All of them return `{ changedFiles }`.
+- **Relationship writes.**
+  - `addRelationship` options: `kind`, `kindForm` (`'bracket'` writes `-[kind]->`, `'dot'` writes `.kind`), `bidirectional` (`<->`, `-[kind]<->`), `placement: 'nested'`, `file` and `shared`. A nested relationship is written inside the source's body, with the target in the shortest form that resolves there.
+  - `updateRelationship` and `removeRelationship` take a selector `{ source, target, matchKind?, matchTitle?, matchBidirectional?, position? }`.
+- **Relationship direction.** `RelationshipInfo.bidirectional`; the `extendedBy` entries of a relationship carry `bidirectional`.
+- **`extend` blocks.** `addElementExtend(fqn, { file, tags?, links?, metadata? })` and `addRelationshipExtend(selector, { file, tags?, links?, metadata?, shared? })` return `{ changedFiles, merged }`. They write a block into the loaded `file`, or merge into a block of the same target already there. A relationship block needs `shared: true` when it would also apply to other relationships.
+- **Style reads.**
+  - `ElementInfo.ownStyle` and `style`, and `RelationshipInfo.ownStyle` and `style`, as LikeC4 computes them before theme defaults. A body-level `icon` and the bidirectional `tail` rule are included.
+  - The kind's style is in `fromSpecification.style`, and a relationship kind's `multiple` in `fromSpecification.multiple`. The types are `ElementKindDefaults` and `RelationshipKindDefaults`.
+- **`apply` operations.** Validated as a whole before anything is written; errors name `mutations[i].<path>`.
+  - New ops: `renameElement`, `moveElement`, `addKind`, `updateKind`, `addTag`, `renameKind`, `removeKind`, `renameTag`, `removeTag`, `addElementExtend`, `addRelationshipExtend`.
+  - `cascade` on `removeElement`, `removeDeploymentNode`, `removeDeploymentInstance` and `removeView`. A cascade prints the references it removed.
+  - `addElement` without `parent` (a root element) and without `title`, and with `file`.
+  - `addRelationship` fields `kind`, `kindForm`, `bidirectional`, `placement`, `file` and `shared`.
+  - The selector fields `matchBidirectional` and `position` on `updateRelationship` and `removeRelationship`, and `matchKind` and `matchTitle` on `removeRelationship`.
+- **Exported types and errors.**
+  - Errors: `ReferencedRemovalError`, `RelationshipAmbiguityError`.
+  - Removal: `RemovalReference`, `RemovalReferenceRole`, `RelatedConstruct`, `CascadedReference`, `RemoveOptions`, `RemoveRelationshipResult`.
+  - Rename and move: `RenameElementResult`, `MoveElementResult`, `MoveElementTarget`.
+  - Kinds: `SpecificationWriteResult`, `AddKindOpts`, `UpdateKindPatch`, `KindType`, `KindLink`, `KindPlaceRole`, `KindConnectorContext`, `KindTagsContext`, `KindExpressionConstruct`, `KindExpressionContext`.
+  - `extend` blocks: `AddExtendResult`, `AddElementExtendOpts`, `AddRelationshipExtendOpts`, `ExtendContributions`.
+  - Relationships: `RelationshipSelector`, `RelationshipCandidate`, `RelationshipPosition`.
+  - Kind defaults: `ElementKindDefaults`, `RelationshipKindDefaults`.
+
 ## [0.10.0] - 2026-10-16
 
 Read and edit views (lc4m-15.29): list views with their properties, rules and dynamic view steps; update and remove views; add, replace and remove rules; add, update, move and remove steps and `par` blocks. See [Views](README.md#views) in the README.
