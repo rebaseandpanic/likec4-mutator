@@ -74,8 +74,6 @@ export interface KindPlace {
   offset: number;
   /** End offset of the name as written */
   end: number;
-  /** 1-based line of the name */
-  line: number;
   /** The name as written (`#t` for a tag) */
   text: string;
   /** The kind or tag name: the written text without `#` */
@@ -167,7 +165,6 @@ export function kindPlaces(documents: Iterable<{ file: string; parsed: ParsedDoc
           file,
           offset: written.offset,
           end: written.end,
-          line: lineOf(parsed.fullText, written.offset),
           text,
           name: text.startsWith('#') ? text.slice(1) : text,
           kindType,
@@ -231,11 +228,4 @@ function isNegated(holder: AstNode): boolean {
     if (up.$type === 'WhereElementNegation' || up.$type === 'WhereRelationNegation') return true;
   }
   return false;
-}
-
-/** The 1-based line of `offset` in `text`. */
-function lineOf(text: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset && i < text.length; i++) if (text.charCodeAt(i) === 10) line++;
-  return line;
 }
