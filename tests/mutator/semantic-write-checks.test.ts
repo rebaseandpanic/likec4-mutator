@@ -108,7 +108,9 @@ describe('calls LikeC4 rejects on a valid model are refused', () => {
     },
   ])('rejects $name', ({ field, write }) => {
     const m = mutator();
-    expectRejected(m, field, () => write(m));
+    const error = expectRejected(m, field, () => write(m));
+    // A rejection that names no other construct carries no `related` key.
+    expect(Object.hasOwn(error, 'related')).toBe(false);
   });
 
   it('writes the valid counterparts, which LikeC4 accepts', async () => {
