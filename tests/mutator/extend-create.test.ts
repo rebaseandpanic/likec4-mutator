@@ -346,3 +346,135 @@ describe('rejections (row 157)', () => {
     expectRejected(mutator, () => write(mutator), field);
   });
 });
+
+describe('more rejections (row 157)', () => {
+  const ON_RELATIONSHIP = { source: 'app', target: 'db', matchTitle: 'reads' } as const;
+  it.each([
+    ['an element reference that is not one', FILES, (m: LikeC4Mutator) => m.addElementExtend('a..b', { file: 'b.c4', tags: ['core'] }), 'fqn'],
+    ['an invalid link', FILES, (m: LikeC4Mutator) => m.addElementExtend('db', { file: 'b.c4', links: [{ url: 'not a url' }] }), 'links[0].url'],
+    ['a metadata value LikeC4 cannot hold', FILES, (m: LikeC4Mutator) => m.addElementExtend('db', { file: 'b.c4', metadata: { tier: [] } }), 'metadata.tier'],
+    ['a relationship block in an unloaded file', FILES, (m: LikeC4Mutator) => m.addRelationshipExtend(ON_RELATIONSHIP, { file: 'z.c4', tags: ['core'] }), 'file'],
+    [
+      'a relationship block without a file',
+      FILES,
+      (m: LikeC4Mutator) => m.addRelationshipExtend(ON_RELATIONSHIP, { tags: ['core'] } as unknown as { file: string }),
+      'file',
+    ],
+    ['an undeclared tag on a relationship', FILES, (m: LikeC4Mutator) => m.addRelationshipExtend(ON_RELATIONSHIP, { file: 'c.c4', tags: ['nope'] }), 'tags[0]'],
+    [
+      'a relationship metadata key of an extend block in another file',
+      { ...FILES, 'c.c4': `model {\n  extend app -[calls]-> db 'reads' {\n    metadata {\n      sla 'gold'\n    }\n  }\n}\n` },
+      (m: LikeC4Mutator) => m.addRelationshipExtend(ON_RELATIONSHIP, { file: 'b.c4', metadata: { sla: 'silver' } }),
+      'metadata.sla',
+    ],
+    // The target file has a stray closing brace, so the edited file would not parse.
+    ['an edit the file would not parse after', { ...FILES, 'c.c4': 'model {\n}\n}\n' }, (m: LikeC4Mutator) => m.addElementExtend('db', { file: 'c.c4', tags: ['core'] }), 'file'],
+  ] as const)('rejects %s', (_, files, write, field) => {
+    const mutator = LikeC4Mutator.fromFiles(files);
+    expectRejected(mutator, () => write(mutator), field);
+  });
+});
+
+describe('a new block when another file has one (row 152)', () => {
+  it('writes an element block into the chosen file and leaves the other file’s block alone', SLOW, async () => {
+    const mutator = LikeC4Mutator.fromFiles(FILES);
+    expect(mutator.addElementExtend('app', { file: 'c.c4', tags: ['core'] })).toEqual({ changedFiles: ['c.c4'], merged: false });
+    const after = mutator.serialize();
+    expect(after['b.c4']).toBe(FILES['b.c4']);
+    expect(after['c.c4']).toBe(`${FILES['c.c4']}\nmodel {\n  extend app {\n    #core\n  }\n}\n`);
+    await expectAcceptedWrite(FILES, after);
+    await expectReadsAgree(after);
+  });
+
+  it('writes a relationship block into the chosen file and leaves the other file’s block alone', SLOW, async () => {
+    const before = { ...FILES, 'c.c4': `model {\n  extend app -[calls]-> db 'reads' {\n    #edge\n  }\n}\n` };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    expect(mutator.addRelationshipExtend({ source: 'app', target: 'db', matchTitle: 'reads' }, { file: 'b.c4', tags: ['core'] })).toEqual({
+      changedFiles: ['b.c4'],
+      merged: false,
+    });
+    const after = mutator.serialize();
+    expect(after['c.c4']).toBe(before['c.c4']);
+    expect(after['b.c4']).toBe(replaced(FILES['b.c4']!, [["    link https://example.com/app 'App'\n  }\n", "    link https://example.com/app 'App'\n  }\n  extend app -[calls]-> db 'reads' {\n    #core\n  }\n"]]));
+    await expectAcceptedWrite(before, after);
+    await expectReadsAgree(after);
+  });
+});
+
+describe('the header of an untitled relationship (row 153)', () => {
+  it.each([
+    ['without a kind', '  a -> b\n', 'extend a -> b {'],
+    ['of a kind without a title', '  a -[calls]-> b\n', 'extend a -[calls]-> b {'],
+  ] as const)('writes no title for a relationship %s', SLOW, async (_, relationship, header) => {
+    const before: Files = { 'm.c4': `${SPEC}model {\n  a = system 'A'\n  b = system 'B'\n${relationship}}\n` };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    expect(mutator.addRelationshipExtend({ source: 'a', target: 'b' }, { file: 'm.c4', tags: ['edge'] })).toEqual({ changedFiles: ['m.c4'], merged: false });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(`${SPEC}model {\n  a = system 'A'\n  b = system 'B'\n${relationship}  ${header}\n    #edge\n  }\n}\n`);
+    await expectAcceptedWrite(before, after);
+    await expectReadsAgree(after);
+  });
+});
+
+describe('what a merge writes (row 152)', () => {
+  it('writes a new block with a link', SLOW, async () => {
+    const mutator = LikeC4Mutator.fromFiles(FILES);
+    expect(mutator.addElementExtend('db', { file: 'c.c4', links: [{ url: 'https://example.com/db', label: 'DB' }] })).toEqual({
+      changedFiles: ['c.c4'],
+      merged: false,
+    });
+    const after = mutator.serialize();
+    expect(after['c.c4']).toBe(`${FILES['c.c4']}\nmodel {\n  extend db {\n    link https://example.com/db 'DB'\n  }\n}\n`);
+    await expectAcceptedWrite(FILES, after);
+    await expectReadsAgree(after);
+  });
+
+  it.each([
+    ['only a link', { links: [{ url: 'https://example.com/more' }] }, '    link https://example.com/more\n'],
+    ['only metadata', { metadata: { tier: 'web' } }, "    metadata {\n      tier 'web'\n    }\n"],
+  ] as const)('merges %s at the end of the block', SLOW, async (_, contribution, added) => {
+    const mutator = LikeC4Mutator.fromFiles(FILES);
+    expect(mutator.addElementExtend('app', { file: 'b.c4', ...contribution })).toEqual({ changedFiles: ['b.c4'], merged: true });
+    const after = mutator.serialize();
+    expect(after['b.c4']).toBe(replaced(FILES['b.c4']!, [["    link https://example.com/app 'App'\n", `    link https://example.com/app 'App'\n${added}`]]));
+    await expectAcceptedWrite(FILES, after);
+    await expectReadsAgree(after);
+  });
+
+  it('opens a block without tags with the new tags', SLOW, async () => {
+    const before = { ...FILES, 'c.c4': 'model {\n  extend db {\n    link https://example.com/db\n  }\n}\n' };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    expect(mutator.addElementExtend('db', { file: 'c.c4', tags: ['core'] })).toEqual({ changedFiles: ['c.c4'], merged: true });
+    const after = mutator.serialize();
+    expect(after['c.c4']).toBe('model {\n  extend db {\n    #core\n    link https://example.com/db\n  }\n}\n');
+    await expectAcceptedWrite(before, after);
+    await expectReadsAgree(after);
+  });
+
+  it('appends two new tags after the block’s tags', SLOW, async () => {
+    const before = { ...FILES, 'a.c4': replaced(FILES['a.c4']!, [['  tag edge\n', '  tag edge\n  tag zone\n']]) };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.addElementExtend('app', { file: 'b.c4', tags: ['core', 'zone'] });
+    const after = mutator.serialize();
+    expect(after['b.c4']).toBe(replaced(FILES['b.c4']!, [['    #edge\n', '    #edge #core #zone\n']]));
+    await expectAcceptedWrite(before, after);
+    await expectReadsAgree(after);
+  });
+});
+
+describe('link identity in a merge (row 155)', () => {
+  const before = { ...FILES, 'c.c4': 'model {\n  extend app {\n    link https://example.com/other\n  }\n}\n' };
+  it.each([
+    ['a label-less link with another URL', [{ url: 'https://example.com/third' }], '    link https://example.com/third\n'],
+    ['the block’s URL with a label', [{ url: 'https://example.com/other', label: 'Other' }], "    link https://example.com/other 'Other'\n"],
+    ['the same new link given twice', [{ url: 'https://example.com/third' }, { url: 'https://example.com/third' }], '    link https://example.com/third\n'],
+  ] as const)('writes %s once', SLOW, async (_, links, added) => {
+    const mutator = LikeC4Mutator.fromFiles(before);
+    expect(mutator.addElementExtend('app', { file: 'c.c4', links: [...links] })).toEqual({ changedFiles: ['c.c4'], merged: true });
+    const after = mutator.serialize();
+    expect(after['c.c4']).toBe(`model {\n  extend app {\n    link https://example.com/other\n${added}  }\n}\n`);
+    await expectAcceptedWrite(before, after);
+    await expectReadsAgree(after);
+  });
+});
