@@ -137,9 +137,63 @@ describe('identical relationships are ambiguous (rows 130, 132)', () => {
     const error = expectRejected(m, 'source', () => run(m, { source: 'a', target: 'b' }));
     expect(error).toBeInstanceOf(RelationshipAmbiguityError);
     const candidates = (error as RelationshipAmbiguityError).candidates;
-    expect(candidates).toEqual(positions.map((p) => ({ file: 'm.c4', ...p, title: 'same', bidirectional: false })));
+    expect(candidates).toStrictEqual(positions.map((p) => ({ file: 'm.c4', ...p, title: 'same', bidirectional: false })));
     // Row 132 (D106): the message prints each candidate's position as file:line:column.
     for (const c of candidates) expect(error.message).toContain(`${c.file}:${c.line}:${c.column}`);
+  });
+});
+
+describe('what a candidate reports (row 130)', () => {
+  const PAIRS: Array<[string, string, Record<string, unknown>]> = [
+    ['kinded relationships', "a -[sync]-> b 'same'", { kind: 'sync', title: 'same', bidirectional: false }],
+    ['untitled relationships of a kind with a title', 'a -[async]-> b', { kind: 'async', effectiveTitle: 'Async', bidirectional: false }],
+    ['bidirectional relationships', 'a <-> b', { bidirectional: true }],
+  ];
+  const cases = WRITES.flatMap(([write, run]) => PAIRS.map(([label, relationship, fields]) => [write, label, run, relationship, fields] as const));
+
+  it.each(cases)('%s of two identical %s lists exactly their fields', (_, __, run, relationship, fields) => {
+    const source = `${SPEC}model {\n  a = service\n  b = service\n  ${relationship}\n  ${relationship}\n}\n${VIEWS}`;
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': source });
+    const error = expectRejected(m, 'source', () => run(m, { source: 'a', target: 'b' }));
+    expect(error).toBeInstanceOf(RelationshipAmbiguityError);
+    expect((error as RelationshipAmbiguityError).candidates).toStrictEqual([
+      { file: 'm.c4', line: 11, column: 3, ...fields },
+      { file: 'm.c4', line: 12, column: 3, ...fields },
+    ]);
+  });
+});
+
+describe('a position names its file (row 131)', () => {
+  const BEFORE = {
+    'a.c4': `${SPEC}model {\n  a = service\n  b = service\n}\n${VIEWS}`,
+    'm.c4': "model {\n  a -> b 'same'\n}\n",
+    'n.c4': "model {\n  a -> b 'same'\n}\n",
+  };
+
+  it.each(WRITES)('%s at the same line and column in two files selects the named file', async (write, run) => {
+    const m = LikeC4Mutator.fromFiles(BEFORE);
+    run(m, { source: 'a', target: 'b', position: { file: 'n.c4', line: 2, column: 3 } });
+    const after = m.serialize();
+    expect(after['m.c4']).toBe(BEFORE['m.c4']);
+    expectOnlyChanged(write, BEFORE['n.c4'], after['n.c4']!, 2, 3, "a -> b 'same'");
+    await expectAcceptedWrite(BEFORE, after);
+  });
+});
+
+describe('a bidirectional relationship next to one that shares an endpoint (row 129)', () => {
+  const OTHERS: Array<[string, string]> = [
+    ['c <-> a', '  c <-> a\n'],
+    ['b <-> c', '  b <-> c\n'],
+  ];
+  const cases = WRITES.flatMap(([write, run]) => OTHERS.map(([label, other]) => [write, label, run, other] as const));
+
+  it.each(cases)('%s from a to b next to %s selects a <-> b only', async (write, _, run, other) => {
+    const before = { 'm.c4': `${SPEC}model {\n  a = service\n  b = service\n  c = service\n  a <-> b\n${other}}\n${VIEWS}` };
+    const m = LikeC4Mutator.fromFiles(before);
+    run(m, { source: 'a', target: 'b' });
+    const after = m.serialize();
+    expectOnlyChanged(write, before['m.c4'], after['m.c4']!, 12, 3, 'a <-> b');
+    await expectAcceptedWrite(before, after);
   });
 });
 
