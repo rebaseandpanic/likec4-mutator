@@ -343,6 +343,10 @@ describe('generateElement', () => {
 // ---------------------------------------------------------------------------
 
 describe('generateRelationship', () => {
+  it('throws for the dot form with bidirectional, which has no spelling', () => {
+    expect(() => generateRelationship({ indent: '', source: 'a', target: 'b', kind: 'k', kindForm: 'dot', bidirectional: true })).toThrow();
+  });
+
   it('should produce a plain arrow without label', () => {
     const result = generateRelationship({ indent: '  ', source: 'api', target: 'db' });
     expect(result).toBe('  api -> db');
