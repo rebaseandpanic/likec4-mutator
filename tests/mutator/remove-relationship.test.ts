@@ -70,7 +70,7 @@ describe('LikeC4Mutator.removeRelationship', () => {
       'two.c4': 'model { b = service\n a -> b }',
     });
 
-    m.removeRelationship('a', 'b');
+    expect(m.removeRelationship('a', 'b')).toEqual({ changedFiles: ['two.c4'] });
 
     expect(m.getRelationships()).toEqual([]);
     expect(m.serialize()['two.c4']).not.toContain('a -> b');
@@ -102,6 +102,16 @@ model {
     m.removeRelationship('api', 'db');
 
     expect(m.getRelationships().map((r) => r.title)).toEqual(['nested']);
+  });
+});
+
+describe('removeRelationship with a shared target (lc4m-15.30 US-9)', () => {
+  it('removes only the relationship of the given source', () => {
+    const files = { 'm.c4': 'specification { element service }\nmodel {\n  a = service\n  b = service\n  c = service\n  a -> c\n  b -> c\n}\n' };
+    const m = LikeC4Mutator.fromFiles(files);
+    expect(m.removeRelationship({ source: 'a', target: 'c' })).toEqual({ changedFiles: ['m.c4'] });
+    expect(m.serialize()['m.c4']).toBe(files['m.c4'].replace('  a -> c\n', ''));
+    expect(m.getRelationships().map((r) => [r.sourceFqn, r.targetFqn])).toEqual([['b', 'c']]);
   });
 });
 
