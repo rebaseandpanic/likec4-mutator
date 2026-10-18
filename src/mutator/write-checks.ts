@@ -48,9 +48,10 @@ export class InvalidWriteError extends Error {
   /**
    * The constructs the rejection is about, when it names some besides the
    * offending value (D114): a deployment path, an `extend` block, a `where`
-   * condition or a relationship.  Absent otherwise.
+   * condition or a relationship.  Absent otherwise: declared, not a class
+   * field, so that an error without related constructs has no own key.
    */
-  readonly related?: readonly RelatedConstruct[];
+  declare readonly related?: readonly RelatedConstruct[];
 
   constructor(field: string, detail: string, related?: readonly RelatedConstruct[]) {
     super(`Invalid ${field}: ${detail}`);
