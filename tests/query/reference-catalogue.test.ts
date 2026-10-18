@@ -471,3 +471,45 @@ function unmatched(
     .map((p) => `${p.reference.file}:${p.reference.line} ${p.reference.role} ${p.reference.text}`);
   return { legacyOnly, oracleOnly };
 }
+
+describe('a view of an element whose descendant repeats the first segment (rows 3, 77)', () => {
+  // `of a.b`: `a` is also the name of the unique descendant a.b.a, so resolving the path from its scope must not start there.
+  const SHADOW: Workspace = {
+    name: 'of-shadow',
+    files: { 'm.c4': "specification {\n  element s\n}\nmodel {\n  a = s {\n    b = s {\n      a = s\n    }\n  }\n}\nviews {\n  view v of a.b {\n    include *\n  }\n}\n" },
+  };
+
+  it('equals the oracle one to one, the view of linked to a.b', async () => {
+    await expectValidLikeC4(SHADOW.files);
+    const references = await oracle(SHADOW);
+    // P: LikeC4 links the view's of to a.b.
+    expect(references.filter((r) => r.role === 'view-of').map((r) => r.target)).toEqual([{ model: 'a.b' }]);
+    expect(catalogue(SHADOW.files).map(tuple).sort()).toEqual(references.map(tuple).sort());
+  });
+
+  it('resolves the text of the view of at its place to a.b', () => {
+    const documents = Object.entries(SHADOW.files).map(([file, source]) => ({ file, ast: new C4Parser().parse(source).ast }));
+    const built = buildReferenceCatalogue(new WorkspaceIndex(documents), new DeploymentIndex(documents), new ViewIndex(documents));
+    const of = built.entries().filter((entry) => entry.role === 'view-of');
+    expect(of).toHaveLength(1);
+    expect(built.resolveAt(of[0]!.place, 'a.b')).toEqual({ model: 'a.b' });
+  });
+});
+
+describe('a par block inside an opaque block (row 3)', () => {
+  const NESTED: Workspace = {
+    name: 'par-in-alt',
+    files: {
+      'm.c4': "specification {\n  element s\n}\nmodel {\n  a = s\n  b = s\n}\nviews {\n  dynamic view d {\n    a -> b\n    alt 'x' {\n      par {\n        b -> a\n      }\n    }\n  }\n}\n",
+    },
+  };
+
+  it('treats the steps of the par block as unmodelled, as the oracle does', async () => {
+    const references = await oracle(NESTED);
+    // P: the oracle reports the steps inside the alt block as unmodelled.
+    const inside = referencesIn(references, 'm.c4', blockLines(NESTED.files['m.c4']!, "alt 'x' {"));
+    expect(inside.length).toBeGreaterThan(0);
+    expect(inside.map((r) => [r.unmodelled, r.role])).toEqual(inside.map(() => [true, 'opaque-flow']));
+    expect(catalogue(NESTED.files).map(tuple).sort()).toEqual(references.map(tuple).sort());
+  });
+});
