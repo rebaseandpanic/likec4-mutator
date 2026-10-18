@@ -138,7 +138,6 @@ const EXPRESSIONS: Readonly<Record<string, KindExpressionConstruct>> = {
 const EXPRESSION_CONTEXTS: Readonly<Record<string, KindExpressionContext>> = {
   ViewRuleStyle: 'style-target',
   DeploymentViewRuleStyle: 'style-target',
-  GlobalStyle: 'style-target',
   ViewRuleRank: 'rank-target',
   ViewRulePredicate: 'predicate',
   DynamicViewIncludePredicate: 'predicate',
