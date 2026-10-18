@@ -711,3 +711,205 @@ describe('continuation after a rejected write (row 93)', () => {
     await expectAcceptedWrite(before, after);
   });
 });
+
+describe('a top-level element (rows 78, 86)', () => {
+  const FILES: Files = {
+    'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API'\n  }\n  ext = system 'Ext'\n  ext -> app.api 'calls'\n  other = system 'Other'\n}\nviews {\n  view v of app {\n    include *\n  }\n}\n`,
+  };
+
+  it('renames a top-level element and its references', SLOW, async () => {
+    await expectValidLikeC4(FILES);
+    const mutator = LikeC4Mutator.fromFiles(FILES);
+    expect(mutator.renameElement('app', 'shop')).toEqual({ fqn: 'shop', changedFiles: ['m.c4'] });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(FILES['m.c4']!, [["  app = system 'App'", "  shop = system 'App'"], ['ext -> app.api', 'ext -> shop.api'], ['view v of app', 'view v of shop']]));
+    expect(mutator.getElement('shop.api')).not.toBeNull();
+    await expectSigmaImage(FILES, after, { app: 'shop', 'app.api': 'shop.api' });
+    await expectAcceptedWrite(FILES, after);
+  });
+
+  it('rejects the name of another top-level element', () => {
+    const mutator = LikeC4Mutator.fromFiles(FILES);
+    expectRejected(mutator, () => mutator.renameElement('app', 'other'), 'newName');
+  });
+});
+
+describe('the new name at unmodelled places, unresolved there (row 88)', () => {
+  it('rejects renaming other.foo to a name an opaque step writes and that resolves nowhere', () => {
+    const mutator = LikeC4Mutator.fromFiles(OPAQUE('ghost -> other'));
+    expectRejected(mutator, () => mutator.renameElement('other.foo', 'ghost'), 'newName');
+  });
+});
+
+describe('a new name that re-targets an unchanged short reference (row 91)', () => {
+  it('rejects renaming app.foo to bar while `bar` names other.bar alone', async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    foo = service 'Foo'\n  }\n  other = system 'Other' {\n    bar = service 'Bar'\n  }\n  client = system 'Client'\n  client -> bar 'uses'\n}\n`,
+    };
+    // P: LikeC4 links `bar` to the only element of that name.
+    expect(await linkedAt(files, 'm.c4', "'uses'", 'bar')).toEqual({ model: 'other.bar' });
+    const mutator = LikeC4Mutator.fromFiles(files);
+    expectRejected(mutator, () => mutator.renameElement('app.foo', 'bar'), 'newName');
+    expect(mutator.serialize()).toEqual(files);
+  });
+});
+
+describe('deployment references and unresolved ones (rows 83, 85)', () => {
+  it('keeps an instanceOf that did not resolve byte-equal', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API'\n  }\n}\ndeployment {\n  vm p {\n    instanceOf app.ghost\n  }\n}\n`,
+    };
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.api', 'gateway');
+    expect(mutator.serialize()['m.c4']).toBe(replaced(files['m.c4']!, [["    api = service 'API'", "    gateway = service 'API'"]]));
+  });
+
+  it('renames an unnamed instance whose body holds a relationship', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API'\n    db = service 'DB'\n  }\n}\ndeployment {\n  vm prod {\n    instanceOf app.api {\n      -> prod.db 'queries'\n    }\n    instanceOf app.db\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.api', 'gateway');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(files['m.c4']!, [["    api = service 'API'", "    gateway = service 'API'"], ['instanceOf app.api {', 'instanceOf app.gateway {']]));
+    expect(mutator.getDeploymentInstance('prod.gateway')).not.toBeNull();
+    await expectSigmaImage(files, after, { 'app.api': 'app.gateway', 'prod.api': 'prod.gateway' });
+    await expectAcceptedWrite(files, after);
+  });
+
+  it('rewrites a relative instance reference inside its node to the new short name', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API'\n    db = service 'DB'\n  }\n}\ndeployment {\n  vm prod {\n    instanceOf app.api\n    instanceOf app.db\n    api -> db 'reads'\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.api', 'gateway');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      replaced(files['m.c4']!, [["    api = service 'API'", "    gateway = service 'API'"], ['instanceOf app.api\n', 'instanceOf app.gateway\n'], ["api -> db 'reads'", "gateway -> db 'reads'"]]),
+    );
+    await expectSigmaImage(files, after, { 'app.api': 'app.gateway', 'prod.api': 'prod.gateway' });
+    await expectAcceptedWrite(files, after);
+  });
+
+  it('rewrites the element segment of a relative path through a named instance', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API' {\n      handler = service 'Handler'\n    }\n    db = service 'DB'\n  }\n}\ndeployment {\n  vm prod {\n    gw = instanceOf app.api\n    instanceOf app.db\n    gw.handler -> db 'queries'\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.api.handler', 'worker');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(files['m.c4']!, [["      handler = service 'Handler'", "      worker = service 'Handler'"], ['gw.handler -> db', 'gw.worker -> db']]));
+    await expectSigmaImage(files, after, { 'app.api.handler': 'app.api.worker' });
+    await expectAcceptedWrite(files, after);
+  });
+});
+
+describe('written forms in views and in one file in any order (rows 79, 80)', () => {
+  it('rewrites the later segment of a relative chain in a scoped view', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API' {\n      handler = service 'Handler'\n    }\n  }\n}\nviews {\n  view v of app {\n    include api.handler\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.api.handler', 'worker');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(files['m.c4']!, [["      handler = service 'Handler'", "      worker = service 'Handler'"], ['include api.handler', 'include api.worker']]));
+    await expectSigmaImage(files, after, { 'app.api.handler': 'app.api.worker' });
+    await expectAcceptedWrite(files, after);
+  });
+
+  it('rewrites a view, a relationship, the declaration and an extend block written in that order', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}views {\n  view v of app.api {\n    include *\n  }\n}\nmodel {\n  ext = system 'Ext'\n  ext -> app.api 'calls'\n  app = system 'App' {\n    api = service 'API'\n  }\n  extend app.api {\n    link https://example.com/api\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.api', 'gateway');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      replaced(files['m.c4']!, [
+        ['view v of app.api', 'view v of app.gateway'],
+        ['ext -> app.api', 'ext -> app.gateway'],
+        ["    api = service 'API'", "    gateway = service 'API'"],
+        ['extend app.api', 'extend app.gateway'],
+      ]),
+    );
+    await expectSigmaImage(files, after, { 'app.api': 'app.gateway' });
+    await expectAcceptedWrite(files, after);
+  });
+});
+
+describe('short forms in nested scopes (row 79)', () => {
+  it('keeps the short form of a name unique in its model block, though repeated in another block of the file', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  a = system 'A' {\n    x = service 'X' {\n      leaf = service 'Leaf'\n    }\n    y = service 'Y'\n    y -> leaf 'uses'\n  }\n}\nmodel {\n  b = system 'B' {\n    leaf = service 'Other leaf'\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    // P: LikeC4 links the short name to the element of its own block.
+    expect(await linkedAt(files, 'm.c4', "'uses'", 'leaf')).toEqual({ model: 'a.x.leaf' });
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('a.x.leaf', 'sheet');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(files['m.c4']!, [["      leaf = service 'Leaf'", "      sheet = service 'Leaf'"], ["y -> leaf 'uses'", "y -> sheet 'uses'"]]));
+    await expectSigmaImage(files, after, { 'a.x.leaf': 'a.x.sheet' });
+    await expectAcceptedWrite(files, after);
+  });
+
+  it('keeps the short form of a name unique in an extend body, though repeated below its target', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    p = service 'P' {\n      node = service 'N1'\n    }\n    q = service 'Q' {\n      node = service 'N2'\n    }\n  }\n  extend app.p {\n    w = service 'W'\n    w -> node 'uses'\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    // P: LikeC4 links the short name in the extend body to the descendant of its target.
+    expect(await linkedAt(files, 'm.c4', "'uses'", 'node')).toEqual({ model: 'app.p.node' });
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.p.node', 'knot');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(files['m.c4']!, [["      node = service 'N1'", "      knot = service 'N1'"], ["w -> node 'uses'", "w -> knot 'uses'"]]));
+    await expectSigmaImage(files, after, { 'app.p.node': 'app.p.knot' });
+    await expectAcceptedWrite(files, after);
+  });
+
+  it('keeps the short form of a name declared below an element of an extend body', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App'\n  extend app {\n    child = service 'C' {\n      leaf = service 'L'\n      peer = service 'P'\n      peer -> leaf 'reads'\n    }\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    expect(await linkedAt(files, 'm.c4', "'reads'", 'leaf')).toEqual({ model: 'app.child.leaf' });
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.renameElement('app.child.leaf', 'sheet');
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(files['m.c4']!, [["      leaf = service 'L'", "      sheet = service 'L'"], ["peer -> leaf 'reads'", "peer -> sheet 'reads'"]]));
+    await expectSigmaImage(files, after, { 'app.child.leaf': 'app.child.sheet' });
+    await expectAcceptedWrite(files, after);
+  });
+});
+
+describe('a reference into the subtree without the renamed segment (row 90)', () => {
+  it.each([
+    ['a global predicate', "global {\n  predicateGroup g {\n    include handler\n  }\n}\n", '', 'global-or-import'],
+    ['an opaque block', '', '    opt {\n      handler -> ext\n    }\n', 'opaque-flow'],
+  ] as const)('rejects the rename while %s names an element below it by its own name', async (_, global, opaque, role) => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API' {\n      handler = service 'Handler'\n    }\n  }\n  ext = system 'Ext'\n}\n${global}views {\n  dynamic view d {\n    ext -> app\n${opaque}  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    // P: LikeC4 links `handler` there into the renamed subtree.
+    expect((await linkedCatalogueReferences(files)).filter((r) => r.text === 'handler').map((r) => [r.role, r.target])).toEqual([[role, { model: 'app.api.handler' }]]);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    expectRejected(mutator, () => mutator.renameElement('app.api', 'gateway'), 'fqn');
+  });
+});
+
+describe('an edit the file would not parse after (row 86)', () => {
+  it('refuses the rename on newName', () => {
+    const files: Files = { 'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API'\n  }\n}\n}\n` };
+    const mutator = LikeC4Mutator.fromFiles(files);
+    // P: the loaded file does not parse.
+    expect(mutator.validate().length).toBeGreaterThan(0);
+    expectRejected(mutator, () => mutator.renameElement('app.api', 'gateway'), 'newName');
+  });
+});
