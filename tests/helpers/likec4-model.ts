@@ -1495,7 +1495,7 @@ export interface LinkedKindReference {
    * `views` block, `global` inside a `global` block, `null` outside views.
    */
   viewType: 'element' | 'dynamic' | 'deployment' | 'views' | 'global' | null;
-  /** Written in a negated form: `!=`, `is not`, or inside a `not (…)` condition */
+  /** Written in a negated form: `!=`, `!==`, `is not`, or inside a `not (…)` condition */
   negated: boolean;
   /** The reference lies at an unmodelled place (the boundary of {@link linkedCatalogueReferences}) */
   unmodelled: boolean;
@@ -1608,7 +1608,10 @@ function kindPlace(holder: AstNode): LinkedKindPlace {
 function kindNegated(holder: AstNode): boolean {
   const owner = holder.$type === 'TagRef' ? holder.$container! : holder;
   const expression = owner as AstNode & { isEqual?: boolean; operator?: string; not?: boolean };
-  if (expression.isEqual === false || expression.operator === '!=' || expression.not === true) return true;
+  // LikeC4 `parseEquals`: an operator starting with `!=` (`!=`, `!==`) is not-equal, one starting
+  // with `=` is equal, otherwise (`is` / `is not`) the `not` flag decides.
+  if (expression.isEqual === false || expression.operator?.startsWith('!=')) return true;
+  if (!expression.operator?.startsWith('=') && expression.not === true) return true;
   return AstUtils.getContainerOfType(
     owner,
     (n): n is AstNode => n.$type === 'WhereElementNegation' || n.$type === 'WhereRelationNegation',

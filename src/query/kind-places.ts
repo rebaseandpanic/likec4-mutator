@@ -82,7 +82,7 @@ export interface KindPlace {
   name: string;
   kindType: KindPlaceType;
   role: KindPlaceRole;
-  /** Written in a negated form: `!=`, `is not`, or inside a `not (…)` condition */
+  /** Written in a negated form: `!=`, `!==`, `is not`, or inside a `not (…)` condition */
   negated: boolean;
   /** Offset of the construct holding the reference: the expression, the relationship, the tags list or the declaration */
   constructOffset: number;
@@ -224,7 +224,10 @@ function classify(holder: AstNode, file: string): { role: KindPlaceRole; constru
 function isNegated(holder: AstNode): boolean {
   const owner = holder.$type === 'TagRef' ? holder.$container! : holder;
   const expression = owner as AstNode & { isEqual?: boolean; operator?: string; not?: boolean };
-  if (expression.isEqual === false || expression.operator === '!=' || expression.not === true) return true;
+  // LikeC4 `parseEquals`: an operator starting with `!=` (`!=`, `!==`) is not-equal, one starting
+  // with `=` is equal, otherwise (`is` / `is not`) the `not` flag decides.
+  if (expression.isEqual === false || expression.operator?.startsWith('!=')) return true;
+  if (!expression.operator?.startsWith('=') && expression.not === true) return true;
   for (let up = owner.$container; up; up = up.$container) {
     if (up.$type === 'WhereElementNegation' || up.$type === 'WhereRelationNegation') return true;
   }

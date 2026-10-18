@@ -71,3 +71,26 @@ describe('FR-002 place catalogue (row 117)', () => {
     }
   });
 });
+
+describe('negation by the != and !== operators (row 117)', () => {
+  // LikeC4 reads an operator starting with `!=` as not-equal (`parseEquals`), so `!==` negates like `!=`.
+  const files = {
+    'm.c4':
+      "specification {\n  element x\n  tag t\n}\nmodel {\n  a = x 'A'\n}\nviews {\n  view v {\n" +
+      '    include * where kind !== x, * where tag !== #t, * where kind != x\n' +
+      '    include * -> * where source.kind !== x and target.tag !== #t\n  }\n}\n',
+  };
+
+  it('marks every != and !== condition negated, as LikeC4 does', async () => {
+    const linked = (await linkedKindReferences(files)).filter((reference) => reference.place.construct !== 'declaration');
+    expect(linked.map((reference) => reference.negated)).toEqual([true, true, true, true, true]);
+    const places = kindPlaces([{ file: 'm.c4', parsed: new C4Parser().parse(files['m.c4']) }]).filter((place) => !place.role.startsWith('declaration'));
+    expect(places.map((place) => [place.role, place.negated])).toEqual([
+      ['where-kind:predicate', true],
+      ['where-tag:predicate', true],
+      ['where-kind:predicate', true],
+      ['participant-kind:predicate', true],
+      ['participant-tag:predicate', true],
+    ]);
+  });
+});
