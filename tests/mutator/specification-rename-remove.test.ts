@@ -550,6 +550,9 @@ describe('a kind or tag at an unmodelled place blocks the rename and the removal
     expectRejected(m, () => rename(m, type, 'old', 'fresh'), 'name');
     const error = expectReferencedRemoval(m, () => remove(m, type, 'old'), 'name');
     expect(error.references).toEqual([reference]);
+    // The same on a mutator that has not run the rename before.
+    const fresh = LikeC4Mutator.fromFiles(files);
+    expect(expectReferencedRemoval(fresh, () => remove(fresh, type, 'old'), 'name').references).toEqual([reference]);
   });
 });
 
@@ -665,6 +668,9 @@ describe('rejections (row 126)', SLOW, () => {
     ['a rename of a tag declared twice', TWICE, (m: LikeC4Mutator) => m.renameTag('hot', 'warm'), 'name'],
     ['a removal of a kind declared twice', TWICE, (m: LikeC4Mutator) => m.removeKind('element', 'box'), 'name'],
     ['a removal of a tag declared twice', TWICE, (m: LikeC4Mutator) => m.removeTag('hot'), 'name'],
+    ['a removal with a kind type that is not one', FILES, (m: LikeC4Mutator) => m.removeKind('view' as KindType, 'box'), 'type'],
+    ['a new tag name with a comment', FILES, (m: LikeC4Mutator) => m.renameTag('hot', 'x // c'), 'newName'],
+    ['a new kind name with a comment', FILES, (m: LikeC4Mutator) => m.renameKind('relationship', 'uses', 'a b2 // c'), 'newName'],
   ] as const)('rejects %s', (_label, files, write, field) => {
     const m = LikeC4Mutator.fromFiles(files);
     expectRejected(m, () => write(m), field);
@@ -706,5 +712,178 @@ describe('text kept as written (row 127)', SLOW, () => {
     expect(after).toEqual(FILES('old', 'fresh'));
     await expectAcceptedWrite(before, after);
     expect(m.getElement('b')).toMatchObject({ kind: 'fresh' });
+  });
+});
+
+/** `{ file, line, column }` (1-based) of `needle` on the first line of `files[file]` that holds `lineText`. */
+function place(files: Files, file: string, lineText: string, needle: string): { file: string; line: number; column: number } {
+  const lines = files[file]!.split('\n');
+  const index = lines.findIndex((l) => l.includes(lineText));
+  if (index < 0 || !lines[index]!.includes(needle)) throw new Error(`test input: '${needle}' on '${lineText}' not found in ${file}`);
+  return { file, line: index + 1, column: lines[index]!.indexOf(needle) + 1 };
+}
+
+describe('a rename and a removal leave the other tags (rows 118, 121)', SLOW, () => {
+  const FILES = (tag: string): Files => ({
+    'spec.c4': `specification {\n  element sys\n  tag ${tag}\n  tag other\n}\n`,
+    'model.c4': `model {\n  a = sys 'A' {\n    #${tag} #other\n  }\n  b = sys 'B' {\n    #other\n  }\n}\n`,
+  });
+
+  it('renames one tag and keeps another used next to it', async () => {
+    const before = FILES('old');
+    const m = LikeC4Mutator.fromFiles(before);
+    m.renameTag('old', 'fresh');
+    const after = m.serialize();
+    expect(after).toEqual(FILES('fresh'));
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('removes an unused tag while another tag is used', async () => {
+    const before: Files = {
+      'spec.c4': 'specification {\n  element sys\n  tag spare\n  tag other\n}\n',
+      'model.c4': "model {\n  a = sys 'A' {\n    #other\n  }\n}\n",
+    };
+    const m = LikeC4Mutator.fromFiles(before);
+    m.removeTag('spare');
+    const after = m.serialize();
+    expect(after).toEqual({ ...before, 'spec.c4': 'specification {\n  element sys\n  tag other\n}\n' });
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('removes an unused tag x while the element kind x is used', async () => {
+    const before: Files = {
+      'spec.c4': 'specification {\n  element sys\n  element x\n  tag x\n}\n',
+      'model.c4': "model {\n  m = x 'M'\n}\nviews {\n  view ev {\n    include element.kind = x\n  }\n}\n",
+    };
+    const m = LikeC4Mutator.fromFiles(before);
+    m.removeTag('x');
+    const after = m.serialize();
+    expect(after).toEqual({ ...before, 'spec.c4': 'specification {\n  element sys\n  element x\n}\n' });
+    await expectAcceptedWrite(before, after);
+  });
+});
+
+describe('the D78 matrix without a condition on the shared name (row 123)', SLOW, () => {
+  it('accepts the element kind rename when the only condition names another kind', async () => {
+    const before = sharedVm('vm', 'vm', 'ev', () => 'include * where kind is sys');
+    const m = LikeC4Mutator.fromFiles(before);
+    m.renameKind('element', 'vm', 'other');
+    const after = m.serialize();
+    expect(after).toEqual(sharedVm('other', 'vm', 'ev', () => 'include * where kind is sys'));
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('accepts the rename when a global condition names the new name, which no other type declares', () => {
+    const before = sharedVm('vm', 'vm', undefined, () => '');
+    const files: Files = { ...before, 'global.c4': 'global {\n  predicateGroup g {\n    include * where kind is other\n  }\n}\n' };
+    const m = LikeC4Mutator.fromFiles(files);
+    m.renameKind('element', 'vm', 'other');
+    expect(m.serialize()['global.c4']).toBe(files['global.c4']);
+    expect(m.serialize()['spec.c4']).toContain('  element other\n');
+  });
+
+  it('rejects the rename on newName when a global condition names the new name of the other type', () => {
+    const files: Files = {
+      ...sharedVm('app', 'vm', undefined, () => ''),
+      'global.c4': 'global {\n  predicateGroup g {\n    include * where kind is vm\n  }\n}\n',
+    };
+    const m = LikeC4Mutator.fromFiles(files);
+    expectRejected(m, () => m.renameKind('element', 'app', 'vm'), 'newName');
+  });
+});
+
+describe('kind names where the library does not resolve references (row 122)', SLOW, () => {
+  const SPEC = 'specification {\n  element sys\n  element old\n  deploymentNode vm\n  tag hot\n}\n';
+  const CASES: Array<[string, 'element' | 'deploymentNode' | 'tag', string, Files, Array<[string, string, string, RemovalReference['role']]>]> = [
+    [
+      'an element kind in a global where kind condition',
+      'element',
+      'old',
+      { 'spec.c4': SPEC, 'model.c4': "model {\n  a = sys 'A'\n}\nglobal {\n  predicateGroup g {\n    include * where kind is old\n  }\n}\n" },
+      [['model.c4', 'where kind is old', 'old', 'global-or-import']],
+    ],
+    [
+      'an element kind in a global element.kind and where kind condition',
+      'element',
+      'sys',
+      {
+        'spec.c4': SPEC.replace('  element sys\n', '  element sys\n  element unused\n'),
+        'model.c4': "model {\n  a = unused 'A'\n}\nglobal {\n  predicateGroup g1 {\n    include element.kind = sys\n  }\n  predicateGroup g2 {\n    include * where kind is sys\n  }\n}\n",
+      },
+      [
+        ['model.c4', 'element.kind = sys', 'sys', 'global-or-import'],
+        ['model.c4', 'where kind is sys', 'sys', 'global-or-import'],
+      ],
+    ],
+    [
+      'a deployment node kind in a global where kind condition',
+      'deploymentNode',
+      'vm',
+      { 'spec.c4': SPEC, 'model.c4': "model {\n  a = sys 'A'\n}\nglobal {\n  predicateGroup g {\n    include * where kind is vm\n  }\n}\n" },
+      [['model.c4', 'where kind is vm', 'vm', 'global-or-import']],
+    ],
+    [
+      'a deployment node kind in unrecovered text',
+      'deploymentNode',
+      'vm',
+      { 'spec.c4': SPEC, 'model.c4': "model {\n  a = sys 'A'\n  a -> -> vm\n}\n" },
+      [['model.c4', 'a -> -> vm', 'vm', 'unrecovered']],
+    ],
+    [
+      'a tag at two places in global predicates',
+      'tag',
+      'hot',
+      {
+        'spec.c4': SPEC,
+        'model.c4': "model {\n  a = sys 'A'\n}\nglobal {\n  predicateGroup g1 {\n    include * where tag is #hot\n  }\n  predicateGroup g2 {\n    include * where tag is not #hot\n  }\n}\n",
+      },
+      [
+        ['model.c4', 'where tag is #hot', '#hot', 'global-or-import'],
+        ['model.c4', 'where tag is not #hot', '#hot', 'global-or-import'],
+      ],
+    ],
+  ];
+
+  it.each(CASES)('%s rejects the rename on name and lists every use on removal', (_, type, name, files, uses) => {
+    const m = LikeC4Mutator.fromFiles(files);
+    expectRejected(m, () => rename(m, type, name, 'fresh'), 'name');
+    const error = expectReferencedRemoval(m, () => remove(m, type, name), 'name');
+    expect(error.references).toEqual(uses.map(([file, line, needle, role]) => ({ ...place(files, file, line, needle), role, cascadable: false })));
+  });
+});
+
+describe('the order of the uses a removal lists (row 120)', SLOW, () => {
+  it('lists the uses in LikeC4 document order, then by position, unmodelled ones included', () => {
+    // Loaded as views10, views2: LikeC4 orders views2 first.
+    const files: Files = {
+      'views10.c4': 'views {\n  view a {\n    include element.kind = old\n  }\n}\n',
+      'views2.c4': 'global {\n  predicateGroup g {\n    include element.kind = old\n  }\n}\nviews {\n  view b {\n    include element.kind = old\n  }\n}\n',
+      'spec.c4': 'specification {\n  element sys\n  element old\n}\nmodel {\n  x = sys\n}\n',
+    };
+    const m = LikeC4Mutator.fromFiles(files);
+    const error = expectReferencedRemoval(m, () => m.removeKind('element', 'old'), 'name');
+    expect(error.references).toEqual([
+      { file: 'views2.c4', line: 3, column: 28, role: 'global-or-import', cascadable: false },
+      { file: 'views2.c4', line: 8, column: 28, role: 'element.kind:predicate', cascadable: false, view: 'b' },
+      { file: 'views10.c4', line: 3, column: 28, role: 'element.kind:predicate', cascadable: false, view: 'a' },
+    ]);
+  });
+});
+
+describe('an edit the file would not parse after (row 126)', () => {
+  // The specification file has a stray closing brace, so the edited file would not parse.
+  const BROKEN: Files = {
+    'spec.c4': 'specification {\n  element box\n  element spare\n  tag hot\n}\n}\n',
+    'model.c4': "model {\n  a = box 'A'\n}\n",
+  };
+  it.each([
+    ['renameKind', (m: LikeC4Mutator) => m.renameKind('element', 'box', 'crate'), 'newName'],
+    ['renameTag', (m: LikeC4Mutator) => m.renameTag('hot', 'warm'), 'newName'],
+    ['removeKind', (m: LikeC4Mutator) => m.removeKind('element', 'spare'), 'name'],
+  ] as const)('refuses %s on %s', (_, write, field) => {
+    const m = LikeC4Mutator.fromFiles(BROKEN);
+    // P: the loaded file does not parse.
+    expect(m.validate().length).toBeGreaterThan(0);
+    expectRejected(m, () => write(m), field);
   });
 });
