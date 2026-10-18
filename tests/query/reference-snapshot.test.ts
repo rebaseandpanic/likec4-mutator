@@ -307,6 +307,34 @@ describe('change detection and internal errors (row 31)', () => {
     expect(changes[0]!.after?.key).toBe(keyOf({ model: 'app.x' }));
   });
 
+  it('reports a path through an instance whose element a new element re-targets', async () => {
+    const pre = `${MODEL}deployment {\n  vm p {\n    i = instanceOf app\n  }\n  vm q\n  q -> p.i.x 'reads'\n}\n`;
+    const inserted = '    x = service\n';
+    const post = pre.replace('    y = service\n', `    y = service\n${inserted}`);
+    const target = async (files: Record<string, string>) =>
+      (await linkedCatalogueReferences(files)).find((r) => r.text === 'p.i.x')!.target;
+    // OP: LikeC4 links `p.i.x` through the instance to the unique descendant, then to the new direct child.
+    await expectValidLikeC4({ 'm.c4': pre });
+    expect(await target({ 'm.c4': pre })).toEqual({ deployment: 'p.i', element: 'app.inner.x' });
+    expect(await target({ 'm.c4': post })).toEqual({ deployment: 'p.i', element: 'app.x' });
+
+    const offset = post.indexOf(inserted);
+    const changes = compareReferenceSnapshots(
+      snapshot(parse({ 'm.c4': pre })),
+      snapshot(parse({ 'm.c4': post })),
+      new Map([['m.c4', [{ offset, end: offset + inserted.length }]]]),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ file: 'm.c4', text: 'p.i.x' });
+    expect(changes[0]!.before.key).toBe(keyOf({ deployment: 'p.i', element: 'app.inner.x' }));
+    expect(changes[0]!.after?.key).toBe(keyOf({ deployment: 'p.i', element: 'app.x' }));
+
+    // Through the public API the addition is rejected and nothing changes.
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': pre });
+    expect(() => m.addElement('app', { name: 'x', kind: 'service' })).toThrow(InvalidWriteError);
+    expect(m.serialize()).toEqual({ 'm.c4': pre });
+  });
+
   const ADDED = '    instanceOf app.y\n';
   const WITH_ADDED = PRE.replace('    instanceOf app.x\n', `    instanceOf app.x\n${ADDED}`);
 
