@@ -195,6 +195,14 @@ const PLACES: PlaceCase[] = [
     view: 'dv',
     views: (n) => `  dynamic view dv {\n    a -[${n}]-> b\n  }\n`,
   },
+  {
+    label: 'dynamic step chain, second hop',
+    type: 'relationship',
+    role: 'connector:step',
+    negated: false,
+    view: 'dv',
+    views: (n) => `  dynamic view dv {\n    a -> b -[${n}]-> a\n  }\n`,
+  },
   { label: 'relation predicate', type: 'relationship', role: 'connector:predicate', negated: false, view: 'v', views: (n) => elementView(`include a -[${n}]-> b`) },
   // tags lists
   { label: 'element tags', type: 'tag', role: 'tags:element', negated: false, model: (n) => `  g = sys 'G' {\n    ${n}\n  }\n` },
