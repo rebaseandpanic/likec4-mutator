@@ -203,6 +203,25 @@ describe('relationship styles (row 161)', SLOW, () => {
   });
 });
 
+describe('a relationship kind’s multiple flag as written (row 161)', SLOW, () => {
+  const FILES = {
+    'm.c4':
+      "specification {\n  element system\n  relationship single {\n    multiple false\n  }\n  relationship plain\n}\nmodel {\n  a = system 'A'\n  b = system 'B'\n  a -[single]-> b 'single'\n  a -[plain]-> b 'plain'\n}\n",
+  };
+
+  it('reports multiple false, and no multiple key for a kind that does not write it', async () => {
+    // P: LikeC4 holds `multiple: false` for the first kind and no value for the second.
+    const kinds = await likec4RelationshipKinds(FILES);
+    expect([kinds['single']?.style?.multiple, kinds['plain']?.style?.multiple]).toEqual([false, undefined]);
+
+    const relationships = LikeC4Mutator.fromFiles(FILES).getRelationships();
+    const single = relationships.find((r) => r.title === 'single')!;
+    const plain = relationships.find((r) => r.title === 'plain')!;
+    expect(single.fromSpecification?.multiple).toBe(false);
+    expect(Object.hasOwn(plain.fromSpecification!, 'multiple')).toBe(false);
+  });
+});
+
 describe('no theme or configured defaults (row 162)', SLOW, () => {
   const FILES = {
     'm.c4': "specification {\n  element system\n  relationship calls\n}\nmodel {\n  a = system 'A'\n  b = system 'B'\n  a -[calls]-> b 'plain'\n}\n",
