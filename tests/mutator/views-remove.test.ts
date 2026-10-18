@@ -438,3 +438,82 @@ describe('a self-reference at an unmodelled place inside the removed view (revie
     ]);
   });
 });
+
+describe('the view id in unrecovered text, more places (row 69)', () => {
+  it.each([false, true])('in the view’s own file outside the view is RRE with cascade %s', (cascade) => {
+    const files: Files = { 'm.c4': `${MODEL}model {\n  x -> -> flow 'q'\n}\nviews {\n${TARGET_VIEWS}}\n` };
+    expect(expectRRE(files, 'flow', cascade).references).toEqual([{ ...at(files, 'm.c4', 'flow'), role: 'unrecovered', cascadable: false }]);
+  });
+
+  it.each([false, true])('in another file at an offset inside the view’s range is RRE with cascade %s', (cascade) => {
+    const m = `${MODEL}views {\n${TARGET_VIEWS}}\n`;
+    const body = "model {\n  x -> -> flow 'q'\n}\n";
+    // Pad b.c4 so its `flow` sits at an offset that lies inside the declaration of view flow in m.c4.
+    const target = m.indexOf('dynamic view flow') + 4;
+    const padding = '\n'.repeat(target - body.indexOf('flow'));
+    const files: Files = { 'm.c4': m, 'b.c4': padding + body };
+    expect(files['b.c4']!.indexOf('flow')).toBe(target);
+    expect(expectRRE(files, 'flow', cascade).references).toEqual([{ ...at(files, 'b.c4', 'flow'), role: 'unrecovered', cascadable: false }]);
+  });
+});
+
+describe('the changed files of a removal (row 64)', SLOW, () => {
+  const VIEWS: Files = { 'm.c4': `${MODEL}views {\n${TARGET_VIEWS}}\n` };
+
+  it('lists only the view’s file when another file is untouched', async () => {
+    const before: Files = { ...VIEWS, 'n.c4': 'views {\n  view w {\n    include a\n  }\n}\n' };
+    const m = LikeC4Mutator.fromFiles(before);
+    expect(m.removeView('flow')).toEqual({ changedFiles: ['m.c4'] });
+    expect(m.serialize()['n.c4']).toBe(before['n.c4']);
+    await expectAcceptedWrite(before, m.serialize(), { removedViewId: 'flow' });
+  });
+
+  it('lists the view’s file and the file the cascade edited', async () => {
+    const before: Files = { ...VIEWS, 'n.c4': 'views {\n  view w {\n    include a with {\n      navigateTo v\n    }\n  }\n}\n' };
+    const m = LikeC4Mutator.fromFiles(before);
+    expect(m.removeView('v', { cascade: true })).toEqual({
+      changedFiles: ['m.c4', 'n.c4'],
+      cascaded: [{ ...at(before, 'n.c4', 'v\n    }'), role: 'navigate-to' }],
+    });
+    expect(m.serialize()['n.c4']).toBe('views {\n  view w {\n    include a\n  }\n}\n');
+    await expectAcceptedWrite(before, m.serialize(), { removedViewId: 'v' });
+  });
+});
+
+describe('a referrer written before the removed view (row 66)', SLOW, () => {
+  it('removes the with block of a navigateTo written above the view', async () => {
+    const files: Files = { 'm.c4': `${MODEL}views {\n  view w {\n    include a with {\n      navigateTo v\n    }\n  }\n${TARGET_VIEWS}}\n` };
+    await expectValidLikeC4(files);
+    const m = LikeC4Mutator.fromFiles(files);
+    m.removeView('v', { cascade: true });
+    expect(m.serialize()['m.c4']).toBe(`${MODEL}views {\n  view w {\n    include a\n  }\n  dynamic view flow {\n    a -> b\n  }\n}\n`);
+    await expectAcceptedWrite(files, m.serialize(), { removedViewId: 'v' });
+  });
+});
+
+describe('extends chains (row 67)', () => {
+  it.each([false, true])('names each view of a three-level chain, and no navigateTo, with cascade %s', async (cascade) => {
+    const files: Files = {
+      'm.c4': `${MODEL}views {\n${TARGET_VIEWS}  view c1 extends v {\n    include a\n  }\n  view c2 extends c1 {\n    include b\n  }\n  view c3 extends c2 {\n    include *\n  }\n  view n {\n    include a with {\n      navigateTo c1\n    }\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'v', cascade).references).toEqual([
+      { ...at(files, 'm.c4', 'v {\n    include a'), role: 'view-extends', cascadable: false, view: 'c1' },
+      { ...at(files, 'm.c4', 'c1 {\n    include b'), role: 'view-extends', cascadable: false, view: 'c2' },
+      { ...at(files, 'm.c4', 'c2 {\n    include *'), role: 'view-extends', cascadable: false, view: 'c3' },
+    ]);
+  });
+
+  it('terminates on an extends cycle through the removed view and names the views extending it', () => {
+    // An invalid input LikeC4 drops: v extends c2, c2 extends c1, c1 extends v.
+    const files: Files = {
+      'm.c4': `${MODEL}views {\n  view v extends c2 {\n    include *\n  }\n  view c1 extends v {\n    include a\n  }\n  view c2 extends c1 {\n    include b\n  }\n}\n`,
+    };
+    expect(expectRRE(files, 'v', false).references).toEqual(
+      expect.arrayContaining([
+        { ...at(files, 'm.c4', 'v {\n    include a'), role: 'view-extends', cascadable: false, view: 'c1' },
+        { ...at(files, 'm.c4', 'c1 {\n    include b'), role: 'view-extends', cascadable: false, view: 'c2' },
+      ]),
+    );
+  });
+});
