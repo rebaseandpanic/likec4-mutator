@@ -77,6 +77,7 @@ const VALUES: Opts = {
 describe('every US-8 spelling (row 146)', SLOW, () => {
   it.each([
     ['-[k]->', { kind: 'calls' }, 'top', 'app.api -[calls]-> ext'],
+    ['-[k]-> with an explicit bracket form', { kind: 'calls', kindForm: 'bracket' }, 'top', 'app.api -[calls]-> ext'],
     ['.k', { kind: 'calls', kindForm: 'dot' }, 'top', 'app.api .calls ext'],
     ['<->', { bidirectional: true }, 'top', 'app.api <-> ext'],
     ['-[k]<->', { kind: 'calls', bidirectional: true }, 'top', 'app.api -[calls]<-> ext'],
@@ -198,6 +199,9 @@ describe('a refused edit (row 150)', () => {
 describe('rejections (row 150)', () => {
   it.each([
     ['an undeclared kind', 'app.api', 'ext', { kind: 'nope' }, 'kind'],
+    ['an unknown placement', 'app.api', 'ext', { placement: 'side' }, 'placement'],
+    ['an unknown kind form', 'app.api', 'ext', { kind: 'calls', kindForm: 'arrow' }, 'kindForm'],
+    ['the dot form without a kind', 'app.api', 'ext', { kindForm: 'dot' }, 'kindForm'],
     ['the dot form with bidirectional', 'app.api', 'ext', { kind: 'calls', kindForm: 'dot', bidirectional: true }, 'kindForm'],
     ['file with nested placement', 'app.api', 'ext', { placement: 'nested', file: 'model.c4' }, 'file'],
     ['an unresolved target', 'app.api', 'nowhere', {}, 'target'],
@@ -208,5 +212,23 @@ describe('rejections (row 150)', () => {
   ] as const)('rejects %s', (_label, source, target, opts, field) => {
     const m = LikeC4Mutator.fromFiles(FILES);
     expectRejected(m, () => m.addRelationship(source, target, 'x', opts as Opts), field);
+  });
+});
+
+describe('a nested target no written form reaches (row 147)', () => {
+  it('rejects it on target when a child of the source takes every form', () => {
+    // A top-level `db` next to the child `app.db`: inside app's body `db` links to the child, and the FQN `db` is that same text.
+    const files: Files = { 'spec.c4': SPEC, 'model.c4': MODEL.replace("  ext = sys 'Ext'\n", "  ext = sys 'Ext'\n  db = sys 'Top DB'\n") };
+    const m = LikeC4Mutator.fromFiles(files);
+    expectRejected(m, () => m.addRelationship('app', 'db', 'x', { placement: 'nested' }), 'target');
+  });
+});
+
+describe('an extend block with the untitled identity (row 149)', () => {
+  it('rejects an untitled relationship on shared', () => {
+    const files: Files = { ...FILES, 'ext.c4': 'model {\n  extend app.api -> ext {\n    #t\n  }\n}\n' };
+    const m = LikeC4Mutator.fromFiles(files);
+    const error = expectRejected(m, () => m.addRelationship('app.api', 'ext'), 'shared');
+    expect(error.related).toEqual([{ file: 'ext.c4', line: 2, column: 3, construct: 'extend-block' }]);
   });
 });
