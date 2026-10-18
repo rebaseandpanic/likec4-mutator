@@ -1320,9 +1320,10 @@ export class LikeC4Mutator {
 
   /**
    * Rename the kind of `type` named `name` to `newName` (lc4m-15.30 US-7):
-   * the declaration and every FR-002 place of that kind type, or of the
-   * shared type (`where … kind is`, participant kind conditions, positive
-   * and negated), that names it, in every file.  Places of another kind
+   * the declaration and every FR-002 place of that kind type, or — for an
+   * element or deployment node kind — of the shared type (`where … kind is`,
+   * participant kind conditions, positive and negated), that names it, in
+   * every file.  Places of another kind
    * type with the same spelling, and text inside string and markdown
    * values, are untouched.  Each changed file is written once.
    *
@@ -1351,7 +1352,7 @@ export class LikeC4Mutator {
     this.rejectAffectedNames(new Set([name]), 'name', `renaming the ${type} kind '${name}'`, classes);
     const places = this.kindPlaceList();
     if (type !== 'relationship') this.rejectSharedKindName(type, name, newName, places);
-    return this.writeRename(declaration, places.filter((place) => (place.kindType === type || place.kindType === 'shared') && place.name === name), newName);
+    return this.writeRename(declaration, places.filter((place) => namesKindOf(place, type) && place.name === name), newName);
   }
 
   /**
@@ -1386,15 +1387,15 @@ export class LikeC4Mutator {
    *  - `InvalidWriteError` on `name`: no such kind is declared, or it is
    *    declared more than once (D94);
    *  - {@link ReferencedRemovalError} on `name` while the kind is used:
-   *    `references` lists every FR-002 place of its type or of the shared
-   *    type that names it, `role` the place name (D128), and every construct
+   *    `references` lists every FR-002 place of its type, or of the shared
+   *    type for an element or deployment node kind, that names it, `role` the place name (D128), and every construct
    *    the library does not resolve that names it, `role` `opaque-flow`,
    *    `global-or-import` or `unrecovered`; all with `cascadable: false`.
    */
   removeKind(type: KindType, name: string): SpecificationWriteResult {
     checkKindType(type);
     const declaration = this.soleDeclaration(type, name);
-    const uses = this.kindPlaceList().filter((place) => (place.kindType === type || place.kindType === 'shared') && place.name === name);
+    const uses = this.kindPlaceList().filter((place) => namesKindOf(place, type) && place.name === name);
     this.rejectUsedName(uses, name, kindNameClasses(type), `the ${type} kind '${name}'`);
     return this.writeRemoval(declaration);
   }
@@ -4647,6 +4648,15 @@ function planGeneration(documents: ReadonlyMap<string, ParsedDocument>): { catal
 }
 
 /** Throw on `type` when it is not a kind type (`element`, `relationship`, `deploymentNode`). */
+/**
+ * Whether `place` names a kind of type `type`: a place of that type, or a
+ * shared place (`where … kind is`, participant kind conditions) for an
+ * element or deployment node kind — never for a relationship kind (FR-002).
+ */
+function namesKindOf(place: KindPlace, type: KindType): boolean {
+  return place.kindType === type || (place.kindType === 'shared' && type !== 'relationship');
+}
+
 /** The classes of the unmodelled-name inventory a name of kind type `type` has: its own, and the shared one for element and deployment node kinds. */
 function kindNameClasses(type: KindType): UnmodelledNameClass[] {
   switch (type) {
