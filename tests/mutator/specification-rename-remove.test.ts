@@ -304,6 +304,7 @@ const PLACES: PlaceCase[] = [
     ];
   }),
   { label: 'where not (tag is …)', type: 'tag', role: 'where-tag:predicate', negated: true, view: 'v', views: (n) => elementView(`include * where not (tag is ${n})`) },
+  { label: 'where kind !==, element kind', type: 'element', role: 'where-kind:predicate', negated: true, view: 'v', views: (n) => elementView(`include * where kind !== ${n}`) },
 ];
 
 /** The written form of the name `name` of type `type` at a place: `#name` for a tag. */
