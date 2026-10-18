@@ -180,6 +180,21 @@ describe('an extend block with the new identity (row 149)', SLOW, () => {
   });
 });
 
+describe('a refused edit (row 150)', () => {
+  // The file the relationship goes into has a syntax error, so the edited file would not parse.
+  const BROKEN: Files = { 'spec.c4': SPEC, 'model.c4': `${MODEL}deployment {\n  = =\n}\n` };
+
+  it.each([
+    ['top level', {}, 'file'],
+    ['nested', { placement: 'nested' }, 'source'],
+  ] as const)('is an InvalidWriteError on the input that addresses the text: %s', (_label, opts, field) => {
+    const m = LikeC4Mutator.fromFiles(BROKEN);
+    // P: the loaded file does not parse.
+    expect(m.validate().length).toBeGreaterThan(0);
+    expectRejected(m, () => m.addRelationship('app.api', 'ext', 'x', opts as Opts), field);
+  });
+});
+
 describe('rejections (row 150)', () => {
   it.each([
     ['an undeclared kind', 'app.api', 'ext', { kind: 'nope' }, 'kind'],
