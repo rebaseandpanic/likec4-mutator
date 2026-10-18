@@ -146,6 +146,8 @@ The deployment model (`deployment { ... }`: nodes, instances, their relationship
 
 ## CLI
 
+The single-purpose commands (`add-element`, `add-relationship`, `update-element`, `remove-element`, `remove-relationship`) keep their options and apply the library's current behaviour: `remove-element` is rejected while other constructs refer to the element (see [Removing referenced elements](#removing-referenced-elements)), and a model-level write uses the default file (see [Placement and file choice](#placement-and-file-choice)). Every newer option — `cascade`, `file`, `placement`, relationship kinds and direction, the selectors — and every other write are available through [`apply`](#apply) only.
+
 ### validate
 
 Parse and validate all `.c4` files. Exits with code 0 if valid, 1 if errors found.
@@ -225,7 +227,7 @@ likec4-mutator update-element --dir ./c4 --fqn app.api \
 
 ### remove-element
 
-Remove an element (and its entire body block) from the model.
+Remove an element (and its entire body block) from the model. A removal that other constructs refer to fails, naming them; `apply` with `"cascade": true` removes them too (see [removeElement](#removeelement)).
 
 ```bash
 likec4-mutator remove-element --dir ./c4 --fqn app.api --output ./out
@@ -241,7 +243,7 @@ likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db -
 
 ### apply
 
-Apply a batch of mutations from a JSON file. This is the most powerful command — supports all 7 operations with all properties.
+Apply a batch of mutations from a JSON file. This is the most powerful command: every write of the library is an op, with all its options.
 
 ```bash
 # Write to a separate output directory
@@ -259,7 +261,7 @@ The whole file is validated before any mutation is applied: a missing required f
 
 #### addElement
 
-Adds a new element inside a parent, or at model level when `parent` is absent. All fields except `op`, `kind`, `id` are optional. Without `title`, LikeC4 shows the kind's title, else the name. `file` (a loaded file name, exactly as loaded) chooses the file of a model-level element — its first `model` block, else a new one at its end; without it the default file is used (see [Rejected writes](#rejected-writes)). `file` together with `parent` fails on `mutations[i].file`: a child goes into the file of its parent.
+Adds a new element inside a parent, or at model level when `parent` is absent. All fields except `op`, `kind`, `id` are optional. Without `title`, LikeC4 shows the kind's title, else the name. `file` (a loaded file name, exactly as loaded) chooses the file of a model-level element — its first `model` block, else a new one at its end; without it the default file is used (see [Placement and file choice](#placement-and-file-choice)). `file` together with `parent` fails on `mutations[i].file`: a child goes into the file of its parent.
 
 ```json
 {
@@ -680,10 +682,30 @@ mutator.addRelationship('app', 'ext', 'uses', { file: 'model/app.c4' });        
   - A source without a body is given one, keeping its declaration form.
   - The target is written in the shortest form that resolves there to the requested element: its name (a sibling), else a longer tail of its FQN (`other.api`), else the FQN.
   - `file` is rejected with `nested`: the source's declaration decides the file.
-- **`file`.** Places a top-level relationship at the end of the first `model` block of that loaded file. A `model` block is created when the file has none. Without `file`, the default file is used (see [Rejected writes](#rejected-writes)).
+- **`file`.** Places a top-level relationship at the end of the first `model` block of that loaded file. A `model` block is created when the file has none. Without `file`, the default file is used (see [Placement and file choice](#placement-and-file-choice)).
 - **`shared`.** When an `extend a -> b` block already has the identity of the new relationship — endpoints, kind, title (the kind's title when it has none), direction — LikeC4 would apply the block's tags, links and metadata to it. Such a write is rejected on `shared`, with `related` listing the blocks (`construct: 'extend-block'`). With `shared: true` it is written, and the blocks apply.
 
 The endpoints are resolved from the first `model` block of the chosen (top-level) or default (nested) file, as for a top-level relationship.
+
+### Selecting a relationship
+
+`updateRelationship(selector, patch)` and `removeRelationship(selector)` address exactly one model relationship of the workspace (`removeRelationship(source, target)` is the same as `{ source, target }`):
+
+```typescript
+mutator.removeRelationship({ source: 'app.api', target: 'app.db', matchTitle: 'reads' });
+try {
+  mutator.updateRelationship({ source: 'app.api', target: 'app.db' }, { technology: 'JDBC' });
+} catch (e) {
+  if (e instanceof RelationshipAmbiguityError) e.candidates; // [{ file, line, column, kind?, title?, effectiveTitle?, bidirectional }, ...]
+}
+```
+
+- **`source`, `target`** — the absolute FQNs, else the reference text as written. A bidirectional relationship matches them in either order.
+- **`matchKind`** — the kind as written (`-[kind]->` or `.kind`); **`matchTitle`** — the inline title as written, not the kind's title; **`matchBidirectional`** — `true` for `<->` relationships only, `false` for one-way ones only.
+- **`position`** — `{ file, line, column }`, 1-based: where the relationship's declaration starts. It tells apart relationships no other field does.
+- **Outcome.** No match is an `InvalidWriteError` on `position` when one was given, else on `source`. More than one match is a `RelationshipAmbiguityError` (an `InvalidWriteError`) on `source`. Its `candidates` list every match in LikeC4's document order, then source order. Passing one candidate's position back, with the same other fields, selects it.
+
+Deployment relationships have their own selector (see [Updating deployment relationships](#updating-deployment-relationships)).
 
 ### Relationship style properties
 
@@ -776,7 +798,8 @@ Rules (LikeC4's own, applied before any `extend` block):
 
 - `fromSpecification` (`KindDefaults`) holds the kind name, its file and `sourceRange`, the strings normalized like the effective values, and tags and links as written. It is present whenever a specification declares the kind (also without defaults) and absent otherwise: an element of an undeclared kind (LikeC4 leaves it out of its model; the library still reports it, with its name as title), a relationship without a kind or with an undeclared one.
 - A kind declared more than once (a LikeC4 validation error the library does not report) is taken as LikeC4's model builder takes it: the declaration of the last file (ordered as for `extend` blocks); within a file the last one for an element kind, the first one for a relationship kind.
-- Not covered: `style` and `notation` defaults (no such fields are read), `multiple`, and the technology LikeC4 derives from an element's icon. With the project setting `inferTechnologyFromIcon` (on by default), LikeC4 replaces an element's missing or empty technology by one derived from its icon (`tech:postgresql` → `Postgresql`). The library does not read project settings and reports the technology as written or inherited from the kind: an own `technology ''` is reported as `''`.
+- The kind's `style` is reported in `fromSpecification.style`, and a relationship kind's `multiple` in `fromSpecification.multiple`; the effective style combines it with the own one (see [Reading styles](#reading-styles)).
+- Not covered: `notation` defaults (not read) and the technology LikeC4 derives from an element's icon. With the project setting `inferTechnologyFromIcon` (on by default), LikeC4 replaces an element's missing or empty technology by one derived from its icon (`tech:postgresql` → `Postgresql`). The library does not read project settings and reports the technology as written or inherited from the kind: an own `technology ''` is reported as `''`.
 
 ### Writing
 
@@ -1659,6 +1682,7 @@ mutator.removeViewRule('appView', { index: 0 });
 
 - **Position.** `addViewRule` writes the rule before the rule at `opts.before`; by default after the last item of the body, or before it when that item is an `autoLayout` rule — so in a dynamic view after the last step. A view declared without a body gets one.
 - **Checks** of `addViewRule` and `replaceViewRule`, at the place the rule is written: one rule of a kind the view type has (element and deployment views: `include`, `exclude`; dynamic views: `include`), and everything [Adding views](#adding-views) checks for `includes` — references resolved in the view's scope (its `of` element or its `extends` parent's, its document), declared kinds, tags and custom colors, typed `navigateTo`, no item LikeC4 drops; also no `with` in an `exclude`, and in a deployment view a logical element only inside a relation predicate of an `exclude` (`exclude app.api -> app.db`). An expression ending with a comma is rejected: it would join the next line of the body to the rule; so is one whose text reaches past the rule — closing the view and opening a block-level `style` or a `global` block.
+- **`element.kind` and `element.tag` in a deployment view.** LikeC4 1.59.4 leaves a deployment view out of its computed views, without an error, when an `include` or `exclude` rule or a style target of it uses an `element.kind` or `element.tag` expression. The library accepts, reads, renames and removes such expressions as written; LikeC4 still does not show the view.
 - **Replace and remove** take any rule — `autoLayout` and the rules read by kind only (`style`, `group`, `rank`, `global predicate`, `global style`, `includeAncestors`) included; a removed rule's lines go, its trailing comma with it.
 - **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an index out of range or a `text` that does not match (`address.index`, `address.text`, `before.index`, `before.text`); a kind the view does not have (`rule.kind`); an expression as above (`rule.expression`).
 
@@ -1737,22 +1761,81 @@ mutator.addView({ id: 'prod', type: 'element', target: 'app', title: 'Deployment
 ## Line endings
 
 Text the library writes into a file uses that file's line ending — the one of its first line break (`\r\n` or `\n`; `\n` when the file has none).  Text kept from the file is never changed, so a file that already mixes line endings stays mixed.
+
+## Placement and file choice
+
+The library writes only the files it was given. A `file` option must equal a loaded file name exactly; no file is created, and a `file` that is not loaded is rejected on `file`. LikeC4's document order, used below, orders files by path, naturally and segment by segment (`a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`). It is not the order the files were loaded in.
+
+| Write | With `file` | Without `file` |
+| --- | --- | --- |
+| model-level `addElement`, top-level `addRelationship` | the first `model` block of that file, else a new one at its end | the default file for a `model` block |
+| `addKind`, `addTag` | the first `specification` block of that file, else a new one | the default file for a `specification` block |
+| `addView` | the first `views` block of that file, else a new one | the default file for a `views` block |
+| root `addDeploymentNode`, `addDeploymentRelationship` | the first `deployment` block of that file, else a new one | the default file for a `deployment` block |
+| `addElementExtend`, `addRelationshipExtend` | the first `model` block of that file, else a new one; an existing block of the same target in that file is extended instead | rejected: `file` is required |
+| `addDeploymentExtend` | the first `deployment` block of that file, else a new one | rejected: `file` is required |
+| child element, child deployment node, deployment instance, `addRelationship` with `placement: 'nested'` | rejected: the parent's (the source's) declaration decides the file | the end of the body of the parent's (the source's) declaration; a declaration without a body gets one, keeping its form and inline strings |
+| `moveElement` to the top level (`parent: null`) | the first `model` block of that file, else a new one | the element's current file |
+| `moveElement` under a parent | rejected | the end of the body of the parent's declaration |
+
+- **The default file** is the first file in LikeC4's document order that has a block of the kind being written. Without one, it is the first file with a `model` block, else the first file, and a new block goes at its end.
+- **Moves.** A top-level element may move to another file. A move that changes neither the parent nor the file is rejected. Moving text into another file is rejected when it holds a relative `icon` or `link` (`./…`, `../…`), which LikeC4 resolves against the file it is written in (see [Moving elements](#moving-elements)).
+- **Updates, renames and removals** edit each construct where it is written, in every file, together with its `extend` blocks. `updateKind` edits the kind's one declaration, wherever it is.
+
+## Reference policy
+
+`removeElement`, `removeDeploymentNode`, `removeDeploymentInstance` and `removeView` share one policy for the references into what they remove: a subtree of elements, of deployment nodes or one instance, or a view. What the removed construct owns goes with it in both modes. Every other reference rejects the removal by default; with `cascade: true` it is removed where the table allows it.
+
+| Reference into the removed construct | Default | `cascade: true` |
+| --- | --- | --- |
+| model relationship endpoint, at any level and in an `extend` body | removed (owned) | removed |
+| `extend <element>` target; `extend a -> b` endpoint; an `extend a -> b` block left matching no relationship | removed (owned) | removed |
+| deployment relationship endpoint in a removed deployment subtree | removed (owned) | removed |
+| `extend <node>` target in a removed node subtree | removed (owned) | removed |
+| `instanceOf` of an element in the removed subtree | rejected | the instance is removed, as `removeDeploymentInstance` with `cascade` removes it |
+| deployment relationship endpoint that steps through an instance into the removed element subtree | rejected | the relationship is removed |
+| view `of` | rejected | rejected |
+| view `extends` (`removeView`) | rejected | rejected |
+| include or exclude item — an element, a selector, a relation predicate, an `element.*` expression with a reference — in an element, dynamic or deployment view, at the top level or in a `group` | rejected | the item is removed with its `with { … }` and `where`; an emptied rule and an emptied `group` too |
+| `navigateTo` (`removeView`) in an element's or a relation's `with`, a step, a model or deployment relationship body | rejected | the property is removed; an emptied predicate `with { }` too |
+| dynamic step endpoint: a single step, a chain segment, a step in `par` / `parallel` | rejected | the step statement is removed; an emptied `par` / `parallel` too |
+| style rule target, in a view or in the `views` block; `rank` target | rejected | the target is removed; the rule when it was its last target |
+| a reference in an opaque flow block (`opt`, `loop`, `alt` with `if` / `when` / `else`, `try` / `catch` / `finally`, `break`) | rejected | rejected |
+| a reference in a `global` block (predicates and styles) or a project import | rejected | rejected |
+
+`where` conditions are not references: they name kinds, tags and metadata only.
+
+**A view's last content.** A cascade that would remove a view's last content-producing statement is rejected, naming the view: the last `include` of an element or deployment view, or the last step or `include` of a dynamic view. Without it LikeC4 would show other content. Content the view takes from `extends` or from `global` predicates does not count, so such a cascade is rejected on purpose, also when the view would still inherit content.
+
+**Errors.** A rejection is a `ReferencedRemovalError`, an `InvalidWriteError` on the removed target's field (`fqn` or `id`). Its `references` lists every reference with its position, its role, whether `cascade` removes it, and the view it is written in. With `cascade: true` the result lists every reference the cascade removed in `cascaded`. The shapes are under [Removing referenced elements](#removing-referenced-elements).
+
+### Where the library does not resolve references
+
+The library resolves the references of the model, the deployment model and the views. It does not resolve:
+
+- `global` blocks (predicates and styles) and imports;
+- the flow blocks of a dynamic view other than `par` / `parallel`: `opt`, `loop`, `alt`, `try` / `catch` / `finally`, `break`;
+- text the parser could not recover.
+
+A name written in such a place is compared as text, outside comments and string values. It blocks a write, which is then rejected naming the file and line:
+
+- **remove, rename, move**: when it is the affected name — of the removed, renamed or moved element and everything below it, node, instance, view, kind or tag — as a whole identifier or any dotted segment (`x.api` blocks removing `app.api`). This holds in both modes.
+- **new names**: when it is the new name as a bare identifier or the leading segment of a dotted name. New names are those of an added element, deployment node, instance or view, the new name of a rename, and the names of a moved subtree at their new place. A kind or tag addition is not checked.
+
+A longer identifier that only contains the name does not block. The rule errs on the safe side: a move checks every name of the moved subtree, so `opt { other.api -> x }` blocks moving `app.api`, although it names another element.
+
+### Every write keeps resolved references
+
+Every write that adds, removes, renames or moves an element, a deployment node or instance, or a view resolves again every reference of the table above. That covers relationship endpoints, `extend` targets, `instanceOf`, deployment endpoints, view `of` and `extends`, rule items, steps, `navigateTo`, style and `rank` targets. The write is rejected when a reference that resolved before would then resolve to another target, become ambiguous or stop resolving. What the write removes or rewrites on purpose is the exception. The field is the one that introduces the name: `name` for `addElement`, `addDeploymentNode` and `addDeploymentInstance`, `id` for `addView`. References that did not resolve before the write are neither rewritten nor checked.
+
 ## Removing referenced elements
 
-`removeElement(fqn, { cascade? })` removes the element with its subtree and what it owns, in both modes: the relationships with an endpoint in the subtree (and those declared in it), the `extend` blocks of the subtree, and the `extend a -> b` blocks that lose an endpoint or their relationship. Every other reference into the subtree is handled by a policy:
+`removeElement(fqn, { cascade? })` removes the element with its subtree and what it owns, in both modes: the relationships with an endpoint in the subtree (and those declared in it), the `extend` blocks of the subtree, and the `extend a -> b` blocks that lose an endpoint or their relationship. Every other reference into the subtree follows the [reference policy](#reference-policy):
 
-| Reference | Default | `cascade: true` |
-| --- | --- | --- |
-| `instanceOf` | rejected | the instance goes, with its deployment relationships and its deployment-view items |
-| deployment relationship endpoint through an instance (`prod.api.handler`) | rejected | the relationship goes |
-| include / exclude item, dynamic `include` item (top level or in a `group`) | rejected | the item goes with its `with { … }` and `where`; an emptied rule and an emptied `group` go too |
-| dynamic step or chain | rejected | the whole step statement goes; an emptied `par` / `parallel` goes too |
-| style target (in a view or the `views` block), `rank` target | rejected | the target goes; an emptied rule goes too |
-| view `of` (and the views that `extends` that view) | rejected | rejected |
-| a reference in an opaque flow block (`opt`, `loop`, `alt`, `try` / `catch` / `finally`, `break`), in a `global` block or an import | rejected | rejected |
-| a name of the subtree written there, or in text the parser could not recover, as a whole identifier or any dotted segment (`x.api` blocks removing `app.api`) | rejected | rejected |
-
-A cascade is also rejected when a view would lose its last content-producing statement — an `include` of an element or deployment view, a step or a dynamic `include` of a dynamic view — since LikeC4 would then show other content. Content a view takes from `extends` or from `global` predicates does not count, so such a cascade is rejected on purpose.
+- an `instanceOf` of an element in the subtree rejects the removal; with `cascade` the instance goes, with its deployment relationships and its deployment-view items;
+- a view `of` the subtree rejects it in both modes, and so do the views that `extends` such a view;
+- a name of the subtree written where the library does not resolve references, as a whole identifier or any dotted segment (`x.api` blocks removing `app.api`), rejects it in both modes;
+- view items, steps, style and `rank` targets and deployment relationships through an instance are removed by the cascade, unless a view would lose its last content.
 
 A rejection is a `ReferencedRemovalError` (an `InvalidWriteError` on `fqn`) whose `references` lists every reference: `{ file, line, column, role, cascadable, view? }`, 1-based, `role` naming the place (`instance-of`, `predicate-item`, `step-endpoint`, `style-target`, `rank-target`, `view-of`, `view-extends`, `opaque-flow`, `global-or-import`, `unrecovered`, …), `cascadable` whether `cascade` removes it, `view` the view it is written in. With `cascade: true` the result has `cascaded`: every reference the cascade removed, `{ file, line, column, role }`, at its position before the write; without `cascade` the result has no such key. When the cascade removes deployment relationships with the instances it removes (or one that steps through an instance into the subtree), the result also has `removedDeploymentRelationships`, listed as `removeDeploymentInstance` reports them (`{ source, target, title? }`, endpoints `{ id, element? }`). Nothing is written on a rejection.
 
@@ -1769,6 +1852,8 @@ Each rewritten reference keeps the shortest change that still links to the new t
 
 The targets of `extend app.api { … }` blocks are rewritten too. References that did not resolve before the call are left as they are; every other reference must still link to what it linked to before.
 
+The element keeps its own values and those of its kind. An element without a title of its own, whose kind has none either, shows its name as its title, and that title follows the new name; the old name is not written as a title. Manual layouts are not read or updated (see [Moving elements](#moving-elements)).
+
 Rejected, with nothing changed (`InvalidWriteError`):
 
 | Field | When |
@@ -1784,7 +1869,9 @@ A comment moves with the declaration only when it is a whole-line comment (`// �
 
 The element and everything below it get new FQNs. Every reference to them, in every file, and every reference written in the moved text, is written so that it links to the same element as before from its place: its text when that still resolves there (a relationship between two children of the moved element usually keeps `api -> db`), else the text with the segments up to the moved element written as its new path (`app.api.handler` → `core.api.handler`), else the full FQN; else the move is rejected. The targets of `extend` blocks of the subtree follow. References that did not resolve before are left as they are.
 
-What LikeC4 derives from the hierarchy changes with a move, as it would by hand: with `app.api` moved to the top level, `include app.*` no longer shows `api`, and wildcards in scoped views, `x.**`, `x._` and implicit relationships follow the new tree. The explicit relationships, the element's properties and every written reference keep their targets.
+What LikeC4 derives from the hierarchy changes with a move, as it would by hand: with `app.api` moved to the top level, `include app.*` no longer shows `api`, and wildcards in scoped views, `x.**`, `x._` and implicit relationships follow the new tree. The explicit relationships, the element's properties and every written reference keep their targets. A move is not rejected because such derived view contents change.
+
+**Manual layouts.** The library reads and writes `.c4` sources only. A manual layout that LikeC4's tooling saved for a view (a `.likec4.snap` file) is neither read nor updated by a rename, a move or a removal.
 
 Rejected, with nothing changed (`InvalidWriteError`):
 
@@ -1816,18 +1903,20 @@ Writes LikeC4 would reject are refused the same way:
 
 | Call | Rejected when |
 | --- | --- |
-| `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`); the new name would change what an existing reference links to (field `name`, see below). |
+| `addElement` | `kind` is not declared as an element kind by a specification (`element service`); a tag is not declared (`tag internal`); the new name would change what an existing reference links to, or is written where the library does not resolve references (field `name`, see [Reference policy](#reference-policy)). |
 | `updateElement`, `updateRelationship`, `updateDeploymentRelationship` | a tag of `tags` is not declared. |
 | `addRelationship` | `source` or `target` does not resolve to an element (LikeC4: `Could not resolve reference`); they resolve to the same element or to a parent and its descendant (LikeC4: `Invalid parent-child relationship`); a tag or `kind` is not declared; `kindForm: 'dot'` without a kind or with `bidirectional`; `file` with `placement: 'nested'`, or a file that is not loaded; an `extend a -> b` block with the new relationship's identity without `shared` (field `shared`, see [Relationship forms and placement](#relationship-forms-and-placement)); the edited file would not parse, as when it already has a syntax error (field `file`, or `source` for `placement: 'nested'`). |
-| `addView` | an element view's `target` does not resolve to an element; an `includes` item LikeC4 would not accept, resolve or would drop; `extends` with `target`, on a dynamic or deployment view, to no element view with a body, or closing an `extends` cycle (see [Adding views](#adding-views)). |
+| `addView` | an element view's `target` does not resolve to an element; an `includes` item LikeC4 would not accept, resolve or would drop; `extends` with `target`, on a dynamic or deployment view, to no element view with a body, or closing an `extends` cycle (see [Adding views](#adding-views)); the new `id` is written where the library does not resolve references (field `id`, see [Reference policy](#reference-policy)). |
 | `updateView` | `id` names no view, an unnamed view or a view declared more than once; a tag is not declared; a link URL or `autoLayout` is invalid (see [Updating views](#updating-views)). |
 | `addViewRule`, `replaceViewRule`, `removeViewRule` | `id` as for `updateView`; the address names no rule or its `text` does not match; the view type has no such rule kind; the expression is not exactly one rule that LikeC4 resolves at its place and keeps (see [Writing rules](#writing-rules)). |
 | `addViewStep`, `updateViewStep` | `id` as for `updateView`, or a view that is not a dynamic view; an endpoint does not resolve in the view's document; a parent and its descendant; an undeclared kind, or a kind on a backward step; an endpoint or direction change of a chain segment; an invalid path or style value (see [Dynamic view steps](#dynamic-view-steps)). |
 | `moveViewStep`, `removeViewStep`, `addViewParallel` | `id` as for `updateView`, or a view that is not a dynamic view; a path that does not exist, a chain segment, a destination inside the moved statement, a nested `par`; a `par` block left giving LikeC4 no step (see [Dynamic view steps](#dynamic-view-steps)). |
 | `removeView` | `id` names no view or a view declared more than once (`InvalidWriteError`); a reference to the view that the mode does not remove (`ReferencedRemovalError`, see [Removing views](#removing-views)). |
 | every view write | the edited file would not parse; a surviving reference would link to something else (see [Views › Writing](#writing-3)). |
-| `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to (field `name`, see [Adding nodes](#adding-nodes)). |
-| `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to (field `name`, see [Adding instances](#adding-instances)). |
+| `addDeploymentNode` | `kind` is not declared as a deployment node kind (`deploymentNode vm`); a tag is not declared; the new node would change what an existing reference links to, or its name is written where the library does not resolve references (field `name`, see [Adding nodes](#adding-nodes) and [Reference policy](#reference-policy)). |
+| `addDeploymentInstance` | `element` does not resolve to one element as LikeC4 links `instanceOf` (LikeC4: `Could not resolve reference`); a tag is not declared; the new instance would change what an existing reference links to, or its id is written where the library does not resolve references (field `name`, see [Adding instances](#adding-instances) and [Reference policy](#reference-policy)). |
+| `addElementExtend`, `addRelationshipExtend` | see [Creating blocks](#creating-blocks). |
+| `addKind`, `updateKind`, `addTag` | see [Specification defaults › Writing](#writing). |
 | `renameElement` | see [Renaming elements](#renaming-elements). |
 | `moveElement` | see [Moving elements](#moving-elements). |
 | `renameKind`, `renameTag`, `removeKind`, `removeTag` | see [Renaming and removing kinds and tags](#renaming-and-removing-kinds-and-tags). |
@@ -1840,16 +1929,11 @@ Writes LikeC4 would reject are refused the same way:
 | `addDeploymentExtend` | `node` is not one declared node, or is an instance (LikeC4: `ExtendDeployment allows only DeploymentNode`); nothing to contribute (`tags`); a tag is not declared; `file` is missing or not loaded. |
 | `removeDeploymentExtend` | the file has no such block, or a rule of a deployment view refers to something declared in it, or the removal would change what a surviving reference links to (`node`); several blocks of the node in the file and no valid `occurrence` (`occurrence`). |
 
-A child element goes at the end of its parent's body; a parent written without one (`app = system 'App'`) is given a body right after its declaration, which keeps its form and inline strings. A model-level element (`addElement` without a parent) and a relationship (`addRelationship`) go to the end of the first `model` block of the first file, in LikeC4's document order, that has one; when no loaded file has a `model` block, a new one is appended to the first file in that order. LikeC4's document order is not the order the files were loaded in. `addElement(null, { …, file })` and `addRelationship(…, { file })` write a model-level element or relationship into that loaded file instead (its first `model` block, else a new one at its end); a `file` that is not loaded (exact name; no file is created) or given together with a parent is rejected on `file`.
+Where new text goes is described in [Placement and file choice](#placement-and-file-choice).
 
-Endpoints are resolved the way LikeC4 links them from the place they are written — that first `model` block: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
+Endpoints of `addRelationship` are resolved the way LikeC4 links them from the first `model` block of the chosen or default file: a name is looked up among the children of that block and the names unique below it, then the names unique across the file's model blocks, then the root elements of every loaded file; each further segment among the unique descendants of the previous one. So `addRelationship('app.gateway', 'app.cache')` is rejected when `cache` is declared only inside `app.gateway`: LikeC4 links `app.cache` to `app.gateway.cache`, a child of the source. `this` / `it` do not resolve at model level.
 
-A new element can change how LikeC4 links references that are already written: with `app = service { api = service }`, a model-level `api -> other` links `api` to `app.api`, the only element of that name; once `other.api` exists, `api` is ambiguous and LikeC4 reports `Could not resolve reference`. A new direct child can also shadow a unique descendant (`app.api` linking to `app.inner.api` would link to a new `app.api`). `addElement` resolves the existing references again with the new element in place and is rejected, with nothing changed, when one that resolved before then resolves to another element or not at all. Checked are, in every loaded file:
-
-- in the logical model: relationship endpoints (at model level, in element bodies and in `extend` bodies), the endpoints of `extend a -> b` blocks, the targets of `extend X` blocks and the `of` targets of element views;
-- in the deployment model: the element of every instance (`instanceOf api`), the element part of a deployment relationship endpoint that steps into an instance's element (`prod.api.handler`), the targets of `extend <node>` blocks, and every reference in the rules of deployment views (`include`, `exclude`, relationship predicates, `style`), whether it names a node, an instance or a logical element.
-
-`addElement` does not resolve the rules of element and dynamic views, the steps of dynamic views or `navigateTo` and does not check them (the view writes do, see [Views › Writing](#writing-3)). References that did not resolve before the call are not considered.
+A new element can change how LikeC4 links references that are already written: with `app = service { api = service }`, a model-level `api -> other` links `api` to `app.api`, the only element of that name; once `other.api` exists, `api` is ambiguous and LikeC4 reports `Could not resolve reference`. A new direct child can also shadow a unique descendant (`app.api` linking to `app.inner.api` would link to a new `app.api`). `addElement` therefore resolves every reference of every loaded file again with the new element in place — view rules, dynamic steps, `navigateTo` and style and `rank` targets included — and is rejected, with nothing changed, when one that resolved before then resolves to another element or not at all. `addView`, `addDeploymentNode` and `addDeploymentInstance` do the same (see [Every write keeps resolved references](#every-write-keeps-resolved-references)). References that did not resolve before the call are not considered.
 
 **Only what the call introduces is checked.** Problems already in the files — undeclared tags or kinds, dangling references, duplicates — are neither reported nor a reason to reject a valid write, so a workspace with unrelated LikeC4 errors still accepts valid edits. `validate()` still reports syntax errors only.
 
