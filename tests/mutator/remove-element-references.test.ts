@@ -373,6 +373,8 @@ function statementCases(cases: StatementCase[]): void {
     it('with cascade removes the statements', async () => {
       const removal = remove(files, fqn, true);
       expect(removal.result.cascaded).toEqual(refs.map(([needle, role]) => casc(files, 'm.c4', needle, role)));
+      // No deployment relationship goes with these statements, so the result has no key for them.
+      expect(removal.result).not.toHaveProperty('removedDeploymentRelationships');
       const removedElement = fqn === 'app.api' ? '    api = service\n' : '      sub = service\n';
       expect(removal.after['m.c4']).toBe(`${SPEC}${DEPLOYED_MODEL.replace(removedElement, '')}views {\n${after}}\n`);
       await expectGone(files, removal.after, gone.map(([role, text]) => ['m.c4', role, text] as [string, string, string]));
@@ -812,12 +814,24 @@ describe('a cascade that empties a view is RRE (row 47, D77, D108)', () => {
       'predicate-item',
       'child',
     ],
+    ['a dynamic view whose only step names the element, beside a style rule', '  dynamic view d {\n    app.api -> other\n    style other {\n      color red\n    }\n  }\n', 'app.api -> other', 'step-endpoint', 'd'],
+    ['a dynamic view whose only step names the element, beside an opaque block', '  dynamic view d {\n    app.api -> other\n    opt {\n      other -> app.db\n    }\n  }\n', 'app.api -> other', 'step-endpoint', 'd'],
+    ['a view whose include in a group names the element, beside an exclude', '  view v {\n    exclude other\n    group {\n      include app.api\n    }\n  }\n', 'app.api\n    }', 'predicate-item', 'v'],
   ];
 
   it.each(CASES)('%s', async (_, views, needle, role, view) => {
     const files: Files = { 'm.c4': `${SPEC}${MODEL}views {\n${views}}\n` };
     await expectValidLikeC4(files);
     expect(expectRRE(files, 'app.api', true).references).toEqual([ref(files, 'm.c4', needle, role, true, view)]);
+  });
+
+  it('is RRE when the dynamic view’s step and include both name the element', async () => {
+    const files: Files = { 'm.c4': `${SPEC}${MODEL}views {\n  dynamic view d {\n    app.api -> other\n    include app.api\n  }\n}\n` };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'app.api', true).references).toEqual([
+      ref(files, 'm.c4', 'app.api -> other', 'step-endpoint', true, 'd'),
+      ref(files, 'm.c4', 'app.api\n  }', 'predicate-item', true, 'd'),
+    ]);
   });
 });
 
@@ -1084,5 +1098,248 @@ describe('a cascade that leaves a par block of discarded statements is RRE (revi
     };
     await expectValidLikeC4(files);
     expect(expectRRE(files, 'app.api', true).references).toEqual([ref(files, 'm.c4', 'app.api -> other', 'step-endpoint', true, 'd')]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Strengthened after the mutation run of lc4m-15.30
+// ---------------------------------------------------------------------------
+
+describe('cascades a view keeps content through (rows 38, 39, 47, D40)', SLOW, () => {
+  statementCases([
+    {
+      name: 'a dynamic view keeps an include of another element',
+      views: '  dynamic view d {\n    app.api -> other\n    include other\n  }\n',
+      after: '  dynamic view d {\n    include other\n  }\n',
+      refs: [['app.api -> other', 'step-endpoint', 'd']],
+      gone: [
+        ['step-endpoint', 'app.api'],
+        ['step-endpoint', 'other'],
+      ],
+    },
+    {
+      name: 'a view without content of its own loses a style rule',
+      views: '  view base {\n    include other\n  }\n  view child extends base {\n    style app.api {\n      color red\n    }\n  }\n',
+      after: '  view base {\n    include other\n  }\n  view child extends base {\n  }\n',
+      refs: [['app.api {', 'style-target', 'child']],
+      gone: [['style-target', 'app.api']],
+    },
+    {
+      name: 'a group keeps its other include',
+      views: '  view v {\n    include other\n    group {\n      include app.api\n      include app.db\n    }\n  }\n',
+      after: '  view v {\n    include other\n    group {\n      include app.db\n    }\n  }\n',
+      refs: [['app.api\n      include', 'predicate-item', 'v']],
+      gone: [['predicate-item', 'app.api']],
+    },
+    {
+      name: 'include other, api, api.*',
+      views: '  view v {\n    include other, app.api, app.api.*\n  }\n',
+      after: '  view v {\n    include other\n  }\n',
+      refs: [
+        ['app.api, app.api.*', 'predicate-item', 'v'],
+        ['app.api.*', 'predicate-item', 'v'],
+      ],
+      gone: [
+        ['predicate-item', 'app.api'],
+        ['predicate-item', 'app.api'],
+      ],
+    },
+    {
+      name: 'two removed rules separated by two spaces',
+      views: '  view v {\n    include *\n    exclude app.api  exclude app.api\n  }\n',
+      after: '  view v {\n    include *\n  }\n',
+      refs: [
+        ['app.api  exclude', 'predicate-item', 'v'],
+        ['app.api\n', 'predicate-item', 'v'],
+      ],
+      gone: [
+        ['predicate-item', 'app.api'],
+        ['predicate-item', 'app.api'],
+      ],
+    },
+    {
+      name: 'two removed style rules that touch',
+      views: '  view v {\n    include *\n    style app.api {\n      color red\n    }style app.api {\n      color blue\n    }\n  }\n',
+      after: '  view v {\n    include *\n  }\n',
+      refs: [
+        ['app.api {\n      color red', 'style-target', 'v'],
+        ['app.api {\n      color blue', 'style-target', 'v'],
+      ],
+      gone: [
+        ['style-target', 'app.api'],
+        ['style-target', 'app.api'],
+      ],
+    },
+  ]);
+});
+
+describe('references written before the model block (rows 35, 51)', () => {
+  it('lists a view written before the model in the same file', async () => {
+    const files: Files = { 'm.c4': `${SPEC}views {\n  view v {\n    include app.api, other\n  }\n}\n${MODEL}` };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'app.api', false).references).toEqual([ref(files, 'm.c4', 'app.api, other', 'predicate-item', true, 'v')]);
+  });
+
+  it('lists an instanceOf written before the model in the same file', async () => {
+    const files: Files = { 'm.c4': `${SPEC}deployment {\n  vm p {\n    i = instanceOf app.api\n  }\n}\n${MODEL}` };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'app.api', false).references).toEqual([ref(files, 'm.c4', 'app.api\n', 'instance-of', true)]);
+  });
+
+  it.each([false, true])('lists a global predicate written before the model, cascade %s', async (cascade) => {
+    const files: Files = { 'm.c4': `${SPEC}global {\n  predicateGroup g {\n    include api\n  }\n}\n${MODEL}` };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'app.api', cascade).references).toEqual([ref(files, 'm.c4', 'api\n  }', 'global-or-import', false)]);
+  });
+});
+
+describe('a view extending a view that names the element (row 48)', SLOW, () => {
+  const files: Files = { 'm.c4': `${SPEC}${MODEL}views {\n  view s {\n    include app.api, other\n  }\n  view e extends s {\n    include other\n  }\n}\n` };
+
+  it('lists only the include by default', async () => {
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'app.api', false).references).toEqual([ref(files, 'm.c4', 'app.api, other', 'predicate-item', true, 's')]);
+  });
+
+  it('cascades only the include', async () => {
+    const { result, after } = remove(files, 'app.api', true);
+    expect(result.cascaded).toEqual([casc(files, 'm.c4', 'app.api, other', 'predicate-item')]);
+    expect(after['m.c4']).toBe(files['m.c4']!.replace('    api = service\n', '').replace('include app.api, other', 'include other'));
+    await expectAcceptedWrite(files, after);
+  });
+});
+
+describe('the deployment relationships of a cascaded instance (row 49)', SLOW, () => {
+  it('lists exactly the removed ones, a title-less one without a title', async () => {
+    const files = withViews('  deployment view dv {\n    include prod.o\n    include prod.gw\n  }\n');
+    files['m.c4'] = files['m.c4']!
+      .replace('    gw = instanceOf app.gw\n', '    gw = instanceOf app.gw {\n      -> prod.o\n    }\n')
+      .replace('    o = instanceOf other\n  }\n', "    o = instanceOf other\n  }\n  vm r\n  prod.gw -> prod.o 'R'\n  prod.o -> r 'keep'\n");
+    await expectValidLikeC4(files);
+    const { result, after } = remove(files, 'app.gw', true);
+    expect(result.removedDeploymentRelationships).toStrictEqual([
+      { source: { id: 'prod.gw' }, target: { id: 'prod.o' } },
+      { source: { id: 'prod.gw' }, target: { id: 'prod.o' }, title: 'R' },
+    ]);
+    expect(after['m.c4']).toContain("  prod.o -> r 'keep'\n");
+    await expectAcceptedWrite(files, after);
+  });
+});
+
+describe('unrecovered text and the removed element’s range (row 51)', () => {
+  it.each([false, true])('lists a subtree name written right after the element’s closing brace, cascade %s', (cascade) => {
+    const files: Files = { 'm.c4': `${SPEC}model {\n  app = system {\n    db = service\n    api = service {\n    } api\n  }\n}\n` };
+    expect(expectRRE(files, 'app.api', cascade).references).toEqual([ref(files, 'm.c4', 'api\n  }\n}', 'unrecovered', false)]);
+  });
+});
+
+describe('the order of the listed references (row 51)', () => {
+  it('lists the references by file, then by position, unmodelled ones included', () => {
+    const files: Files = {
+      'a.c4': `${SPEC}${MODEL}global {\n  predicateGroup g {\n    include api\n  }\n}\nviews {\n  view v {\n    include app.api, other\n  }\n}\n`,
+      'b.c4': 'views {\n  view w {\n    include app.api, other\n  }\n}\n',
+    };
+    expect(expectRRE(files, 'app.api', false).references).toEqual([
+      ref(files, 'a.c4', 'api\n  }', 'global-or-import', false),
+      ref(files, 'a.c4', 'app.api, other', 'predicate-item', true, 'v'),
+      ref(files, 'b.c4', 'app.api, other', 'predicate-item', true, 'w'),
+    ]);
+  });
+
+  it('gives an unmodelled reference between views no view, also when another file has a view at its offset', () => {
+    const a = `${SPEC}${MODEL}views {\n  view v1 {\n    include other\n  }\n}\nglobal {\n  predicateGroup g {\n    include api\n  }\n}\nviews {\n  view v2 {\n    include other\n  }\n}\n`;
+    const offset = a.indexOf('api\n  }\n}\nviews {\n  view v2');
+    // A view in b.c4 whose declaration spans the offset of the global reference in a.c4.
+    const head = 'views {\n  view w {\n    include other\n';
+    const b = `${head}${'    // padding\n'.repeat(Math.ceil(offset / 15) + 1)}  }\n}\n`;
+    expect(b.length).toBeGreaterThan(offset);
+    const files: Files = { 'a.c4': a, 'b.c4': b };
+    expect(expectRRE(files, 'app.api', false).references).toEqual([ref(files, 'a.c4', 'api\n  }\n}\nviews {\n  view v2', 'global-or-import', false)]);
+  });
+});
+
+describe('removals next to unresolved and broken constructs (row 54)', () => {
+  it('removes an element with cascade while a deployment relationship does not resolve', () => {
+    const files: Files = { 'm.c4': `${SPEC}${MODEL}deployment {\n  vm p {\n    o = instanceOf other\n  }\n  p.o -> p.ghost\n}\n` };
+    const { result, after } = remove(files, 'app.db', true);
+    expect(result).toEqual({ removedRelationships: [], cascaded: [] });
+    expect(after['m.c4']).toBe(files['m.c4']!.replace('    db = service\n', ''));
+  });
+
+  it('removes an element while another file has an extend without a target', () => {
+    const files: Files = { 'm.c4': `${SPEC}${MODEL}`, 'b.c4': 'model {\n  extend {\n  }\n}\n' };
+    const { after } = remove(files, 'app.db', false);
+    expect(after).toEqual({ ...files, 'm.c4': files['m.c4']!.replace('    db = service\n', '') });
+  });
+
+  it('rejects a removal that makes a surviving reference link to another element', async () => {
+    // `api` is ambiguous below the model block, so LikeC4 links it to the root api of b.c4; without app.api it would link to other.api.
+    const files: Files = {
+      'a.c4': `${SPEC}model {\n  app = system {\n    api = service\n  }\n  other = system {\n    api = service\n  }\n  client = system\n  client -> api 'calls'\n}\n`,
+      'b.c4': 'model {\n  api = system\n}\n',
+    };
+    expect((await linkedCatalogueReferences(files)).filter((r) => r.text === 'api').map((r) => r.target)).toEqual([{ model: 'api' }]);
+    const m = LikeC4Mutator.fromFiles(files);
+    let error: unknown;
+    try {
+      m.removeElement('app.api');
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(InvalidWriteError);
+    expect((error as InvalidWriteError).field).toBe('fqn');
+    expect(m.serialize()).toEqual(files);
+  });
+});
+
+describe('a view of an element a descendant name shadows (row 35)', () => {
+  it.each([false, true])('is RRE with cascade %s, the of not cascadable', async (cascade) => {
+    const files: Files = { 'm.c4': "specification {\n  element s\n}\nmodel {\n  a = s {\n    b = s {\n      a = s\n    }\n  }\n}\nviews {\n  view v of a.b {\n    include *\n  }\n}\n" };
+    await expectValidLikeC4(files);
+    expect(expectRRE(files, 'a.b', cascade).references).toEqual([ref(files, 'm.c4', 'a.b {', 'view-of', false, 'v')]);
+  });
+});
+
+describe('affected mode: names by segment and class (rows 51, 52)', () => {
+  it.each([false, true])('reports a removed name in a non-last segment once, cascade %s', (cascade) => {
+    const files: Files = {
+      'm.c4': `${SPEC}model {\n  app = system {\n    other = service\n  }\n  other = system {\n    api = service\n  }\n}\nglobal {\n  predicateGroup g {\n    include other.api\n  }\n}\n`,
+    };
+    expect(expectRRE(files, 'app.other', cascade).references).toEqual([ref(files, 'm.c4', 'other.api', 'global-or-import', false)]);
+  });
+
+  it('does not block on a relationship kind of the removed name in an opaque step', async () => {
+    const files: Files = {
+      'm.c4': `${SPEC.replace('  tag t\n', '  tag t\n  relationship api\n')}${MODEL}views {\n  dynamic view d {\n    other -> app.db\n    opt {\n      other -[api]-> app.db\n    }\n  }\n}\n`,
+    };
+    await expectValidLikeC4(files);
+    const { after } = remove(files, 'app.api', false);
+    expect(after['m.c4']).toBe(files['m.c4']!.replace('    api = service\n', ''));
+    await expectAcceptedWrite(files, after);
+  });
+
+  it('reports an imported name as global-or-import', () => {
+    const fixture = readFixture('refs-import');
+    const files: Files = {
+      ...fixture,
+      'main/model9.c4': fixture['main/model9.c4']!.replace("  local = module 'Local'\n", "  local = module 'Local' {\n    peer = module 'Local peer'\n  }\n"),
+    };
+    for (const cascade of [false, true]) {
+      expect(expectRRE(files, 'local.peer', cascade).references).toContainEqual(ref(files, 'main/model9.c4', 'peer }', 'global-or-import', false));
+    }
+  });
+});
+
+describe('an untouched par block of discarded statements (D40)', SLOW, () => {
+  it('does not block a cascade of a top-level step elsewhere in the view', async () => {
+    const files: Files = {
+      'm.c4': `${SPEC}${MODEL}views {\n  dynamic view d {\n    other -> app.db\n    par {\n      opt {\n      }\n    }\n    app.api -> other\n  }\n}\n`,
+    };
+    // P: LikeC4 accepts the par block of discarded statements on its own.
+    await expectValidLikeC4(files);
+    const { result, after } = remove(files, 'app.api', true);
+    expect(result.cascaded).toEqual([casc(files, 'm.c4', 'app.api -> other', 'step-endpoint')]);
+    expect(after['m.c4']).toBe(files['m.c4']!.replace('    api = service\n', '').replace('    app.api -> other\n', ''));
+    await expectAcceptedWrite(files, after);
   });
 });
