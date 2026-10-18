@@ -192,6 +192,22 @@ zone dr {
     }
   });
 
+  it('instanceOf through an instance path does not resolve, as in LikeC4', async () => {
+    const files = one(`zone prod {
+  i = instanceOf app.api
+  instanceOf prod.i.sub
+}`);
+    const { index, resolver } = library(files);
+    const expected = await linked(files, 'instanceOf');
+    const instances = index.ids().flatMap((id) => index.declarations(id)).filter((d) => d.type === 'instance');
+    const through = instances.find((d) => written(d.file, d.node['target']).endsWith(' prod.i.sub'))!;
+    expect(through).toBeDefined();
+    const key = written(through.file, through.node['target']);
+    // P: LikeC4 links the path through the instance to nothing.
+    expect(expected.get(key), key).toBeNull();
+    expect(resolver.instanceElement(through.node) ?? null).toBeNull();
+  });
+
   it('extend <node> targets equal LikeC4: strict paths only', async () => {
     const files = one(`zone prod {
   instanceOf app.api
