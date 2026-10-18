@@ -739,3 +739,225 @@ ${place === 'opaque' ? `    opt {\n      ${text} -> core\n    }\n` : ''}  }
     expectRejected(mutator, () => mutator.moveElement('app.api', { parent: 'core' }), 'fqn');
   });
 });
+
+describe('moves next to unrelated relationships and unresolved steps (row 94)', () => {
+  const MODEL = `${SPEC}model {
+  a = system 'A'
+  b = system 'B'
+  c = system 'C'
+  d = system 'D'
+  a -> b
+  c -> d
+}
+`;
+  it('moves an element under the target of an unrelated relationship', SLOW, async () => {
+    const before: Files = { 'm.c4': MODEL };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    expect(mutator.moveElement('c', { parent: 'b' })).toEqual({ fqn: 'b.c', changedFiles: ['m.c4'] });
+    const after = mutator.serialize();
+    // `c` stays the only element of its name, so `c -> d` keeps its text.
+    expect(after['m.c4']).toBe(
+      replaced(before['m.c4']!, [
+        ["  c = system 'C'\n", ''],
+        ["  b = system 'B'\n", "  b = system 'B' {\n    c = system 'C'\n  }\n"],
+      ]),
+    );
+    await expectSigmaImage(before, after, { c: 'b.c' });
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('moves an element while a dynamic step names an element that does not resolve', () => {
+    const before: Files = { 'm.c4': `${MODEL}views {\n  dynamic view d {\n    a -> ghost\n  }\n}\n` };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('c', { parent: 'b' });
+    expect(mutator.getElement('b.c')).not.toBeNull();
+    expect(mutator.serialize()['m.c4']).toContain('  dynamic view d {\n    a -> ghost\n  }\n');
+  });
+});
+
+describe('a move inside the element of an instance (row 104)', () => {
+  it('rewrites a deployment path through the instance to the new path', SLOW, async () => {
+    // After the move `prod.gw.handler` would name two descendants of app.api (inner.handler, other.handler).
+    const before: Files = {
+      'a.c4': `${SPEC}model {
+  app = system 'App' {
+    api = service 'API' {
+      handler = service 'Handler'
+      inner = service 'Inner'
+      other = service 'Other' {
+        handler = service 'Other handler'
+      }
+    }
+    db = service 'DB'
+  }
+}
+deployment {
+  vm prod {
+    gw = instanceOf app.api
+    instanceOf app.db
+  }
+  prod.gw.handler -> prod.db 'queries'
+}
+`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api.handler', { parent: 'app.api.inner' });
+    const after = mutator.serialize();
+    expect(after['a.c4']).toBe(
+      replaced(before['a.c4']!, [
+        ["      handler = service 'Handler'\n", ''],
+        ["      inner = service 'Inner'\n", "      inner = service 'Inner' {\n        handler = service 'Handler'\n      }\n"],
+        ["  prod.gw.handler -> prod.db 'queries'\n", "  prod.gw.inner.handler -> prod.db 'queries'\n"],
+      ]),
+    );
+    await expectSigmaImage(before, after, { 'app.api.handler': 'app.api.inner.handler' });
+    await expectAcceptedWrite(before, after);
+  });
+});
+
+describe('values that are not relative to the declaring file (row 103)', () => {
+  it.each([
+    ['an absolute link with ../ in its path', 'link https://example.com/a/../b.md'],
+    ['a description starting with ./', "description './notes'"],
+  ] as const)('accepts moving %s to another file', SLOW, async (_, body) => {
+    const before: Files = {
+      'a.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API' {\n      ${body}\n    }\n  }\n}\n`,
+      'b.c4': "model {\n  far = system 'Far'\n}\n",
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: 'far' });
+    const after = mutator.serialize();
+    expect(after['a.c4']).toBe(`${SPEC}model {\n  app = system 'App' {\n  }\n}\n`);
+    expect(after['b.c4']).toBe(`model {\n  far = system 'Far' {\n    api = service 'API' {\n      ${body}\n    }\n  }\n}\n`);
+    await expectSigmaImage(before, after, { 'app.api': 'far.api' });
+    await expectAcceptedWrite(before, after);
+  });
+});
+
+describe('the moved text at line edges (row 99)', () => {
+  it('moves only the declaration when the parent’s brace follows it on its line, leaving the comment above', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    db = service 'DB'\n    // the API\n    api = service 'API' }\n  core = system 'Core'\n}\n`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toContain("    db = service 'DB'\n    // the API\n");
+    expect(after['m.c4']).toContain("  core = system 'Core' {\n    api = service 'API'\n  }\n");
+    await expectSigmaImage(before, after, { 'app.api': 'core.api' });
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('leaves the comment above a declaration that shares the last line of a file without a final newline', SLOW, async () => {
+    const before: Files = { 'm.c4': `${SPEC}model {\n  core = system 'Core'\n  // c\n  api = service 'A' }` };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toContain('\n  // c\n');
+    expect(after['m.c4']).toContain("  core = system 'Core' {\n    api = service 'A'\n  }\n");
+    await expectSigmaImage(before, after, { api: 'core.api' });
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('moves a trailing block comment followed by spaces, and the comment above, with the declaration', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    // the API\n    api = service 'API' {\n      handler = service 'Handler'\n    } /* end of api */  \n  }\n  core = system 'Core'\n}\n`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      `${SPEC}model {\n  app = system 'App' {\n  }\n  core = system 'Core' {\n    // the API\n    api = service 'API' {\n      handler = service 'Handler'\n    } /* end of api */  \n  }\n}\n`,
+    );
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('cuts a CRLF source at its line end and writes the text with the target’s line ending', SLOW, async () => {
+    const lf = `${SPEC}model {
+  app = system 'App' {
+    // the API
+    api = service 'API' {
+      handler = service 'Handler'
+    } // end of api
+  }
+}
+`;
+    const before: Files = { 'a.c4': lf.replace(/\n/g, '\r\n'), 'b.c4': "model {\n  core = system 'Core'\n}\n" };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['a.c4']).toBe(`${SPEC}model {\n  app = system 'App' {\n  }\n}\n`.replace(/\n/g, '\r\n'));
+    expect(after['b.c4']).toBe(
+      "model {\n  core = system 'Core' {\n    // the API\n    api = service 'API' {\n      handler = service 'Handler'\n    } // end of api\n  }\n}\n",
+    );
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('moves a declaration written at column 0', SLOW, async () => {
+    const before: Files = { 'm.c4': `${SPEC}model {\napi = service 'API'\ncore = system 'Core'\n}\n` };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(`${SPEC}model {\ncore = system 'Core' {\n  api = service 'API'\n}\n}\n`);
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('keeps blank and whitespace-only lines of the moved body empty', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API' {\n      handler = service 'Handler'\n\n      store = service 'Store'\n      \n      db = service 'DB'\n    }\n  }\n}\n`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: null });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      `${SPEC}model {\n  app = system 'App' {\n  }\n  api = service 'API' {\n    handler = service 'Handler'\n\n    store = service 'Store'\n\n    db = service 'DB'\n  }\n}\n`,
+    );
+    await expectAcceptedWrite(before, after);
+  });
+});
+
+describe('several rewritten references in the moved body (row 100)', () => {
+  it('rewrites each reference that would link elsewhere at the new place', SLOW, async () => {
+    const before: Files = {
+      'm.c4': `${SPEC}model {
+  app = system 'App' {
+    api = service 'API' {
+      -> db 'reads'
+      -> web 'calls'
+      -> db 'writes'
+    }
+    db = service 'DB'
+    web = service 'Web'
+  }
+  core = system 'Core' {
+    db = service 'Core DB'
+    web = service 'Core web'
+  }
+}
+`,
+    };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.moveElement('app.api', { parent: 'core' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(
+      replaced(before['m.c4']!, [
+        ["    api = service 'API' {\n      -> db 'reads'\n      -> web 'calls'\n      -> db 'writes'\n    }\n", ''],
+        [
+          "    web = service 'Core web'\n",
+          "    web = service 'Core web'\n    api = service 'API' {\n      -> app.db 'reads'\n      -> app.web 'calls'\n      -> app.db 'writes'\n    }\n",
+        ],
+      ]),
+    );
+    await expectSigmaImage(before, after, { 'app.api': 'core.api' });
+  });
+});
