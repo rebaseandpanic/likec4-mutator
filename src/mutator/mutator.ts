@@ -1773,6 +1773,9 @@ export class LikeC4Mutator {
    *  - on `file`: a file that is not loaded, or a `file` with `nested`
    *    (the source's declaration decides the file);
    *  - on `tags[i]` / `style.*`: an undeclared tag, an invalid style value;
+   *  - on `file` (top level) or `source` (nested, the source's declaration
+   *    decides the file): an edit the edited file would not parse, as when
+   *    it already has a syntax error;
    *  - on `shared`: without `shared`, an `extend a -> b` block exists whose
    *    identity — endpoints, kind, title, direction — the new relationship
    *    would have: it would silently take the block's values (D83).
@@ -1853,7 +1856,7 @@ export class LikeC4Mutator {
 
     const { placement: _placement, file: _file, shared: _shared, ...written } = opts ?? {};
     if (placementKind === 'top') {
-      this.applyEdit(filename, addRelationshipEdit(doc, source, target, label, written, placement));
+      refusedOn('file', () => this.applyEdit(filename, addRelationshipEdit(doc, source, target, label, written, placement)));
       return;
     }
     const sourceFile = this.findFileContaining(sourceFqn);
@@ -1872,7 +1875,7 @@ export class LikeC4Mutator {
     inserts.append(generateRelationship({ indent: inserts.innerIndent, source: '', target: text, label, ...written }) + '\n');
     const [edit] = inserts.apply([]);
     if (!edit) throw new Error('Internal error: no edit for the nested relationship');
-    this.applyEdit(sourceFile, edit);
+    refusedOn('source', () => this.applyEdit(sourceFile, edit));
   }
 
   /**
