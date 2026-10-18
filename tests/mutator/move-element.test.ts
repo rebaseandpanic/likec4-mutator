@@ -961,3 +961,13 @@ describe('several rewritten references in the moved body (row 100)', () => {
     await expectSigmaImage(before, after, { 'app.api': 'core.api' });
   });
 });
+
+describe('an edit the file would not parse after (row 102)', () => {
+  it('refuses the move on parent', () => {
+    const files: Files = { 'm.c4': `${SPEC}model {\n  app = system 'App' {\n    api = service 'API'\n  }\n  core = system 'Core'\n}\n}\n` };
+    const mutator = LikeC4Mutator.fromFiles(files);
+    // P: the loaded file does not parse.
+    expect(mutator.validate().length).toBeGreaterThan(0);
+    expectRejected(mutator, () => mutator.moveElement('app.api', { parent: 'core' }), 'parent');
+  });
+});
