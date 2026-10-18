@@ -88,18 +88,22 @@ async function expectStable(before: Record<string, string>, after: Record<string
 }
 
 /** LikeC4's own view of `source`: its parse errors, and whether a token at `offset` lies in no CST leaf. */
-function likec4Parse(source: string): { parserErrors: number; uncovered: (image: string) => boolean } {
+function likec4Parse(source: string): { parserErrors: number; uncovered: (image: string) => boolean; inError: (image: string) => boolean } {
   const services = createLanguageServices({ ...NoFileSystem, ...NoLikeC4ManualLayouts }).likec4;
   const parsed = services.parser.LangiumParser.parse(source);
   const leaves = [...CstUtils.streamCst(parsed.value.$cstNode!)].filter((node) => !('content' in node));
   const tokens = services.parser.Lexer.tokenize(source).tokens;
+  const token = (image: string) => {
+    const found = tokens.find((t) => t.image === image);
+    expect(found, image).toBeDefined();
+    return found!;
+  };
   return {
     parserErrors: parsed.parserErrors.length,
-    uncovered: (image) => {
-      const token = tokens.find((t) => t.image === image);
-      expect(token, image).toBeDefined();
-      return !leaves.some((leaf) => leaf.offset <= token!.startOffset && token!.startOffset < leaf.end);
-    },
+    uncovered: (image) => !leaves.some((leaf) => leaf.offset <= token(image).startOffset && token(image).startOffset < leaf.end),
+    /** Whether the token lies in the range of a token a parser error is reported at. */
+    inError: (image) =>
+      parsed.parserErrors.some((e) => e.token.startOffset <= token(image).startOffset && token(image).startOffset <= (e.token.endOffset ?? e.token.startOffset)),
   };
 }
 
@@ -409,5 +413,77 @@ deployment {
     await expectValidLikeC4(files);
     expect((await linked(files, role, 'edge')).target).toEqual({ deployment: 'prod.edge' });
     expectRejected(LikeC4Mutator.fromFiles(files), 'id', (m) => m.removeDeploymentNode('prod.edge'));
+  });
+});
+
+describe('new mode respects the name class (row 14)', () => {
+  it('accepts an element named like a view an opaque step navigates to', async () => {
+    const before = {
+      'm.c4': `${SPEC}model {\n  app = service\n  other = service\n}\nviews {\n  dynamic view d {\n    app -> other\n    opt {\n      app -> other {\n        navigateTo later\n      }\n    }\n  }\n  dynamic view later {\n    app -> other\n  }\n}\n`,
+    };
+    await expectValidLikeC4(before);
+    const m = LikeC4Mutator.fromFiles(before);
+    expect(m.addElement(null, { name: 'later', kind: 'service' })).toBe('later');
+    await expectAcceptedWrite(before, m.serialize());
+  });
+});
+
+describe('a custom color in a global style (row 17)', () => {
+  it('accepts an addition with the accepted-write bundle', async () => {
+    const before = {
+      'm.c4': "specification {\n  element service\n  color brand #3366ff\n}\nmodel {\n  app = service\n}\nglobal {\n  style gs * {\n    color brand\n  }\n}\n",
+    };
+    await expectValidLikeC4(before);
+    const m = LikeC4Mutator.fromFiles(before);
+    expect(m.addElement('app', { name: 'cache', kind: 'service' })).toBe('app.cache');
+    await expectAcceptedWrite(before, m.serialize());
+  });
+});
+
+describe('unrecovered text, token by token (row 16)', () => {
+  const MODEL = `${SPEC}model {\n  app = service {\n  }\n}\n`;
+
+  it('lets a parsed identifier of a broken file through', () => {
+    const broken = "model {\n  keep = service\n  a -> -> zork\n}\n";
+    // P: the file does not parse, and `keep` is part of its parse tree.
+    const parse = likec4Parse(broken);
+    expect(parse.parserErrors).toBeGreaterThan(0);
+    expect(parse.uncovered('keep')).toBe(false);
+    expect(parse.inError('keep')).toBe(false);
+    const m = LikeC4Mutator.fromFiles({ 'm.c4': MODEL, 'b.c4': broken });
+    expect(m.addElement('app', { name: 'keep', kind: 'service' })).toBe('app.keep');
+  });
+
+  it.each([
+    ['the first token of a file', 'zork\nmodel {\n}\n', 'zork'],
+    ['the last tokens of a file without a closing brace', 'model {\n  a -> -> zork', 'zork'],
+    ['an identifier after another, with an arrow between', 'model {\n  a -> -> zork -> zap\n}\n', 'zap'],
+    ['an identifier after another, without a dot between', 'model {\n  a -> -> zork zap\n}\n', 'zap'],
+    ['a name after a string and a dot', "model {\n  a -> -> 's'.zork\n}\n", 'zork'],
+    ['a name after a library icon and a dot', 'model {\n  a -> -> tech:go.zork\n}\n', 'zork'],
+  ] as const)('rejects a name that is %s', (_, broken, name) => {
+    // P: the name is not part of the parse tree of the broken file.
+    const parse = likec4Parse(broken);
+    expect(parse.parserErrors).toBeGreaterThan(0);
+    expect(parse.uncovered(name)).toBe(true);
+    expectRejected(LikeC4Mutator.fromFiles({ 'm.c4': MODEL, 'b.c4': broken }), 'name', (m) => m.addElement('app', { name, kind: 'service' }));
+  });
+
+  it('rejects an unparsed name outside every parser error', () => {
+    const broken = 'model {\n  a -> -> zork zap\n}\n';
+    // P: `zork` is not in the parse tree, and no parser error is reported at it.
+    const parse = likec4Parse(broken);
+    expect(parse.uncovered('zork')).toBe(true);
+    expect(parse.inError('zork')).toBe(false);
+    expectRejected(LikeC4Mutator.fromFiles({ 'm.c4': MODEL, 'b.c4': broken }), 'name', (m) => m.addElement('app', { name: 'zork', kind: 'service' }));
+  });
+
+  it('rejects a name of the parse tree at which a parser error is reported', () => {
+    const broken = 'model {\n  x = service {\n    link zork.zap\n  }\n}\n';
+    // P: `zork` is a leaf of the parse tree, and the parser error is reported at it.
+    const parse = likec4Parse(broken);
+    expect(parse.uncovered('zork')).toBe(false);
+    expect(parse.inError('zork')).toBe(true);
+    expectRejected(LikeC4Mutator.fromFiles({ 'm.c4': MODEL, 'b.c4': broken }), 'name', (m) => m.addElement('app', { name: 'zork', kind: 'service' }));
   });
 });
