@@ -432,3 +432,22 @@ describe('equal references in different extend scopes (row 93)', () => {
     await expectValidWrite(m);
   });
 });
+
+describe('what a removed block takes with it outside itself (row 73)', () => {
+  it('removes a relationship written outside the block and the extend block of the declared node in another file', async () => {
+    const files = {
+      'a.c4': `${SPEC}deployment {\n  zone prod {\n    vm vm1\n  }\n  extend prod {\n    vm extra\n  }\n  prod.vm1 -> prod.extra 'calls'\n}\n`,
+      'b.c4': "deployment {\n  extend prod.extra {\n    #t\n  }\n}\n",
+    };
+    await expectValidLikeC4(files);
+    const m = LikeC4Mutator.fromFiles(files);
+    expect(m.removeDeploymentExtend({ node: 'prod', file: 'a.c4' })).toEqual({
+      removedRelationships: [{ source: { id: 'prod.vm1' }, target: { id: 'prod.extra' }, title: 'calls' }],
+    });
+    expect(m.serialize()).toEqual({
+      'a.c4': `${SPEC}deployment {\n  zone prod {\n    vm vm1\n  }\n}\n`,
+      'b.c4': 'deployment {\n}\n',
+    });
+    await expectValidWrite(m);
+  });
+});
