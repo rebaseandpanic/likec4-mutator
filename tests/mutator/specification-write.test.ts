@@ -119,6 +119,12 @@ describe('addKind and addTag (row 109)', () => {
     await expectReadsAgree(used);
     const model = await buildLikeC4Model(used);
     expect(model.elements['api']?.title).toBe('Service');
+    // The defaults reach the elements, relationships and nodes of each kind (reads agree with LikeC4 above).
+    const reread = LikeC4Mutator.fromFiles(used);
+    const link = [{ url: 'https://example.com/kind', label: 'Kind' }];
+    expect(reread.getElement('api')).toMatchObject({ title: 'Service', summary: 'Serves', description: 'The kind', technology: 'Go', tags: ['core', 'fresh'], links: link });
+    expect(reread.getRelationships()[0]).toMatchObject({ title: 'Calls', description: 'The kind', technology: 'Go', tags: ['core', 'fresh'], links: link });
+    expect(reread.getDeploymentNode('p')).toMatchObject({ title: 'Pod', summary: 'Runs', description: 'The kind', technology: 'Go', tags: ['core', 'fresh'], links: link });
   });
 });
 
@@ -204,6 +210,13 @@ describe('file choice (row 111)', () => {
     expect(after).toEqual({ ...FILES, ...changed });
     await expectAcceptedWrite(FILES, after);
   });
+  it('writes a new kind into a new block of a chosen file without one', SLOW, async () => {
+    const mutator = LikeC4Mutator.fromFiles(FILES);
+    expect(mutator.addKind('element', 'fresh', { file: 'b.c4' })).toEqual({ changedFiles: ['b.c4'] });
+    const after = mutator.serialize();
+    expect(after).toEqual({ ...FILES, 'b.c4': "model {\n  c = system 'C'\n}\n\nspecification {\n  element fresh\n}\n" });
+    await expectAcceptedWrite(FILES, after);
+  });
   it('uses LikeC4 document order, not the load order, for the default file', SLOW, async () => {
     // Loaded as views10, views2: LikeC4 orders views2 first.
     const files: Files = {
@@ -282,6 +295,10 @@ describe('rejections (row 113)', () => {
     ['an empty update', (m: LikeC4Mutator) => m.updateKind('element', 'system', {}), 'patch'],
     ['a file that is not loaded', (m: LikeC4Mutator) => m.addKind('element', 'service', { file: 'z.c4' }), 'file'],
     ['an unknown kind type', (m: LikeC4Mutator) => m.addKind('node' as 'element', 'service'), 'type'],
+    ['an unknown kind type in an update', (m: LikeC4Mutator) => m.updateKind('node' as 'element', 'system', { title: 'x' }), 'type'],
+    ['an invalid link', (m: LikeC4Mutator) => m.addKind('element', 'service', { links: [{ url: 'not a url' }] }), 'links[0].url'],
+    ['an undeclared tag in an update', (m: LikeC4Mutator) => m.updateKind('element', 'system', { tags: ['nope'] }), 'tags[0]'],
+    ['an invalid link in an update', (m: LikeC4Mutator) => m.updateKind('element', 'system', { links: [{ url: 'not a url' }] }), 'links[0].url'],
   ] as const)('rejects %s', (_, write, field) => {
     const mutator = LikeC4Mutator.fromFiles(FILES);
     expectRejected(mutator, () => write(mutator), field);
@@ -313,6 +330,7 @@ model {
     ['changing the title detaches the block matched by it', FILES(" {\n    title 'Calls'\n  }", " 'Calls'"), 'Invokes'],
     ['removing the title detaches the block matched by it', FILES(" {\n    title 'Calls'\n  }", " 'Calls'"), null],
     ['setting a title attaches a block written with it', FILES('', " 'Calls'"), 'Calls'],
+    ['removing the title attaches a block written without one', FILES(" {\n    title 'Calls'\n  }", ''), null],
   ] as const)('rejects %s, listing the block', async (_, files, title) => {
     const mutator = LikeC4Mutator.fromFiles(files);
     const error = expectRejected(mutator, () => mutator.updateKind('relationship', 'calls', { title }), 'title');
@@ -324,8 +342,53 @@ model {
     mutator.updateKind('relationship', 'calls', { title: 'Calls' });
     const after = mutator.serialize();
     await expectAcceptedWrite(files, after);
+    expect(after['m.c4']).toContain("  relationship calls {\n    title 'Calls'\n  }\n");
     const reread = LikeC4Mutator.fromFiles(after);
     await expectRelationshipsAgreeWithLikeC4(after, reread.getRelationships());
+    expect(reread.getRelationships()[0]?.title).toBe('Calls');
+  });
+  it('accepts a title change when the blocks belong to titled relationships or another kind', SLOW, async () => {
+    const files: Files = {
+      'm.c4': `specification {
+  element system
+  relationship calls
+  relationship uses
+  tag core
+}
+model {
+  a = system 'A'
+  b = system 'B'
+  c = system 'C'
+  a -[calls]-> b
+  a -[calls]-> c 'Own'
+  b -[uses]-> c
+}
+`,
+      'e.c4': "model {\n  extend a -[calls]-> c 'Own' {\n    #core\n  }\n  extend b -[uses]-> c {\n    #core\n  }\n}\n",
+    };
+    await expectValidLikeC4(files);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.updateKind('relationship', 'calls', { title: 'Calls' });
+    const after = mutator.serialize();
+    await expectAcceptedWrite(files, after);
+    await expectRelationshipsAgreeWithLikeC4(after, LikeC4Mutator.fromFiles(after).getRelationships());
+  });
+  it('accepts an element kind title change next to a block of a relationship kind of the same name', SLOW, async () => {
+    const files: Files = {
+      'm.c4': "specification {\n  element system\n  element calls\n  relationship calls\n  tag core\n}\nmodel {\n  a = system 'A'\n  b = system 'B'\n  a -[calls]-> b\n}\n",
+      'e.c4': 'model {\n  extend a -[calls]-> b {\n    #core\n  }\n}\n',
+    };
+    await expectValidLikeC4(files);
+    const mutator = LikeC4Mutator.fromFiles(files);
+    mutator.updateKind('element', 'calls', { title: 'X' });
+    await expectAcceptedWrite(files, mutator.serialize());
+  });
+  it('accepts a title change next to an unresolved relationship of the kind and a block with its written endpoints', () => {
+    const files: Files = {
+      'm.c4': "specification {\n  element system\n  relationship calls\n  tag core\n}\nmodel {\n  a = system 'A'\n  a -[calls]-> ghost\n  extend a -[calls]-> ghost {\n    #core\n  }\n}\n",
+    };
+    const mutator = LikeC4Mutator.fromFiles(files);
+    expect(mutator.updateKind('relationship', 'calls', { title: 'Calls' })).toEqual({ changedFiles: ['m.c4'] });
   });
 });
 
@@ -361,5 +424,127 @@ views {
     const mutator = LikeC4Mutator.fromFiles(FILES);
     write(mutator);
     await expectAcceptedWrite(FILES, mutator.serialize());
+  });
+});
+
+describe('names the grammar would read as another name (row 112)', () => {
+  it.each([
+    ['an element kind with a comment', (m: LikeC4Mutator) => m.addKind('element', 'svc // note')],
+    ['an element kind with a trailing space', (m: LikeC4Mutator) => m.addKind('element', 'svc ')],
+    ['an element kind with a body', (m: LikeC4Mutator) => m.addKind('element', 'svc {}')],
+    ['a tag with a comment', (m: LikeC4Mutator) => m.addTag('hot // x')],
+    ['a tag with a line comment and more', (m: LikeC4Mutator) => m.addTag('x // c')],
+  ] as const)('rejects %s on name', (_, write) => {
+    const mutator = LikeC4Mutator.fromFiles({ 'm.c4': SPEC + MODEL });
+    expectRejected(mutator, () => write(mutator), 'name');
+  });
+});
+
+describe('an edit the file would not parse after (row 113)', () => {
+  // The only specification is in a file with a stray closing brace.
+  const BROKEN: Files = { 'm.c4': `${SPEC}${MODEL}}\n` };
+  it.each([
+    ['addKind', (m: LikeC4Mutator) => m.addKind('element', 'fresh')],
+    ['updateKind', (m: LikeC4Mutator) => m.updateKind('element', 'system', { title: 'X' })],
+    ['addTag', (m: LikeC4Mutator) => m.addTag('fresh')],
+  ] as const)('refuses %s on name', (_, write) => {
+    const mutator = LikeC4Mutator.fromFiles(BROKEN);
+    // P: the loaded file does not parse.
+    expect(mutator.validate().length).toBeGreaterThan(0);
+    expectRejected(mutator, () => write(mutator), 'name');
+  });
+});
+
+describe('what updateKind writes (row 110)', () => {
+  const KIND = `specification {
+  element service {
+    #core
+    title 'Old title'
+    summary 'Old summary'
+    technology 'Node'
+    link https://example.com/old 'Old'
+    notation 'A service'
+    style {
+      shape rectangle
+    }
+  }
+  relationship uses
+  deploymentNode pod {
+    title 'Old pod'
+  }
+  tag core
+  tag edge
+}
+model {
+  a = service
+}
+deployment {
+  pod p
+}
+`;
+  /** The declaration of the element kind in `text`. */
+  const serviceKind = (text: string): string => text.slice(text.indexOf('  element service {'), text.indexOf('  relationship uses'));
+
+  it('replaces each element kind string once, removes summary and replaces tags and links', SLOW, async () => {
+    const before: Files = { 'm.c4': KIND };
+    await expectValidLikeC4(before);
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.updateKind('element', 'service', {
+      title: 'New title',
+      summary: null,
+      description: 'New description',
+      tags: ['edge'],
+      links: [{ url: 'https://example.com/new' }],
+    });
+    const after = mutator.serialize();
+    const block = serviceKind(after['m.c4']!);
+    expect(block.split("title 'New title'").length - 1).toBe(1);
+    expect(block).not.toContain('Old title');
+    expect(block).not.toContain('summary');
+    expect(block.split("description 'New description'").length - 1).toBe(1);
+    expect(block).toContain('#edge');
+    expect(block).not.toContain('#core');
+    expect(block).toContain('link https://example.com/new\n');
+    expect(block).not.toContain('https://example.com/old');
+    expect(block).toContain("    technology 'Node'\n    ");
+    expect(block).toContain("    notation 'A service'\n    style {\n      shape rectangle\n    }\n");
+    await expectAcceptedWrite(before, after);
+    await expectReadsAgree(after);
+  });
+
+  it('replaces a deployment node kind title in place', SLOW, async () => {
+    const before: Files = { 'm.c4': KIND };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.updateKind('deploymentNode', 'pod', { title: 'Pod' });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(KIND, [["    title 'Old pod'\n", "    title 'Pod'\n"]]));
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('writes several tags on one line', SLOW, async () => {
+    const before: Files = { 'm.c4': KIND };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.updateKind('element', 'service', { tags: ['core', 'edge'] });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(KIND, [['    #core\n', '    #core #edge\n']]));
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('removes the tags line with tags: [] and leaves no blank line', SLOW, async () => {
+    const before: Files = { 'm.c4': KIND };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.updateKind('element', 'service', { tags: [] });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(KIND, [['    #core\n', '']]));
+    await expectAcceptedWrite(before, after);
+  });
+
+  it('gives a kind without a body one with tags and links', SLOW, async () => {
+    const before: Files = { 'm.c4': KIND };
+    const mutator = LikeC4Mutator.fromFiles(before);
+    mutator.updateKind('relationship', 'uses', { tags: ['core'], links: [{ url: 'https://example.com/uses', label: 'Uses' }] });
+    const after = mutator.serialize();
+    expect(after['m.c4']).toBe(replaced(KIND, [['  relationship uses\n', "  relationship uses {\n    #core\n    link https://example.com/uses 'Uses'\n  }\n"]]));
+    await expectAcceptedWrite(before, after);
   });
 });
