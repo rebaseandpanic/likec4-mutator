@@ -415,7 +415,9 @@ const VM_NODES = (a: string, b: string): Files => ({
 });
 const REL_ELEMENT = (a: string, b: string): Files => ({
   'spec.c4': `specification {\n  element sys\n  element ${b}\n  relationship ${a}\n}\n`,
-  'model.c4': `model {\n  web = sys 'Web'\n  m = ${b} 'M'\n  web -[${a}]-> m 'calls'\n}\nviews {\n  view ev {\n    include element.kind = ${b}, * -> * where kind is ${a}\n  }\n}\n`,
+  'model.c4':
+    `model {\n  web = sys 'Web'\n  m = ${b} 'M'\n  web -[${a}]-> m 'calls'\n}\nviews {\n  view ev {\n    include element.kind = ${b}, * -> * where kind is ${a}\n` +
+    `    include * where kind is ${b}\n  }\n}\n`,
 });
 const ELEMENT_REL = (a: string, b: string): Files => REL_ELEMENT(b, a);
 const TAG_KIND = (a: string, b: string): Files => ({
@@ -473,6 +475,24 @@ describe('a rename leaves a same-spelled name of another type (row 119)', SLOW, 
     await expectAcceptedWrite(before, after);
     await expectRenamedInModel(before, after, c.type, 'x', 'y');
     await c.check(m, after);
+  });
+});
+
+describe('a relationship kind never takes a shared condition (row 119)', SLOW, () => {
+  // `where kind is x` names element and deployment node kinds only (FR-002): the element kind `x` here.
+  const files = (relationship: boolean): Files => ({
+    'spec.c4': `specification {\n  element sys\n  element x\n${relationship ? '  relationship x\n' : ''}}\n`,
+    'model.c4': "model {\n  web = sys 'Web'\n  m = x 'M'\n}\nviews {\n  view ev {\n    include * where kind is x\n  }\n}\n",
+  });
+
+  it('removes an unused relationship kind beside an element kind of that name used in a condition', async () => {
+    const before = files(true);
+    const m = LikeC4Mutator.fromFiles(before);
+    m.removeKind('relationship', 'x');
+    const after = m.serialize();
+    expect(after).toEqual(files(false));
+    await expectAcceptedWrite(before, after);
+    await expectAgreesWithLikeC4(after, 'm', m.getElement('m')!);
   });
 });
 
