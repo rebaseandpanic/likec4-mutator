@@ -128,9 +128,9 @@ mutator.updateRelationship(
 );
 
 // Remove
-mutator.removeRelationship('app.api', 'app.db');
+mutator.removeRelationship('app.api', 'app.db'); // => { changedFiles }
 mutator.removeElement('app.db'); // rejected while other constructs refer to it — see "Removing referenced elements"
-mutator.removeElement('app.db', { cascade: true }); // removes the referring view items, steps and instances too
+// or: mutator.removeElement('app.db', { cascade: true }); // removes the referring view items, steps and instances too
 
 // Rename (=> { fqn, changedFiles }); every reference to the element and its subtree is rewritten — see "Renaming elements"
 mutator.renameElement('app.api', 'gateway');
@@ -235,7 +235,7 @@ likec4-mutator remove-element --dir ./c4 --fqn app.api --output ./out
 
 ### remove-relationship
 
-Remove a relationship matched by source and target FQN (searched across all files), together with `extend a -> b` blocks that applied only to it.
+Remove a relationship matched by source and target FQN (searched across all files), together with `extend a -> b` blocks that applied only to it. When several relationships match, the command fails listing them; select one with the selector fields of the `apply` op [removeRelationship](#removerelationship) (`matchKind`, `matchTitle`, `matchBidirectional`, `position`).
 
 ```bash
 likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db --output ./out
@@ -531,7 +531,7 @@ The whole file is checked before any file is touched: unknown fields (also insid
 
 #### Deployment operations
 
-Every deployment write of the library is an op with the same fields as its options (see [Writing](#writing) for what each write does and rejects). The arguments the library takes before its options are fields too:
+Every deployment write of the library is an op with the same fields as its options (see [Deployment model › Writing](#writing-2) for what each write does and rejects). The arguments the library takes before its options are fields too:
 
 | Op | Fields besides the library options | Library call |
 |---|---|---|
@@ -703,6 +703,7 @@ try {
 - **`source`, `target`** — the absolute FQNs, else the reference text as written. A bidirectional relationship matches them in either order.
 - **`matchKind`** — the kind as written (`-[kind]->` or `.kind`); **`matchTitle`** — the inline title as written, not the kind's title; **`matchBidirectional`** — `true` for `<->` relationships only, `false` for one-way ones only.
 - **`position`** — `{ file, line, column }`, 1-based: where the relationship's declaration starts. It tells apart relationships no other field does.
+- **Result.** Both return `{ changedFiles }`: the files whose text changed, in load order — for `removeRelationship` the file of the declaration and the files of the `extend a -> b` blocks removed with it. The changes are in memory; `serialize()` gives the texts.
 - **Outcome.** No match is an `InvalidWriteError` on `position` when one was given, else on `source`. More than one match is a `RelationshipAmbiguityError` (an `InvalidWriteError`) on `source`. Its `candidates` list every match in LikeC4's document order, then source order. Passing one candidate's position back, with the same other fields, selects it.
 
 Deployment relationships have their own selector (see [Updating deployment relationships](#updating-deployment-relationships)).
@@ -1018,7 +1019,7 @@ The `deployment { ... }` part of the model is read and written through workspace
 
 Every write is also an `apply` operation with the same fields — see [Deployment operations](#deployment-operations).
 
-**Where new text goes.** A child node and an instance go into the body of their parent's declaration; `file` is not accepted for them. A root node, a relationship and an `extend` block go into a `deployment` block, and there the explicit `file` decides: the first `deployment` block of that file, else a new block at its end (the file must be loaded; no file is created). Without `file` — not allowed for `addDeploymentExtend` — the first `deployment` block of the first file in LikeC4's document order that has one; else a new block at the end of the first file with a `model` block; else of the first file. Details per write under [Writing](#writing).
+**Where new text goes.** A child node and an instance go into the body of their parent's declaration; `file` is not accepted for them. A root node, a relationship and an `extend` block go into a `deployment` block, and there the explicit `file` decides: the first `deployment` block of that file, else a new block at its end (the file must be loaded; no file is created). Without `file` — not allowed for `addDeploymentExtend` — the first `deployment` block of the first file in LikeC4's document order that has one; else a new block at the end of the first file with a `model` block; else of the first file. Details per write under [Writing](#writing-2).
 
 ### Reading
 
