@@ -822,11 +822,11 @@ mutator.removeTag('legacy');
 - the kind token of an element or deployment node declaration (`api = vm 'API'`, `vm api 'API'`);
 - the kind of a relationship connector (`-[calls]->`, `-[calls]<->`, `.calls`) of a model, deployment or `extend` relationship, a dynamic step or a relation predicate;
 - every tags list (`#hot`): of elements, relationships, deployment nodes, instances and deployment relationships, views, `extend` blocks and kind defaults;
-- the expressions `element.kind`, `element.tag`, `where … kind is`, `where … tag is`, relation `where` kind and tag conditions, participant kind and tag conditions (`source.kind is vm`) — negated forms (`!=`, `is not`, `not (…)`) included — in include and exclude rules, style rule targets and `rank` targets.
+- the expressions `element.kind`, `element.tag`, `where … kind is`, `where … tag is`, relation `where` kind and tag conditions, participant kind and tag conditions (`source.kind is vm`) — negated forms (`!=`, `!==`, `is not`, `not (…)`) included — in include and exclude rules, style rule targets and `rank` targets.
 
 Each place has a type: an element kind, a deployment node kind, a relationship kind or a tag. `where … kind is` and participant kind conditions name element kinds and deployment node kinds at once (LikeC4 matches them by name against both). A rename rewrites the places of the kind's own type and, for an element or deployment node kind, these shared conditions; they never name a relationship kind. A same-spelled name of another type (a tag `x` beside a kind `x`, an element kind `vm` beside a deployment node kind `vm`) is untouched, and so is text inside string and markdown values. A tag keeps its color block; each changed file is written once.
 
-**Element and deployment node kinds with one name.** When the old or the new name is also a kind of the other of these two types, LikeC4 would match a shared condition against both. Neither rewriting it nor keeping it preserves what it selects, so the rename is rejected while such a condition names the old or the new name. `related` lists the conditions (`construct: 'where-condition'`). The field is `name` when the old name is the other type's, else `newName`. Without such a condition the rename is accepted.
+**Element and deployment node kinds with one name.** When the old or the new name is also a kind of the other of these two types, LikeC4 would match a shared condition against both. Neither rewriting it nor keeping it preserves what it selects, so the rename is rejected while such a condition names the old or the new name. `related` lists the conditions (`construct: 'where-condition'`). The field is `name` when the old name is the other type's, else `newName`. A kind condition written where the library does not resolve references — a `global` block, an import, a dynamic view's flow block other than `par`, unparsed text — that names the new name while the new name is the other type's rejects the rename on `newName` the same way, without `related`. Without such a condition the rename is accepted.
 
 **Removal.** Only a kind or tag that no place names is removed. The emptied `specification { }` block stays. A used one is rejected with a `ReferencedRemovalError` on `name` whose `references` list every use, all with `cascadable: false`. The `role` of a use is its place name, `<construct>:<context>`:
 
@@ -847,7 +847,7 @@ For example, `connector:step` or `where-tag:predicate`. A name written where the
   - the shared-condition case above;
 - on `newName`:
   - a name the grammar does not accept for the declaration, or one already declared for the type;
-  - the shared-condition case above;
+  - the shared-condition case above, at a resolved place or at one the library does not resolve;
   - an edit that would not parse.
 
 A removal of an undeclared kind or tag is a plain `InvalidWriteError`, not a `ReferencedRemovalError`.
