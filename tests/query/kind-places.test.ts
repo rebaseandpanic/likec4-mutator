@@ -94,3 +94,19 @@ describe('negation by the != and !== operators (row 117)', () => {
     ]);
   });
 });
+
+describe('a kind on a later hop of a step chain (row 117)', () => {
+  const files = {
+    'm.c4':
+      "specification {\n  element x\n  relationship k\n}\nmodel {\n  a = x 'A'\n  b = x 'B'\n  c = x 'C'\n}\nviews {\n  dynamic view d {\n    a -> b -[k]-> c\n  }\n}\n",
+  };
+
+  it('lists the kind of the second hop as a step connector, as LikeC4 links it', async () => {
+    const linked = (await linkedKindReferences(files)).filter((reference) => !reference.unmodelled && reference.place.construct !== 'declaration');
+    // P: LikeC4 links the k of the second hop as a step connector.
+    expect(linked.map((reference) => [reference.text, placeName(reference)])).toEqual([['k', 'connector:step']]);
+    const expected = linked.map((reference) => JSON.stringify([reference.file, reference.offset, reference.text, reference.kindType, placeName(reference)]));
+    const places = kindPlaces([{ file: 'm.c4', parsed: new C4Parser().parse(files['m.c4']) }]).filter((place) => !place.role.startsWith('declaration'));
+    expect(places.map((place) => JSON.stringify([place.file, place.offset, place.text, place.kindType, place.role]))).toEqual(expected);
+  });
+});
