@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1] - 2026-10-19
+
+The first published release of the 0.11.0 changes below: the 0.11.0 tag was created, but its release run stopped on a test timeout before publishing to npm. No library or CLI change.
+
+### Fixed
+- A CLI test that runs two `apply` subprocesses and the LikeC4 check per case now has the longer timeout the other CLI tests use.
+
 ## [0.11.0] - 2026-10-19
 
 References, placement and the specification (lc4m-15.30): one reference policy for every removal, element rename and move, file choice for every creating write, kind and tag writes, relationship kinds, direction and nesting, a relationship selector, `extend` block creation and style reads. See [Placement and file choice](README.md#placement-and-file-choice), [Reference policy](README.md#reference-policy), [Renaming elements](README.md#renaming-elements), [Moving elements](README.md#moving-elements), [Specification defaults](README.md#specification-defaults), [Relationship forms and placement](README.md#relationship-forms-and-placement), [Selecting a relationship](README.md#selecting-a-relationship) and [Reading styles](README.md#reading-styles) in the README.
