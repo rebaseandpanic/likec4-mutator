@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.11.0] - 2026-10-18
+## [0.11.0] - 2026-10-19
 
 References, placement and the specification (lc4m-15.30): one reference policy for every removal, element rename and move, file choice for every creating write, kind and tag writes, relationship kinds, direction and nesting, a relationship selector, `extend` block creation and style reads. See [Placement and file choice](README.md#placement-and-file-choice), [Reference policy](README.md#reference-policy), [Renaming elements](README.md#renaming-elements), [Moving elements](README.md#moving-elements), [Specification defaults](README.md#specification-defaults), [Relationship forms and placement](README.md#relationship-forms-and-placement), [Selecting a relationship](README.md#selecting-a-relationship) and [Reading styles](README.md#reading-styles) in the README.
 
