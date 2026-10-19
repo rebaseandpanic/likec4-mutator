@@ -18,6 +18,8 @@ import { describe, expect, it } from 'vitest';
 import { expectAcceptedWrite, expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
+// Two CLI subprocesses and the LikeC4 oracle per case; the 10 s default is too short on CI runners.
+const SLOW = { timeout: 120_000 };
 
 const MODEL = `specification {
   element service
@@ -64,7 +66,7 @@ function printedPositions(text: string): Array<{ file: string; line: number; col
 
 const SHIFT = { op: 'addElement', parent: 'p', kind: 'service', id: 'c', title: 'C' };
 
-describe('apply round trip of an ambiguity (row 140, D102, D106)', () => {
+describe('apply round trip of an ambiguity (row 140, D102, D106)', SLOW, () => {
   it.each([0, 1, 2])('names mutations[1], prints positions after mutations[0], and candidate %i passed back selects it', async (index) => {
     // P: LikeC4 accepts the three identical relationships.
     await expectValidLikeC4({ 'model.c4': MODEL });
