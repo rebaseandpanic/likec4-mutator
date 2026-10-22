@@ -1,6 +1,6 @@
 # Spec: CLI parity with apply, semantic validation like `likec4 validate`, `.likec4` / `.like-c4` in the CLI
 
-**Date** 2026-10-22 · **Status** draft · **Task**: lc4m-15.31 (with lc4m-28) · **Affects**: likec4-mutator (library and CLI)
+**Date** 2026-10-22 · **Status** ready for planning (owner's round limit) · **Task**: lc4m-15.31 (with lc4m-28) · **Affects**: likec4-mutator (library and CLI)
 **Type**: feature · **Based on**: lc4m-15.30 spec (error contract D111–D114, write checks), the in-process validation oracle (`tests/helpers/likec4-model.ts`, audit of 35 samples against the `likec4` 1.59.4 CLI)
 
 ## Problem / Goal
