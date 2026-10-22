@@ -977,207 +977,303 @@ function optionalStatements(obj: JsonObject, path: string): void {
 const VIEW_TYPES: ReadonlyArray<AddViewMutation['type']> = ['element', 'dynamic', 'deployment'];
 
 /**
- * Every field each op accepts.  The lists are tied to the mutation interfaces
- * at compile time: `satisfies` rejects a name the interface does not have, and
- * {@link FieldsNotListed} rejects an interface field missing from its list.
+ * How the value of an operation field is given on the command line (one
+ * flag per field; US-1 of lc4m-15.31):
+ * - `string`: the flag's text, taken literally;
+ * - `nullableString`: as `string`, plus an `--unset-<field>` flag passing `null`;
+ * - `presenceBoolean`: a flag without a value, for a boolean that only matters when true;
+ * - `valueBoolean`: `true` or `false`, for a boolean whose `false` differs from its absence;
+ * - `number`: a number;
+ * - `tags`: the identifier list `tags` — a JSON array of strings, or a comma-separated list;
+ * - `json`: a JSON value (every other list, every object).
  */
-const MUTATION_FIELDS = {
-  addElement: [
-    'op',
-    'parent',
-    'kind',
-    'id',
-    'title',
-    'file',
-    'summary',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'style',
-    'metadata',
-  ],
-  updateElement: [
-    'op',
-    'fqn',
-    'title',
-    'summary',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'style',
-    'metadata',
-  ],
-  removeElement: ['op', 'fqn', 'cascade'],
-  renameElement: ['op', 'fqn', 'newName'],
-  moveElement: ['op', 'fqn', 'parent', 'file'],
-  addKind: ['op', 'type', 'name', 'file', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
-  updateKind: ['op', 'type', 'name', 'title', 'summary', 'description', 'technology', 'tags', 'links'],
-  addTag: ['op', 'name', 'file'],
-  renameKind: ['op', 'type', 'name', 'newName'],
-  removeKind: ['op', 'type', 'name'],
-  renameTag: ['op', 'name', 'newName'],
-  removeTag: ['op', 'name'],
-  addElementExtend: ['op', 'fqn', 'file', 'tags', 'links', 'metadata'],
-  addRelationshipExtend: [
-    'op',
-    'source',
-    'target',
-    'matchKind',
-    'matchTitle',
-    'matchBidirectional',
-    'position',
-    'file',
-    'tags',
-    'links',
-    'metadata',
-    'shared',
-  ],
-  addRelationship: [
-    'op',
-    'source',
-    'target',
-    'label',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'metadata',
-    'style',
-    'kind',
-    'kindForm',
-    'bidirectional',
-    'placement',
-    'file',
-    'shared',
-  ],
-  updateRelationship: [
-    'op',
-    'source',
-    'target',
-    'matchKind',
-    'matchTitle',
-    'matchBidirectional',
-    'position',
-    'label',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'metadata',
-    'style',
-  ],
-  removeRelationship: ['op', 'source', 'target', 'matchKind', 'matchTitle', 'matchBidirectional', 'position'],
-  addView: ['op', 'id', 'type', 'target', 'title', 'includes', 'autoLayout', 'description', 'extends', 'file'],
-  addDeploymentNode: [
-    'op',
-    'parent',
-    'name',
-    'kind',
-    'title',
-    'summary',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'style',
-    'metadata',
-    'file',
-  ],
-  updateDeploymentNode: [
-    'op',
-    'id',
-    'title',
-    'summary',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'style',
-    'metadata',
-  ],
-  removeDeploymentNode: ['op', 'id', 'cascade'],
-  addDeploymentInstance: [
-    'op',
-    'node',
-    'element',
-    'name',
-    'title',
-    'summary',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'style',
-    'metadata',
-  ],
-  updateDeploymentInstance: [
-    'op',
-    'id',
-    'title',
-    'summary',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'style',
-    'metadata',
-  ],
-  removeDeploymentInstance: ['op', 'id', 'cascade'],
-  addDeploymentRelationship: [
-    'op',
-    'source',
-    'target',
-    'kind',
-    'bidirectional',
-    'title',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'metadata',
-    'style',
-    'file',
-  ],
-  updateDeploymentRelationship: [
-    'op',
-    'source',
-    'target',
-    'matchKind',
-    'matchTitle',
-    'title',
-    'description',
-    'technology',
-    'tags',
-    'links',
-    'metadata',
-    'style',
-  ],
-  removeDeploymentRelationship: ['op', 'source', 'target', 'matchKind', 'matchTitle'],
-  addDeploymentExtend: ['op', 'node', 'file', 'tags', 'links', 'metadata'],
-  removeDeploymentExtend: ['op', 'node', 'file', 'occurrence'],
-  updateView: ['op', 'id', 'title', 'description', 'tags', 'links', 'autoLayout'],
-  addViewRule: ['op', 'id', 'rule', 'before'],
-  replaceViewRule: ['op', 'id', 'address', 'rule'],
-  removeViewRule: ['op', 'id', 'address'],
-  removeView: ['op', 'id', 'cascade'],
-  addViewStep: ['op', 'id', 'step', 'path'],
-  updateViewStep: ['op', 'id', 'address', 'patch'],
-  moveViewStep: ['op', 'id', 'from', 'to'],
-  removeViewStep: ['op', 'id', 'address'],
-  addViewParallel: ['op', 'id', 'path', 'statements', 'steps'],
-} as const satisfies { [Op in Mutation['op']]: ReadonlyArray<keyof Extract<Mutation, { op: Op }>> };
+export type FieldKind = 'string' | 'nullableString' | 'presenceBoolean' | 'valueBoolean' | 'number' | 'tags' | 'json';
 
-/** Interface fields absent from {@link MUTATION_FIELDS}; must be `never`. */
-type FieldsNotListed = {
-  [Op in Mutation['op']]: Exclude<
-    keyof Extract<Mutation, { op: Op }>,
-    (typeof MUTATION_FIELDS)[Op][number]
-  >;
-}[Mutation['op']];
-type AssertNever<T extends never> = T;
-type MutationFieldsAreExhaustive = AssertNever<FieldsNotListed>;
+/** A field of an operation: its value kind, and `required` when the operation cannot omit it. */
+export interface FieldSpec {
+  readonly kind: FieldKind;
+  readonly required?: true;
+}
+
+/**
+ * The kinds compatible with a field named `K` of type `T` (`undefined`
+ * removed).  A relation, not a function of the type: both boolean kinds fit a
+ * boolean, and `tags` fits only the `string[]` field named `tags` — every
+ * other array, `includes` among them, and every object is `json`.
+ */
+type KindsFor<K, T> = [T] extends [string]
+  ? 'string'
+  : [T] extends [string | null]
+    ? 'nullableString'
+    : [T] extends [boolean]
+      ? 'presenceBoolean' | 'valueBoolean'
+      : [T] extends [number]
+        ? 'number'
+        : K extends 'tags'
+          ? [T] extends [string[]]
+            ? [string[]] extends [T]
+              ? 'tags'
+              : never
+            : never
+          : [T] extends [object]
+            ? 'json'
+            : never;
+
+/** The spec a field `K` of mutation `M` must have: a compatible kind, `required` exactly when `M` requires `K`. */
+type FieldSpecFor<M, K extends keyof M> = { readonly kind: KindsFor<K, Exclude<M[K], undefined>> } & ({} extends Pick<M, K>
+  ? { readonly required?: never }
+  : { readonly required: true });
+
+/** Every field but `op` of every operation, each with a spec fitting its type in the mutation interface. */
+type OperationFieldTable = {
+  readonly [Op in Mutation['op']]: {
+    readonly [K in Exclude<keyof Extract<Mutation, { op: Op }>, 'op'>]-?: FieldSpecFor<Extract<Mutation, { op: Op }>, K>;
+  };
+};
+
+const str = { kind: 'string' } as const;
+const reqStr = { kind: 'string', required: true } as const;
+const nullStr = { kind: 'nullableString' } as const;
+const reqNullStr = { kind: 'nullableString', required: true } as const;
+const presence = { kind: 'presenceBoolean' } as const;
+const valueBool = { kind: 'valueBoolean' } as const;
+const num = { kind: 'number' } as const;
+const tagList = { kind: 'tags' } as const;
+const json = { kind: 'json' } as const;
+const reqJson = { kind: 'json', required: true } as const;
+
+/**
+ * The fields of each operation, `op` aside, in the order `apply` lists them,
+ * with their value kinds — the single source of the fields of `apply` and of
+ * the operation commands.  The table is tied to the mutation interfaces at
+ * compile time: a field missing from it or unknown to the interface, a kind
+ * incompatible with the field's type (see {@link KindsFor}) and a `required`
+ * mark that differs from the interface do not compile.
+ */
+export const MUTATION_FIELDS = {
+  addElement: {
+    parent: str,
+    kind: reqStr,
+    id: reqStr,
+    title: str,
+    file: str,
+    summary: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    style: json,
+    metadata: json,
+  },
+  updateElement: {
+    fqn: reqStr,
+    title: str,
+    summary: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    style: json,
+    metadata: json,
+  },
+  removeElement: { fqn: reqStr, cascade: presence },
+  renameElement: { fqn: reqStr, newName: reqStr },
+  moveElement: { fqn: reqStr, parent: reqNullStr, file: str },
+  addKind: {
+    type: reqStr,
+    name: reqStr,
+    file: str,
+    title: str,
+    summary: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+  },
+  updateKind: {
+    type: reqStr,
+    name: reqStr,
+    title: nullStr,
+    summary: nullStr,
+    description: nullStr,
+    technology: nullStr,
+    tags: tagList,
+    links: json,
+  },
+  addTag: { name: reqStr, file: str },
+  renameKind: { type: reqStr, name: reqStr, newName: reqStr },
+  removeKind: { type: reqStr, name: reqStr },
+  renameTag: { name: reqStr, newName: reqStr },
+  removeTag: { name: reqStr },
+  addElementExtend: { fqn: reqStr, file: reqStr, tags: tagList, links: json, metadata: json },
+  addRelationshipExtend: {
+    source: reqStr,
+    target: reqStr,
+    matchKind: str,
+    matchTitle: str,
+    matchBidirectional: valueBool,
+    position: json,
+    file: reqStr,
+    tags: tagList,
+    links: json,
+    metadata: json,
+    shared: presence,
+  },
+  addRelationship: {
+    source: reqStr,
+    target: reqStr,
+    label: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    metadata: json,
+    style: json,
+    kind: str,
+    kindForm: str,
+    bidirectional: presence,
+    placement: str,
+    file: str,
+    shared: presence,
+  },
+  updateRelationship: {
+    source: reqStr,
+    target: reqStr,
+    matchKind: str,
+    matchTitle: str,
+    matchBidirectional: valueBool,
+    position: json,
+    label: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    metadata: json,
+    style: json,
+  },
+  removeRelationship: {
+    source: reqStr,
+    target: reqStr,
+    matchKind: str,
+    matchTitle: str,
+    matchBidirectional: valueBool,
+    position: json,
+  },
+  addView: {
+    id: reqStr,
+    type: reqStr,
+    target: str,
+    title: str,
+    includes: json,
+    autoLayout: nullStr,
+    description: str,
+    extends: str,
+    file: str,
+  },
+  addDeploymentNode: {
+    parent: str,
+    name: reqStr,
+    kind: reqStr,
+    title: str,
+    summary: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    style: json,
+    metadata: json,
+    file: str,
+  },
+  updateDeploymentNode: {
+    id: reqStr,
+    title: str,
+    summary: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    style: json,
+    metadata: json,
+  },
+  removeDeploymentNode: { id: reqStr, cascade: presence },
+  addDeploymentInstance: {
+    node: reqStr,
+    element: reqStr,
+    name: str,
+    title: str,
+    summary: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    style: json,
+    metadata: json,
+  },
+  updateDeploymentInstance: {
+    id: reqStr,
+    title: str,
+    summary: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    style: json,
+    metadata: json,
+  },
+  removeDeploymentInstance: { id: reqStr, cascade: presence },
+  addDeploymentRelationship: {
+    source: reqJson,
+    target: reqJson,
+    kind: str,
+    bidirectional: presence,
+    title: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    metadata: json,
+    style: json,
+    file: str,
+  },
+  updateDeploymentRelationship: {
+    source: reqJson,
+    target: reqJson,
+    matchKind: str,
+    matchTitle: str,
+    title: str,
+    description: str,
+    technology: str,
+    tags: tagList,
+    links: json,
+    metadata: json,
+    style: json,
+  },
+  removeDeploymentRelationship: { source: reqJson, target: reqJson, matchKind: str, matchTitle: str },
+  addDeploymentExtend: { node: reqStr, file: reqStr, tags: tagList, links: json, metadata: json },
+  removeDeploymentExtend: { node: reqStr, file: reqStr, occurrence: num },
+  updateView: {
+    id: reqStr,
+    title: nullStr,
+    description: nullStr,
+    tags: tagList,
+    links: json,
+    autoLayout: nullStr,
+  },
+  addViewRule: { id: reqStr, rule: reqJson, before: json },
+  replaceViewRule: { id: reqStr, address: reqJson, rule: reqJson },
+  removeViewRule: { id: reqStr, address: reqJson },
+  removeView: { id: reqStr, cascade: presence },
+  addViewStep: { id: reqStr, step: reqJson, path: json },
+  updateViewStep: { id: reqStr, address: reqJson, patch: reqJson },
+  moveViewStep: { id: reqStr, from: reqJson, to: reqJson },
+  removeViewStep: { id: reqStr, address: reqJson },
+  addViewParallel: { id: reqStr, path: json, statements: json, steps: json },
+} as const satisfies OperationFieldTable;
+
+/** The names `apply` accepts in a mutation of `op`: `op` and the operation's fields. */
+function acceptedFields(op: Mutation['op']): string[] {
+  return ['op', ...Object.keys(MUTATION_FIELDS[op])];
+}
 
 const MUTATIONS_FILE_FIELDS = ['mutations'] as const satisfies ReadonlyArray<keyof MutationsFile>;
 
@@ -1207,8 +1303,14 @@ export function deploymentRelationshipSelector(
   };
 }
 
-function validateMutation(m: JsonObject, path: string): void {
-  if (isKnownOp(m.op)) rejectUnknownFields(m, MUTATION_FIELDS[m.op], path, `op '${m.op}'`);
+/**
+ * Validate one mutation object: its fields and their shapes, unknown fields,
+ * and the value checks that need no loaded files.  A violation is a
+ * {@link MutationsFileError} whose path starts with `path` (`mutations[2]` in
+ * the `apply` file), e.g. `mutations[2].links[0].url`.
+ */
+export function validateMutation(m: JsonObject, path: string): void {
+  if (isKnownOp(m.op)) rejectUnknownFields(m, acceptedFields(m.op), path, `op '${m.op}'`);
   switch (m.op) {
     case 'addElement':
       for (const key of ['kind', 'id']) requireString(m, key, path);
