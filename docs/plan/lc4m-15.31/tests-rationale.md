@@ -7,9 +7,9 @@ Matrix: `tests-v4.md`. v4 follows test-plan critique round 1 and the spec/plan r
 | Test file | Rows | Waits for code | Projection |
 |---|---|---|---|
 | `tests/cli/cli-apply-views.test.ts` | 1 | T002 | embedded in T002 (existing file, new row; no helper needed) |
-| `tests/cli/cli-program.test.ts` | 2–7 | T003 | rows 2–3 need `tests/helpers/likec4-model.ts` (T004, before T003 by D161) → embedded in T003 |
+| `tests/cli/cli-program.test.ts` | 2, 3, 5–7 | T003 | row 4 moved to T007 (needs optional `--parent`/`--title`, completeness critic); rows 2–3 need `tests/helpers/likec4-model.ts` (T004, before T003 by D161) → embedded in T003 |
 | `tests/cli/cli-operation-commands.test.ts` | 8–16 | T005, T006 | two tasks → test task after T006 |
-| `tests/cli/cli-standalone-commands.test.ts` | 17–26 | T007 | embedded in T007 |
+| `tests/cli/cli-standalone-commands.test.ts` | 4, 17–26 | T007 | embedded in T007 |
 | `tests/cli/cli-read-commands.test.ts` | 27–31 | T008 | embedded in T008 |
 | `tests/likec4-validate-oracle.test.ts` | 32–38 | T009 | embedded in T009 |
 | `tests/cli/cli-validate.test.ts` | 39–43 | T010 | embedded in T010 |
