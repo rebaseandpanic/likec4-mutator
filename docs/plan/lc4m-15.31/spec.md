@@ -67,7 +67,7 @@ The README states the policy (every operation has a command; `apply` remains the
 A new asynchronous method (`validateModel`, with an option to skip the view step) reports what `likec4 validate` 1.59.4 reports for the loaded files (D139, D140, D150):
 - every diagnostic LikeC4's language services give error severity, as a **located record**: file name as loaded, 1-based line, 1-based column (from the diagnostic's range start), message;
 - an exception escaping the computation and layout of views, as an **unlocated record**: the exception's message only — no file or line is invented (D152);
-- a view LikeC4 fails to lay out without failing the whole step is logged by LikeC4 and is **not** an error, as for the reference; that log does not reach the CLI's stdout or stderr; manual-layout drift cannot occur because manual layouts are not read (D150).
+- a view LikeC4 fails to lay out without failing the whole step is logged by LikeC4 and is **not** an error, as for the reference; that log — and any other console output LikeC4's code writes during the check (for example the sequence layout's warning about nested actors) — does not reach the CLI's stdout or stderr (D165); manual-layout drift cannot occur because manual layouts are not read (D150).
 Warnings are not errors. Each record says whether it comes from the language services or from view computation. An option skips the view computation and layout step; then only language-service diagnostics are reported.
 - The method checks the sources as they are when it is called; mutations made while it runs do not change that result; concurrent calls on one instance and calls on separate instances are independent (D153).
 - A failure to run the check itself (the language services cannot be built) rejects the call; it is not a validation record.
@@ -198,6 +198,7 @@ None.
 ## Changelog
 - 2026-10-23 · INV-6 gains exception (5): rejections of `remove-element` / `remove-relationship` name the flag like every other command (found while planning: today they print the library message); the method and flag names `validateModel` / `--no-layout` are fixed (US-5, US-6) · why: the plan author found both unnamed · redo below: plan (already written with them), test plan.
 
+- 2026-10-23 · US-5: console output written by LikeC4's code during the check (not only the per-view layout log) stays off the CLI's stdout and stderr (D165) · why: the test-plan author found a real input (a sequence view with a nested actor) where LikeC4's layout code prints a warning with `console.error` · redo below: plan T004, test plan.
 - 2026-10-23 · INV-6 exception (5) widened to every rejection of the existing commands carrying `apply`'s field path (`--tags[1]:`); US-6 `--json` stderr stated; SC-005 drops the untestable brace-balance clause and names the untestable D152 case · why: the test-plan author found them (stage 4) · redo below: plan T007/T014 wording, test plan.
 
 ## Known residuals
