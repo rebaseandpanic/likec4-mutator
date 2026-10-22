@@ -126,7 +126,7 @@ No solo groups.
 
 ## Known residuals
 
-- P5 (uniform rejection wording of `remove-element` / `remove-relationship`) changes stderr text of two existing commands that the spec's INV-6 exception list does not name; the plan lists it in CHANGELOG Changed · class: spec gap · carrier: plan critique.
+- P5 (uniform rejection wording of `remove-element` / `remove-relationship`): resolved upstream — spec INV-6 exception (5), D159 (spec Changelog 2026-10-23); CHANGELOG Changed by T014.
 - P8: the check's project-folder parameter is used today only by the test oracle (FOR-PLAN); lc4m-15.32 (project configuration) is its product consumer · class: test-guideline tension (§5 "access opened only for a test") · carrier: plan critique.
 - RES-spec-1 (D156 `tags` rule for the five existing commands): honoured by T005 (one decoder for every command) and T007 (gate: D156 cases on an existing command; INV-6 exception 4), CHANGELOG T014 · carrier: plan critique.
 
