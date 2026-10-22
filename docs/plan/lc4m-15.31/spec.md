@@ -14,7 +14,7 @@ Goal: every library operation is usable from the CLI with the same fields and th
 **In:**
 - A single-purpose command for every `apply` operation, with every field of that operation (US-1, US-2).
 - Read commands for the library's public model reads (US-3).
-- One documented table of operations and commands and one of read commands; a test that the tables, the command set, the `apply` operation set and the read-method set agree (US-4).
+- One documented table of operations and commands and one of read commands; the command set agrees with the `apply` operation set and the read-method set by construction, and the README tables are checked against them in review (US-4, D166).
 - An asynchronous semantic validation method in the library (US-5) and a CLI `validate` built on it (US-6).
 - Loading and writing `.c4`, `.likec4` and `.like-c4` files in every CLI command (US-7).
 - Numeric positions for a syntax error at the end of a file in `validate()` (US-8, lc4m-28).
@@ -60,8 +60,8 @@ Each public model read of the library (methods of the mutator; `serialize` and t
 - **Acceptance:** Given a model, a read command with `--json` prints JSON that parses to the value the library method returns for the same arguments; the exit-code rules above hold.
 
 ### US-4 — Tables of operations and read commands (P2)
-The README states the policy (every operation has a command; `apply` remains the way to run several operations atomically) and two tables: every `apply` operation with its command, and every read command with its library method. One rule (D151): every `apply` operation has exactly one command; every command other than the read commands, `validate` and `apply` maps to exactly one operation; every read command mode maps to one public read method of the mutator, and every such method has one — `get-element` has two modes (`getElement`, and `getElementSource` with `--source`); `serialize` is excluded. A test fails when the operation table, the read table, the command set, the operation set or the read-method set disagree.
-- **Acceptance:** adding an `apply` operation without its command, removing a table row, or adding a command missing from the tables turns the test red.
+The README states the policy (every operation has a command; `apply` remains the way to run several operations atomically) and two tables: every `apply` operation with its command, and every read command with its library method. One rule (D151): every `apply` operation has exactly one command; every command other than the read commands, `validate` and `apply` maps to exactly one operation; every read command mode maps to one public read method of the mutator, and every such method has one — `get-element` has two modes (`getElement`, and `getElementSource` with `--source`); `serialize` is excluded. The command set is derived from the operation and read tables of the code, so a missing command fails the build or a behavioural command test; the README tables are checked against the operation and read tables in code review (the task's acceptance allows "a test or the review"), because a test reading the README is a source-reading check the project's testing canon does not authorise (D166).
+- **Acceptance:** an `apply` operation without its command, or a read method without its command mode, fails the build or a command test; the README tables match the code tables at review.
 
 ### US-5 — Semantic validation in the library (P1)
 A new asynchronous method (`validateModel`, with an option to skip the view step) reports what `likec4 validate` 1.59.4 reports for the loaded files (D139, D140, D150):
@@ -93,7 +93,7 @@ The library's `validate()` reports a syntax error whose token carries no positio
 ### Load-bearing decisions
 | Id | Decision | Why | Rejected |
 |---|---|---|---|
-| D135 | A command per `apply` operation, derived from the operation's field table | parity by construction; a new operation cannot miss its command (US-4 test) | hand-written commands for a subset + apply-only list; one generic `op` command |
+| D135 | A command per `apply` operation, derived from the operation's field table | parity by construction; a new operation cannot miss its command (US-4) | hand-written commands for a subset + apply-only list; one generic `op` command |
 | D136, D147, D156 | Lossless flag encoding: literal text, `--unset-<field>` for null, `true`/`false` value flags where false matters, `tags` as JSON array or today's comma parsing (empty = not given, `[]` = empty list), JSON for the rest; rejections carry `apply`'s detail with the flag path | every value the operations accept is expressible, existing invocations unchanged | JSON for every field (unusable for simple fields); a mini-syntax per type; empty value = empty list (changes today's `--tags ''`) |
 | D137 | The 5 existing commands keep names, flags and output; gain the missing fields and `--json`; flags the operation does not require become optional | no breaking change | renaming to the generated form; apply-style output for them |
 | D138, D148, D149 | A read command per public model read, flags = method parameters, `--json` = the method's value; missing address exit 1, empty specification exit 0; source through `get-element --source` | readers get the library's contract unchanged | one `query <what>` command; a separate source command |
@@ -103,7 +103,7 @@ The library's `validate()` reports a syntax error whose token carries no positio
 | D143, D154 | Extensions from LikeC4's metadata; directory walk unchanged; parity scoped to loaded files | follows LikeC4's extensions; no change to which directories are read until project configuration is supported | adopting LikeC4's directory skip now |
 | D145 | New write commands print every line `apply` prints for that operation (cascade lines included), or `<operation>: done`; every single-operation write command (not `apply`) has `--json`: stdout only `{"operation": <name>, "result": <value or null>}`; rejections on stderr only; in-place writing without `--output` | one machine form for every write, including methods that return nothing | the method's raw return value (undefined for void methods) |
 | D146 | CLI `validate` prints LikeC4's records only | the verdict equals `likec4 validate` | adding the library's own syntax lines to the CLI output |
-| D151 | One rule for the operation and read tables and their test | US-4 and SC-001 must not disagree | two wordings |
+| D151, D166 | One rule for the operation and read tables; held by construction and build/command tests, README tables checked at review | US-4 and SC-001 must not disagree; no README-reading test (testing canon) | two wordings; a test that reads README |
 | D153 | Validation checks the sources at call time; concurrent calls independent | an async method on a mutable object needs a defined snapshot | unspecified |
 | D155 | lc4m-28 is fixed in `validate()`'s own position output; the CLI uses LikeC4's records | the two channels are different sources | one shared formatter |
 
@@ -164,7 +164,7 @@ No persisted data. The validation record: origin (language services | view compu
 - Concurrency: the CLI is single-process; the library method follows D153.
 
 ## Success criteria
-- **SC-001** Every `apply` operation has exactly one command; every command other than the read commands, `validate` and `apply` maps to exactly one operation; every read command mode maps to one public read method of the mutator and every such method has one (`get-element` has two modes; `serialize` excluded); the US-4 test checks this against the README tables.
+- **SC-001** Every `apply` operation has exactly one command; every command other than the read commands, `validate` and `apply` maps to exactly one operation; every read command mode maps to one public read method of the mutator and every such method has one (`get-element` has two modes; `serialize` excluded); held by construction and command tests; the README tables are checked at review (D166).
 - **SC-002** For each write command, a CLI test shows success (files equal the `apply` result for the same fields and pass `expectValidLikeC4`), a validation error (exit 1, nothing written, reason on stderr) and `--json` output (single-operation commands; `apply` unchanged); the encoding cases of US-1 and the `--tags` cases of D156 (`''` not given, `'[]'` empty list, a JSON array, a comma list) are covered.
 - **SC-003** The five existing commands accept every field of their operation; their existing flags and output behave as before (INV-6 exceptions aside, including exception 4 for `--tags`).
 - **SC-004** On the 35 oracle samples the semantic method's verdict and error locations equal the recorded `likec4` 1.59.4 output; warning-only samples report nothing.
@@ -193,11 +193,12 @@ None.
 4. Read commands.
 5. The LikeC4 check as product code; the semantic method; the oracle switched to it; CLI `validate`.
 6. File extensions in loading and writing; lc4m-28 positions.
-7. README tables and policy, the US-4 test, CHANGELOG, coverage rows, version.
+7. README tables and policy, CHANGELOG, coverage rows, version.
 
 ## Changelog
 - 2026-10-23 · INV-6 gains exception (5): rejections of `remove-element` / `remove-relationship` name the flag like every other command (found while planning: today they print the library message); the method and flag names `validateModel` / `--no-layout` are fixed (US-5, US-6) · why: the plan author found both unnamed · redo below: plan (already written with them), test plan.
 
+- 2026-10-23 · US-4 / SC-001: the README tables are checked at review, not by a test reading README (D166) · why: test-plan critic codex — such a test is a source-reading check the testing canon does not authorise; the task's acceptance allows "a test or the review" · redo below: plan T012, test plan row 35.
 - 2026-10-23 · US-5: console output written by LikeC4's code during the check (not only the per-view layout log) stays off the CLI's stdout and stderr (D165) · why: the test-plan author found a real input (a sequence view with a nested actor) where LikeC4's layout code prints a warning with `console.error` · redo below: plan T004, test plan.
 - 2026-10-23 · INV-6 exception (5) widened to every rejection of the existing commands carrying `apply`'s field path (`--tags[1]:`); US-6 `--json` stderr stated; SC-005 drops the untestable brace-balance clause and names the untestable D152 case · why: the test-plan author found them (stage 4) · redo below: plan T007/T014 wording, test plan.
 
