@@ -1055,6 +1055,19 @@ describe('row 14: the encoding keeps every value apply accepts', SLOW, () => {
     expect(trueFiles).not.toEqual(other.files);
   });
 
+  it("add-view-step --path '[0]' puts the step before the first top-level statement", async () => {
+    const step = { source: 'mailer', target: 'portal.worker', title: 'bounces' };
+    const { command } = await expectSameAsApply('flows', ['add-view-step', '--id', 'delivery', '--step', JSON.stringify(step), '--path', '[0]'], {
+      op: 'addViewStep', id: 'delivery', step, path: [0],
+    });
+    expect(command.code).toBe(0);
+    // `[i]` is the boundary before top-level statement i (D24); without a path the step would go last.
+    const flows = modelFiles('flows')['flows.c4']!;
+    const before = "    title 'Delivery'\n    portal.jobs -> portal.worker\n";
+    expect(flows.split(before)).toHaveLength(2);
+    expect(command.files['flows.c4']).toBe(flows.replace(before, "    title 'Delivery'\n    mailer -> portal.worker 'bounces'\n    portal.jobs -> portal.worker\n"));
+  });
+
   it.each([
     ['null', 'null'],
     ['', ''],
