@@ -26,8 +26,8 @@ export interface OperationCommandContext {
   io: CliIO;
   /** The description of `--dir` */
   dirDescription: string;
-  /** Wrap a handler returning an exit code into a commander action */
-  action: <A extends unknown[]>(handler: (...args: A) => number) => (...args: A) => void;
+  /** Wrap a handler returning an exit code (or its promise) into a commander action */
+  action: <A extends unknown[]>(handler: (...args: A) => number | Promise<number>) => (...args: A) => Promise<void>;
 }
 
 /** The interface a command kept from before the operation table. */

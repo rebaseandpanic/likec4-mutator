@@ -15,6 +15,7 @@ import { runOperation } from '../operations/run-operation.js';
 import { likec4FileExtensionList, loadDirectory, writeOutput } from './files.js';
 import { addOperationCommands } from './operation-commands.js';
 import { addReadCommands } from './read-commands.js';
+import { addValidateCommand } from './validate-command.js';
 
 /** A stream the program writes text to (`process.stdout`, or a test's collector). */
 export interface CliWriter {
@@ -44,11 +45,11 @@ export interface CliProgram {
 /** Build the program writing to `io`. */
 export function buildProgram(io: CliIO, options: BuildProgramOptions = {}): CliProgram {
   let exitCode = 0;
-  /** An action recording its handler's exit code. */
+  /** An action recording its handler's exit code; commander awaits it. */
   const action =
-    <A extends unknown[]>(handler: (...args: A) => number) =>
-    (...args: A): void => {
-      exitCode = handler(...args);
+    <A extends unknown[]>(handler: (...args: A) => number | Promise<number>) =>
+    async (...args: A): Promise<void> => {
+      exitCode = await handler(...args);
     };
   const extensions = likec4FileExtensionList();
   const dirDescription = `Directory containing LikeC4 files (${extensions})`;
@@ -68,33 +69,7 @@ export function buildProgram(io: CliIO, options: BuildProgramOptions = {}): CliP
   // validate
   // ---------------------------------------------------------------------------
 
-  program
-    .command('validate')
-    .description('Parse and validate all LikeC4 files in a directory')
-    .requiredOption('--dir <path>', dirDescription)
-    .action(action((opts: { dir: string }) => {
-      try {
-        const files = loadDirectory(opts.dir);
-        if (Object.keys(files).length === 0) {
-          io.stderr.write(`No LikeC4 files (${extensions}) found in ${opts.dir}\n`);
-          return 1;
-        }
-        const mutator = LikeC4Mutator.fromFiles(files);
-        const errors = mutator.validate();
-        if (errors.length === 0) {
-          io.stdout.write(`All files are valid (${Object.keys(files).length} file(s) checked)\n`);
-          return 0;
-        } else {
-          for (const err of errors) {
-            io.stderr.write(`${err}\n`);
-          }
-          return 1;
-        }
-      } catch (err) {
-        io.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-        return 1;
-      }
-    }));
+  addValidateCommand(program, { io, dirDescription, action });
 
   // ---------------------------------------------------------------------------
   // The read commands, from the read table
