@@ -1,7 +1,8 @@
 /**
  * The CLI program builder and its directory loader / writer (rows 2, 3, 5,
  * 6 and 7 of the lc4m-15.31 test matrix): the three LikeC4 file extensions
- * form one model, commander's own rejections exit 1 and write nothing, the
+ * form one model, commander's own rejections exit 1 and write nothing,
+ * `apply` rejects a mutation without a known op at its path, the
  * "no files found" failure names the extensions, and the output writer keeps
  * its path-traversal guard.
  *
@@ -138,6 +139,24 @@ describe("commander's own rejections exit 1 and write nothing (row 5)", SLOW, ()
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).not.toBe('');
+    expect(readDir(dir)).toEqual(MODEL);
+  });
+});
+
+describe('apply rejects a mutation without a known op at mutations[i].op', SLOW, () => {
+  const MODEL = { 'model.c4': 'specification {\n  element system\n}\nmodel {\n  app = system\n}\n' };
+
+  it.each([
+    { name: 'an unknown op', mutation: { op: 'noSuchOp' } },
+    { name: 'no op', mutation: { kind: 'system' } },
+  ])('$name', async ({ mutation }) => {
+    const dir = tempDir(MODEL);
+    const mutations = join(mkdtempSync(join(tmpdir(), 'likec4-mutator-program-mutations-')), 'mutations.json');
+    writeFileSync(mutations, JSON.stringify({ mutations: [mutation] }), 'utf-8');
+    const result = await run('apply', '--dir', dir, '--mutations', mutations, '--in-place');
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr.startsWith('Error: mutations[0].op'), result.stderr).toBe(true);
     expect(readDir(dir)).toEqual(MODEL);
   });
 });
