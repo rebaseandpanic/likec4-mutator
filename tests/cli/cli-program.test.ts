@@ -2,7 +2,7 @@
  * The CLI program builder and its directory loader / writer (rows 2, 3, 5,
  * 6 and 7 of the lc4m-15.31 test matrix): the three LikeC4 file extensions
  * form one model, commander's own rejections exit 1 and write nothing,
- * `apply` rejects a mutation without a known op at its path, the
+ * `--version` prints the given version, `apply` rejects a mutation without a known op at its path, the
  * "no files found" failure names the extensions, and the output writer keeps
  * its path-traversal guard.
  *
@@ -140,6 +140,20 @@ describe("commander's own rejections exit 1 and write nothing (row 5)", SLOW, ()
     expect(result.stdout).toBe('');
     expect(result.stderr).not.toBe('');
     expect(readDir(dir)).toEqual(MODEL);
+  });
+});
+
+describe('--version prints the version the program was built with', () => {
+  it('exits 0 with the version on stdout', async () => {
+    let stdout = '';
+    let stderr = '';
+    const program = buildProgram(
+      { stdout: { write: (s: string) => (stdout += s) }, stderr: { write: (s: string) => (stderr += s) } },
+      { version: '9.8.7' },
+    );
+    expect(await program.run(['--version'])).toBe(0);
+    expect(stdout).toBe('9.8.7\n');
+    expect(stderr).toBe('');
   });
 });
 
