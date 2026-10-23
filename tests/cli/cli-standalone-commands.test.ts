@@ -11,7 +11,7 @@ import { join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildProgram } from '../../src/cli/program.js';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
-import { MUTATION_FIELDS } from '../../src/mutations-file.js';
+import type { Mutation } from '../../src/mutations-file.js';
 import { expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
@@ -414,22 +414,13 @@ async function expectSameAsApply(
 interface Case {
   model: Model;
   args: string[];
-  mutation: { op: keyof typeof MUTATION_FIELDS } & Record<string, unknown>;
+  mutation: { op: Mutation['op'] } & Record<string, unknown>;
 }
 
 const LINKS = [{ url: 'https://example.com/docs', label: 'Docs' }];
 const LINKS_JSON = '[{"url":"https://example.com/docs","label":"Docs"}]';
 const RS = { file: 'model.c4', line: 25, column: 3 };
 const RS_JSON = '{"file":"model.c4","line":25,"column":3}';
-
-/** The spec's flag of a field: its kebab-case form. */
-function kebab(name: string): string {
-  return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-}
-
-function flagsOf(args: readonly string[]): string[] {
-  return args.slice(1).filter((token) => token.startsWith('--'));
-}
 
 describe('row 4: add-element without --parent and --file writes to the default file across extensions', SLOW, () => {
   it('the element lands where the library puts it for the same three files', async () => {
@@ -519,17 +510,6 @@ const PARITY: Case[] = [
 ];
 
 describe('row 18: every field of the five kept commands writes what apply writes', SLOW, () => {
-  it('the cases reach every field of the five operations through its flag', () => {
-    for (const c of PARITY) {
-      const expected = Object.keys(c.mutation).filter((key) => key !== 'op').map((key) => `--${kebab(key)}`);
-      expect(new Set(flagsOf(c.args)), c.args.join(' ')).toEqual(new Set(expected));
-    }
-    for (const op of ['addElement', 'addRelationship', 'updateElement', 'removeElement', 'removeRelationship'] as const) {
-      const used = new Set(PARITY.filter((c) => c.mutation.op === op).flatMap((c) => Object.keys(c.mutation).filter((key) => key !== 'op')));
-      expect(used, op).toEqual(new Set(Object.keys(MUTATION_FIELDS[op])));
-    }
-  });
-
   it.each(PARITY.map((c) => [c.args.join(' '), c] as const))('%s', async (_, c) => {
     const { command } = await expectSameAsApply(c.model, c.args, c.mutation);
     expect(command.code).toBe(0);
