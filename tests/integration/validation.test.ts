@@ -377,3 +377,16 @@ describe('validate() places an end-of-file syntax error at the end of the file (
     for (const line of errors) expect(line).not.toContain('NaN');
   });
 });
+
+// A syntax error at a real token keeps that token's line and column; only the
+// position-less end-of-file error moves (INV-3, D155).  Positions are counted
+// by hand in the source.
+describe('validate() keeps the position of a syntax error at a real token', () => {
+  it.each([
+    ['mid-file, line 3 column 3', 'specification {\n  element system\n  BROKEN SYNTAX HERE ???\n}\n', 'bad.c4:3:3: '],
+    ['line 1 column 1', '}\nmodel {\n}\n', 'bad.c4:1:1: '],
+  ])('%s', (_, source, prefix) => {
+    const errors = LikeC4Mutator.fromFiles({ 'bad.c4': source }).validate();
+    expect(errors.some((line) => line.startsWith(prefix)), errors.join('\n')).toBe(true);
+  });
+});
