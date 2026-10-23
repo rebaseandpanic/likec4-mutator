@@ -1091,6 +1091,16 @@ describe('row 15: --tags on a generated command (D156)', SLOW, () => {
     expect(command.code).toBe(0);
   });
 
+  it("'' on a construct that has tags keeps them, as apply without tags", async () => {
+    const { command } = await expectSameAsApply('zones', ['update-deployment-node', '--id', 'prod', '--title', 'T', '--tags', ''], {
+      op: 'updateDeploymentNode', id: 'prod', title: 'T',
+    });
+    expect(command.code).toBe(0);
+    // `prod` carries #primary in the fixture; the empty list would remove it.
+    expect(modelFiles('zones')['deployment.c4']).toContain("environment prod 'Production' {\n    #primary\n");
+    expect(command.files['deployment.c4']).toContain('    #primary\n');
+  });
+
   it("'[1]' is the comma list [\"[1]\"] and is rejected at --tags[0]", async () => {
     const { command } = await expectSameAsApply('zones', ['update-view', '--id', 'production', '--tags', '[1]'], { op: 'updateView', id: 'production', tags: ['[1]'] }, {
       field: 'tags',
