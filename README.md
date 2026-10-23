@@ -138,53 +138,212 @@ mutator.renameElement('app.api', 'gateway');
 mutator.moveElement('app.gateway', { parent: null, file: 'model.c4' });
 
 // Validate & serialize
-const errors = mutator.validate(); // [] = valid
+const errors = mutator.validate(); // syntax only, synchronous: [] = valid
+const records = await mutator.validateModel(); // as `likec4 validate` does: [] = valid
 const files = mutator.serialize(); // { 'model.c4': '...' }
+```
+
+### Semantic validation
+
+`validate()` is a synchronous syntax check. `validateModel(options?)` checks the loaded files as `likec4 validate` of LikeC4 1.59.4 does, with LikeC4's own language services, and resolves to what it reports, as `ValidationRecord[]` (the type is exported):
+
+```typescript
+interface ValidationRecord {
+  origin: 'language-services' | 'views';
+  message: string;
+  file?: string;   // located records: the file name as loaded
+  line?: number;   // 1-based
+  column?: number; // 1-based
+}
+```
+
+- Every diagnostic of error severity — syntax errors, unresolved references, duplicate names, undeclared kinds and tags, invalid relationships — is a located record (`origin: 'language-services'`) with LikeC4's message and the position of the diagnostic's start. Warnings are not reported.
+- Unless `{ layout: false }` is given, the views are computed and laid out; an exception escaping that step is an unlocated record (`origin: 'views'`) with the exception's message only. A view LikeC4 fails to lay out without failing the step is logged by LikeC4 and is not an error, as for the command. Console output LikeC4 writes during the check is discarded. Manual layouts are not read, so layout drift is never reported.
+- The result is empty when LikeC4 accepts the files; language-service records come first, in document order.
+- The sources are copied when the method is called: mutations made while the check runs do not change its result, and concurrent calls, on one instance or on several, are independent.
+- The promise rejects when the check cannot run (LikeC4's services cannot be built); that is not a record.
+
+```typescript
+const records = await mutator.validateModel({ layout: false });
+for (const r of records) {
+  console.error(r.file ? `${r.file}:${r.line}:${r.column}: ${r.message}` : r.message);
+}
 ```
 
 The deployment model (`deployment { ... }`: nodes, instances, their relationships and `extend <node>` blocks) has its own read and write methods — see [Deployment model](#deployment-model). So have views — their rules, the steps of dynamic views and their removal; see [Views](#views).
 
 ## CLI
 
-The single-purpose commands (`add-element`, `add-relationship`, `update-element`, `remove-element`, `remove-relationship`) keep their options and apply the library's current behaviour: `remove-element` is rejected while other constructs refer to the element (see [Removing referenced elements](#removing-referenced-elements)), and a model-level write uses the default file (see [Placement and file choice](#placement-and-file-choice)). Every newer option — `cascade`, `file`, `placement`, relationship kinds and direction, the selectors — and every other write are available through [`apply`](#apply) only.
+Every write of the library has a command: each [`apply`](#apply) operation is one command with the same fields and the same checks, and writes the same files `apply` writes for that one operation. `apply` remains the way to run several operations atomically: it checks the whole mutations file first, applies the operations in order, and writes nothing when any of them is rejected. The public reads of the library have commands too (see [Read commands](#read-commands)), and `validate` checks a model as `likec4 validate` does.
+
+### Files
+
+Every command loads the files LikeC4 reads — `.c4`, `.likec4` and `.like-c4` (the extensions come from LikeC4's language metadata) — from the whole `--dir` tree, subdirectories included, as one model: references between files of different extensions resolve, and a write chooses its default file among all of them alike. A write command writes every loaded file back under its own relative path and extension, unchanged files byte-identical: to `--output` when given, otherwise in place. A directory without such files fails with exit code 1.
+
+### Operation commands
+
+The command of an operation is the operation name in kebab-case, except the five commands that existed before the others (`add-element`, `add-relationship`, `update-element`, `remove-element`, `remove-relationship`), which keep their names, flags and output.
+
+| `apply` operation | Command |
+| --- | --- |
+| `addElement` | `add-element` |
+| `updateElement` | `update-element` |
+| `removeElement` | `remove-element` |
+| `renameElement` | `rename-element` |
+| `moveElement` | `move-element` |
+| `addKind` | `add-kind` |
+| `updateKind` | `update-kind` |
+| `addTag` | `add-tag` |
+| `renameKind` | `rename-kind` |
+| `removeKind` | `remove-kind` |
+| `renameTag` | `rename-tag` |
+| `removeTag` | `remove-tag` |
+| `addElementExtend` | `add-element-extend` |
+| `addRelationshipExtend` | `add-relationship-extend` |
+| `addRelationship` | `add-relationship` |
+| `updateRelationship` | `update-relationship` |
+| `removeRelationship` | `remove-relationship` |
+| `addView` | `add-view` |
+| `updateView` | `update-view` |
+| `removeView` | `remove-view` |
+| `addViewRule` | `add-view-rule` |
+| `replaceViewRule` | `replace-view-rule` |
+| `removeViewRule` | `remove-view-rule` |
+| `addViewStep` | `add-view-step` |
+| `updateViewStep` | `update-view-step` |
+| `moveViewStep` | `move-view-step` |
+| `removeViewStep` | `remove-view-step` |
+| `addViewParallel` | `add-view-parallel` |
+| `addDeploymentNode` | `add-deployment-node` |
+| `updateDeploymentNode` | `update-deployment-node` |
+| `removeDeploymentNode` | `remove-deployment-node` |
+| `addDeploymentInstance` | `add-deployment-instance` |
+| `updateDeploymentInstance` | `update-deployment-instance` |
+| `removeDeploymentInstance` | `remove-deployment-instance` |
+| `addDeploymentRelationship` | `add-deployment-relationship` |
+| `updateDeploymentRelationship` | `update-deployment-relationship` |
+| `removeDeploymentRelationship` | `remove-deployment-relationship` |
+| `addDeploymentExtend` | `add-deployment-extend` |
+| `removeDeploymentExtend` | `remove-deployment-extend` |
+
+The fields of each operation are described in [Batch mutations format](#batch-mutations-format); `likec4-mutator <command> --help` lists the flags of a command.
+
+#### Flags
+
+A command's flags are its operation's fields in kebab-case (`viewId` → `--view-id`, `matchKind` → `--match-kind`), plus `--dir`, `--output` and `--json`. A value is encoded by the kind of the field:
+
+| Field | Flag | Example |
+| --- | --- | --- |
+| text | `--field <text>`, taken literally: `--title null` is the four-letter text, `--title ''` the empty text | `--title 'Payments API'` |
+| a field that accepts `null` (removes the property; for `moveElement`, `parent: null` is the model level) | also `--unset-field`, which passes `null`; giving both is rejected | `update-view --id index --unset-title` |
+| a selector's `matchBidirectional`, where `false` differs from leaving it out | `--field true` or `--field false` | `--match-bidirectional false` |
+| a switch that matters only when on (`cascade`, `bidirectional`, `shared`) | `--field`, without a value | `--cascade` |
+| a number (`occurrence`) | `--field <number>`, a JSON number | `--occurrence 2` |
+| `tags` | a value that is, as a whole, a JSON array of strings is that list; any other value is a comma-separated list, items trimmed and empty items dropped; `--tags ''` means not given; `--tags '[]'` is the empty list | `--tags internal,backend`, `--tags '["internal"]'` |
+| any other list (`includes`, whose items may contain commas) and every object or list of objects (`links`, `metadata`, `style`, `rule`, `step`, `address`, `position`, endpoints) | the JSON value as the flag's text | `--links '[{"url":"https://example.com"}]'` |
+
+A flag given twice takes its last value. A value that does not fit its encoding (invalid JSON, a wrong shape, `yes` for `true`), a missing required field, an unknown flag, or a field the library rejects fails the command with exit code 1, the reason on stderr and nothing written. A rejected field carries the detail `apply` gives, with the flag in place of the mutation path:
+
+```
+Error: --rule: expected a JSON value, got "{bad" (Expected property name or '}' in JSON at position 1 (line 1 column 2))
+Error: --title: cannot be given together with --unset-title
+Error: --tags[1]: tag 'nope' is not declared by a specification of the loaded files (`specification { tag nope }`)
+Error: --match-bidirectional: expected true or false, got "yes"
+```
+
+#### Output
+
+Text output of a command is every line `apply` prints for its operation (cascade lines and emptied-`par` lines included), without `apply`'s summary line; when `apply` prints none, one line `<operation>: done`. The five older commands keep their own lines (`Created element 'app.api'`, ...); `remove-element --cascade` lists the removed constructs after them, in the form `apply` uses.
+
+```bash
+$ likec4-mutator rename-element --dir ./c4 --fqn app.api --new-name gateway
+  renameElement: renamed 'app.api' to 'app.gateway'
+$ likec4-mutator add-view-rule --dir ./c4 --id index --rule '{"kind":"exclude","expression":"db"}'
+addViewRule: done
+```
+
+With `--json`, stdout carries only `{"operation": <the apply operation name>, "result": <the library method's value, or null when it returns nothing>}`:
+
+```bash
+$ likec4-mutator update-view --dir ./c4 --id index --title Overview --json
+{
+  "operation": "updateView",
+  "result": {
+    "changedFiles": [
+      "model.c4"
+    ]
+  }
+}
+```
+
+A rejection prints its reason on stderr and nothing on stdout, with or without `--json`.
+
+### Read commands
+
+Each public read of the library has a command (`serialize` aside); `get-element` has two modes. Flags are the method's parameters in kebab-case. The output is readable text, or with `--json` the value the method returns, unchanged.
+
+| Command | Library method | Flags |
+| --- | --- | --- |
+| `list-elements` | `listElements` | `--kind`, `--parent` (the `parentFqn` filter) |
+| `get-element` | `getElement` | `--fqn` |
+| `get-element --source` | `getElementSource` | `--fqn` |
+| `get-relationships` | `getRelationships` | `--source-fqn`, `--target-fqn` |
+| `get-specification` | `getSpecification` | — |
+| `list-views` | `listViews` | `--type`, `--file` |
+| `get-view` | `getView` | `--id` |
+| `list-deployment-nodes` | `listDeploymentNodes` | `--kind`, `--parent-id` |
+| `get-deployment-node` | `getDeploymentNode` | `--id` |
+| `get-deployment-node-kind` | `getDeploymentNodeKind` | `--kind` |
+| `list-deployment-instances` | `listDeploymentInstances` | `--node-id`, `--element` |
+| `get-deployment-instance` | `getDeploymentInstance` | `--id` |
+| `list-deployment-relationships` | `listDeploymentRelationships` | `--source`, `--target`, `--kind` |
+
+A `get-*` command whose construct does not exist exits 1 with the reason on stderr (`View 'nope' not found`) and nothing on stdout. `get-specification` of a model without a specification succeeds (`--json` prints `null`), and so does an empty list. `get-element --source` prints the raw DSL text of the element; with `--json`, that text as a JSON string. An unnamed view is listed by `list-views` and cannot be addressed by `get-view`.
+
+```bash
+likec4-mutator list-elements --dir ./c4 --kind service
+likec4-mutator get-element --dir ./c4 --fqn app.api --json
+likec4-mutator get-element --dir ./c4 --fqn app.api --source
+likec4-mutator list-views --dir ./c4 --type dynamic --json
+```
 
 ### validate
 
-Parse and validate all `.c4` files. Exits with code 0 if valid, 1 if errors found.
+Check the loaded files as `likec4 validate` (LikeC4 1.59.4) does, with LikeC4's own language services, and report what it reports (see [`validateModel`](#semantic-validation)): syntax errors, unresolved references, duplicate names, undeclared kinds and tags, invalid relationships, and the computation and layout of the views. Warnings are not errors.
 
 ```bash
 likec4-mutator validate --dir ./c4
+likec4-mutator validate --dir ./c4 --no-layout
+likec4-mutator validate --dir ./c4 --json
 ```
 
-### list-elements
+Each error is a line on stderr: `file:line:column: message` (1-based line and column, LikeC4's message), or the message alone for an error without a location (an exception escaping the computation and layout of the views). The exit code is 1 when there is any error; otherwise 0, with `All files are valid (N file(s) checked)` on stdout.
 
-List elements with optional filtering by kind or parent FQN.
-
-```bash
-likec4-mutator list-elements --dir ./c4
-likec4-mutator list-elements --dir ./c4 --kind service
-likec4-mutator list-elements --dir ./c4 --parent app
-likec4-mutator list-elements --dir ./c4 --json
+```
+bad.likec4:2:7: Could not resolve reference to ElementKind named 'nokind'.
 ```
 
-### get-element
+`--json` prints only the array of records on stdout (`[]` when valid), and stderr stays empty; a located record has `file`, `line` and `column`, an unlocated one only `origin` and `message`:
 
-Get a single element by fully qualified name (FQN).
-
-```bash
-# Human-readable output
-likec4-mutator get-element --dir ./c4 --fqn app.api
-
-# JSON output
-likec4-mutator get-element --dir ./c4 --fqn app.api --json
-
-# Raw DSL source text
-likec4-mutator get-element --dir ./c4 --fqn app.api --source
+```json
+[
+  {
+    "origin": "language-services",
+    "message": "Could not resolve reference to ElementKind named 'nokind'.",
+    "file": "bad.likec4",
+    "line": 2,
+    "column": 7
+  }
+]
 ```
+
+`--no-layout` skips the computation and layout of the views; only the language-service errors are reported. When the check itself cannot run, the command prints `Error: <reason>` on stderr and exits 1.
+
+**Parity scope.** The verdict equals `likec4 validate` for the files this command loaded. LikeC4's own directory walk skips some directories (`node_modules`, `.git`, `.svn`, `.yarn`, `.pnpm`) and applies a project configuration (`likec4.config.json`); this command loads the whole `--dir` tree and reads no project configuration. Manual layouts are not read, so layout drift is never reported. A tree with such directories, a project configuration or manual layouts can therefore get a different verdict from `likec4 validate`.
 
 ### add-element
 
-Add a new element as a child of an existing element. Supports summary and tags directly via CLI flags. For full property support (links, metadata, style), use the `apply` command with JSON.
+Add a new element, at the model level or as a child of `--parent`. `--kind` and `--id` are required; every other field of [addElement](#addelement) has its flag.
 
 ```bash
 likec4-mutator add-element --dir ./c4 \
@@ -196,18 +355,20 @@ likec4-mutator add-element --dir ./c4 \
   --description 'REST API' \
   --technology 'TypeScript' \
   --tags internal,backend \
+  --links '[{"url":"https://docs.example.com/api"}]' \
   --output ./out
 ```
 
 ### add-relationship
 
-Add a relationship between two elements. For full property support (description, technology, tags, style), use the `apply` command with JSON.
+Add a relationship between two elements; `--source` and `--target` are required, and every other field of [addRelationship](#addrelationship) (kind, direction, placement, file, style, ...) has its flag.
 
 ```bash
 likec4-mutator add-relationship --dir ./c4 \
   --source app.myApi \
   --target app.db \
   --label 'reads/writes' \
+  --technology JDBC \
   --output ./out
 ```
 
@@ -227,18 +388,20 @@ likec4-mutator update-element --dir ./c4 --fqn app.api \
 
 ### remove-element
 
-Remove an element (and its entire body block) from the model. A removal that other constructs refer to fails, naming them; `apply` with `"cascade": true` removes them too (see [removeElement](#removeelement)).
+Remove an element (and its entire body block) from the model. A removal that other constructs refer to fails, naming them; `--cascade` removes them too, and lists them after the removal line (see [removeElement](#removeelement)).
 
 ```bash
 likec4-mutator remove-element --dir ./c4 --fqn app.api --output ./out
+likec4-mutator remove-element --dir ./c4 --fqn app.api --cascade
 ```
 
 ### remove-relationship
 
-Remove a relationship matched by source and target FQN (searched across all files), together with `extend a -> b` blocks that applied only to it. When several relationships match, the command fails listing them; select one with the selector fields of the `apply` op [removeRelationship](#removerelationship) (`matchKind`, `matchTitle`, `matchBidirectional`, `position`).
+Remove a relationship matched by source and target FQN (searched across all files), together with `extend a -> b` blocks that applied only to it. When several relationships match, the command fails listing them; select one with the selector flags of [removeRelationship](#removerelationship) (`--match-kind`, `--match-title`, `--match-bidirectional`, `--position`).
 
 ```bash
 likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db --output ./out
+likec4-mutator remove-relationship --dir ./c4 --source app.api --target app.db --match-bidirectional true
 ```
 
 ### apply
@@ -1884,7 +2047,7 @@ Rejected, with nothing changed (`InvalidWriteError`):
 
 ## Rejected writes
 
-Every write call checks the values it introduces before anything changes. A rejected call throws an `InvalidWriteError` (exported): `field` names the offending option in the terms of the call (`name`, `kind`, `id`, `target`, `source`, `autoLayout`, `tags[1]`, `style.color`, `includes[0]`), `detail` says what is wrong, and no file changes. `apply` reports the same as `mutations[i].<field>` (the element name of `addElement` is its `id`) with exit code 1 and writes nothing; the single-purpose CLI commands name the option (`--id`, `--kind`, `--tags`, ...).
+Every write call checks the values it introduces before anything changes. A rejected call throws an `InvalidWriteError` (exported): `field` names the offending option in the terms of the call (`name`, `kind`, `id`, `target`, `source`, `autoLayout`, `tags[1]`, `style.color`, `includes[0]`), `detail` says what is wrong, and no file changes. `apply` reports the same as `mutations[i].<field>` (the element name of `addElement` is its `id`) with exit code 1 and writes nothing; the CLI commands report it with the flag in place of the mutation path (`--id`, `--tags[1]`, `--style.color`).
 
 | Value | Accepted |
 | --- | --- |
@@ -1936,7 +2099,7 @@ Endpoints of `addRelationship` are resolved the way LikeC4 links them from the f
 
 A new element can change how LikeC4 links references that are already written: with `app = service { api = service }`, a model-level `api -> other` links `api` to `app.api`, the only element of that name; once `other.api` exists, `api` is ambiguous and LikeC4 reports `Could not resolve reference`. A new direct child can also shadow a unique descendant (`app.api` linking to `app.inner.api` would link to a new `app.api`). `addElement` therefore resolves every reference of every loaded file again with the new element in place — view rules, dynamic steps, `navigateTo` and style and `rank` targets included — and is rejected, with nothing changed, when one that resolved before then resolves to another element or not at all. `addView`, `addDeploymentNode` and `addDeploymentInstance` do the same (see [Every write keeps resolved references](#every-write-keeps-resolved-references)). References that did not resolve before the call are not considered.
 
-**Only what the call introduces is checked.** Problems already in the files — undeclared tags or kinds, dangling references, duplicates — are neither reported nor a reason to reject a valid write, so a workspace with unrelated LikeC4 errors still accepts valid edits. `validate()` still reports syntax errors only.
+**Only what the call introduces is checked.** Problems already in the files — undeclared tags or kinds, dangling references, duplicates — are neither reported nor a reason to reject a valid write, so a workspace with unrelated LikeC4 errors still accepts valid edits. `validate()` still reports syntax errors only; [`validateModel()`](#semantic-validation) reports what `likec4 validate` reports.
 
 **Only the loaded files are known.** Declarations and elements of files that were not passed to `fromFiles` (or are outside `--dir`) are invisible: a kind, tag, custom color or endpoint declared only there is rejected, as the library cannot tell it from a typo. Load every file of the project (the CLI loads the whole `--dir` tree).
 
