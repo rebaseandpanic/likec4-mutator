@@ -145,7 +145,7 @@ const files = mutator.serialize(); // { 'model.c4': '...' }
 
 ### Semantic validation
 
-`validate()` is a synchronous syntax check. `validateModel(options?)` checks the loaded files as `likec4 validate` of LikeC4 1.59.4 does, with LikeC4's own language services, and resolves to what it reports, as `ValidationRecord[]` (the type is exported):
+`validate()` is a synchronous syntax check. `validateModel(options?)` checks the loaded files as `likec4 validate` of LikeC4 1.60.0 does, with LikeC4's own language services, and resolves to what it reports, as `ValidationRecord[]` (the type is exported):
 
 ```typescript
 interface ValidationRecord {
@@ -309,7 +309,7 @@ likec4-mutator list-views --dir ./c4 --type dynamic --json
 
 ### validate
 
-Check the loaded files as `likec4 validate` (LikeC4 1.59.4) does, with LikeC4's own language services, and report what it reports (see [`validateModel`](#semantic-validation)): syntax errors, unresolved references, duplicate names, undeclared kinds and tags, invalid relationships, and the computation and layout of the views. Warnings are not errors.
+Check the loaded files as `likec4 validate` (LikeC4 1.60.0) does, with LikeC4's own language services, and report what it reports (see [`validateModel`](#semantic-validation)): syntax errors, unresolved references, duplicate names, undeclared kinds and tags, invalid relationships, and the computation and layout of the views. Warnings are not errors.
 
 ```bash
 likec4-mutator validate --dir ./c4
@@ -882,7 +882,7 @@ Deployment relationships have their own selector (see [Updating deployment relat
 
 ### Reading styles
 
-`getElement` / `listElements` and `getRelationships` report styles as LikeC4 1.59.4's model holds them before theme defaults:
+`getElement` / `listElements` and `getRelationships` report styles as LikeC4 1.60.0's model holds them before theme defaults:
 
 ```typescript
 const api = mutator.getElement('app.api')!;
@@ -933,7 +933,7 @@ model {
 }
 ```
 
-`getElement` / `listElements` / `getRelationships` report the values LikeC4 1.59.4 computes from them, and `fromSpecification` tells where they come from:
+`getElement` / `listElements` / `getRelationships` report the values LikeC4 1.60.0 computes from them, and `fromSpecification` tells where they come from:
 
 ```typescript
 const api = mutator.getElement('api')!;
@@ -1075,7 +1075,7 @@ app.declared;    // { tags: ['internal'], metadata: { owner: 'team-a' } } — th
 app.extendedBy;  // [{ file: 'ext/ops.c4', sourceRange: {...}, tags: ['critical'], links: [...], metadata: { owner: 'ops' } }]
 ```
 
-Merge rules (LikeC4 1.59.4):
+Merge rules (LikeC4 1.60.0):
 
 - The defaults of the element's kind come first (see [Specification defaults](#specification-defaults)), then the declaration body, then every `extend` block of exactly this element — files ordered by path the way LikeC4 orders documents (natural and segment by segment: `a/x.c4` before `a.c4`, `ext9.c4` before `ext10.c4`; independent of the order passed to `fromFiles`), then source order within a file.
 - `tags`: union without duplicates. Within one body, comma-separated groups (`#a, #b #c`) are taken last group first, as LikeC4 does (`['b', 'c', 'a']`); `declared` and `extendedBy` list them in source order.
@@ -1130,7 +1130,7 @@ mutator.addRelationshipExtend({ source: 'app.api', target: 'app.db', matchTitle:
 
 - **One block per target and file.** When `file` already has a block of the element (exactly its FQN), or one applying to the relationship, the contributions are merged into its first one: new tags after its tags, new links and metadata keys at its end (a `metadata { }` block is created when it has none). A tag or link the block already has is not repeated; the same link in a block of another file is kept, as LikeC4 keeps duplicates. Otherwise a new block goes to the end of the file's first `model` block, created when the file has none. `merged` tells which.
 - **The relationship block** is selected with the selector of `updateRelationship` (`source`, `target`, `matchKind`, `matchTitle`, `matchBidirectional`, `position`) and written with the relationship's identity: endpoints as absolute FQNs, the bracket connector with its kind and direction (`-[kind]->`, `-[kind]<->`, or `->` / `<->` without a kind), and its own title — so it also applies to a relationship written as `a .kind b`. LikeC4 applies a block to every relationship of its identity: when others share it, the call is rejected on `shared` with `related` listing them (`{ file, line, column, construct: 'relationship' }`), and with `shared: true` the block applies to all of them.
-- **Rejected** (`InvalidWriteError`, nothing changed): on `fqn`, an element no loaded file declares; on `source` / `position`, no relationship or several (`RelationshipAmbiguityError` on `source`), and a relationship whose only title is its kind's default title (LikeC4 1.59.4 ignores a block without that title and warns about one with it); on `file`, a missing or unloaded file; on `tags[i]`, `links[i].url`, `metadata.<key>`, an undeclared tag, an invalid link or metadata value, and a metadata key the element or relationship already has in its declaration or in any `extend` block of any file (with `shared`, also a key of the other relationships the block applies to) (a second value would turn LikeC4's value into an array — change it with an update); on `tags`, nothing to add.
+- **Rejected** (`InvalidWriteError`, nothing changed): on `fqn`, an element no loaded file declares; on `source` / `position`, no relationship or several (`RelationshipAmbiguityError` on `source`), and a relationship whose only title is its kind's default title (LikeC4 1.60.0 ignores a block without that title and warns about one with it); on `file`, a missing or unloaded file; on `tags[i]`, `links[i].url`, `metadata.<key>`, an undeclared tag, an invalid link or metadata value, and a metadata key the element or relationship already has in its declaration or in any `extend` block of any file (with `shared`, also a key of the other relationships the block applies to) (a second value would turn LikeC4's value into an array — change it with an update); on `tags`, nothing to add.
 
 ### Relationships
 
@@ -1155,7 +1155,7 @@ model {
 
 Every relationship `getRelationships()` reports carries its direction: `bidirectional` is `true` for `a <-> b` and `a -[kind]<-> b`, `false` for `->`, `-[kind]->` and `.kind` — LikeC4's `isBidirectional`, the field deployment relationships report too. Each `extendedBy` entry of a relationship carries the direction of its block (`extend a <-> b` → `bidirectional: true`); entries of element and deployment node blocks have no such field.
 
-`getRelationships()` reports effective `tags`, `links` and `metadata`, `declared` and `extendedBy`, as for elements. LikeC4 1.59.4 decides which relationships a block applies to, and merges, as follows:
+`getRelationships()` reports effective `tags`, `links` and `metadata`, `declared` and `extendedBy`, as for elements. LikeC4 1.60.0 decides which relationships a block applies to, and merges, as follows:
 
 - A block applies to every relationship with the same source and target (resolved to FQNs), kind, title and direction. No kind matches only relationships without a kind (`-[calls]->` and `.calls` are the same kind); a kind no specification declares counts as no kind, as LikeC4 resolves it (`kind` in `getRelationships()` still reports it as written). Titles are compared dedented and trimmed; the title may be written after the target or as a `title` body property, and a relationship without a title is compared with the `title` of its kind's specification when that declares one. A bidirectional block (`extend b <-> a`) matches `a <-> b`; a directed block never matches a bidirectional relationship.
 - The defaults of the relationship's kind come first (see [Specification defaults](#specification-defaults)), then the relationship's own values — its tags are those written on the relation line (`a -> b 'x' #t`) or else those of its body — then every matching block in the order used for elements. `updateRelationship` replaces tags where the relationship has them: on the relation line when it has any there (body tags in the same relationship, which LikeC4 reports as an error, are removed so they cannot take over), otherwise in the body.
@@ -1846,7 +1846,7 @@ mutator.removeViewRule('appView', { index: 0 });
 
 - **Position.** `addViewRule` writes the rule before the rule at `opts.before`; by default after the last item of the body, or before it when that item is an `autoLayout` rule — so in a dynamic view after the last step. A view declared without a body gets one.
 - **Checks** of `addViewRule` and `replaceViewRule`, at the place the rule is written: one rule of a kind the view type has (element and deployment views: `include`, `exclude`; dynamic views: `include`), and everything [Adding views](#adding-views) checks for `includes` — references resolved in the view's scope (its `of` element or its `extends` parent's, its document), declared kinds, tags and custom colors, typed `navigateTo`, no item LikeC4 drops; also no `with` in an `exclude`, and in a deployment view a logical element only inside a relation predicate of an `exclude` (`exclude app.api -> app.db`). An expression ending with a comma is rejected: it would join the next line of the body to the rule; so is one whose text reaches past the rule — closing the view and opening a block-level `style` or a `global` block.
-- **`element.kind` and `element.tag` in a deployment view.** LikeC4 1.59.4 leaves a deployment view out of its computed views, without an error, when an `include` or `exclude` rule or a style target of it uses an `element.kind` or `element.tag` expression. The library accepts, reads, renames and removes such expressions as written; LikeC4 still does not show the view.
+- **`element.kind` and `element.tag` in a deployment view.** LikeC4 1.60.0 leaves a deployment view out of its computed views, without an error, when an `include` or `exclude` rule or a style target of it uses an `element.kind` or `element.tag` expression. The library accepts, reads, renames and removes such expressions as written; LikeC4 still does not show the view.
 - **Replace and remove** take any rule — `autoLayout` and the rules read by kind only (`style`, `group`, `rank`, `global predicate`, `global style`, `includeAncestors`) included; a removed rule's lines go, its trailing comma with it.
 - **Rejected**, with nothing changed: an `id` that names no view, an unnamed view or a view declared more than once (`id`); an index out of range or a `text` that does not match (`address.index`, `address.text`, `before.index`, `before.text`); a kind the view does not have (`rule.kind`); an expression as above (`rule.expression`).
 

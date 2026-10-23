@@ -6,7 +6,7 @@ CLI parity with `apply`, semantic validation like `likec4 validate`, and `.likec
 
 ### Changed
 Existing CLI invocations keep their behaviour except for the following.
-- **`validate` reports what `likec4 validate` reports.** It checks the loaded files with LikeC4's own language services (LikeC4 1.59.4) instead of the library's syntax check: unresolved references, duplicate names, undeclared kinds and tags, invalid relationships and failures of the view computation and layout are now errors too. Each error is a line `file:line:column: message` on stderr with LikeC4's message text (1-based column), or the message alone for an error without a location. The brace-balance line is no longer printed. A file whose only error was the brace-balance line and that LikeC4 accepts now passes with exit code 0 (no known input produces this case, so it is not covered by a test). The exit codes and the success line are unchanged.
+- **`validate` reports what `likec4 validate` reports.** It checks the loaded files with LikeC4's own language services (LikeC4 1.60.0) instead of the library's syntax check: unresolved references, duplicate names, undeclared kinds and tags, invalid relationships and failures of the view computation and layout are now errors too. Each error is a line `file:line:column: message` on stderr with LikeC4's message text (1-based column), or the message alone for an error without a location. The brace-balance line is no longer printed. A file whose only error was the brace-balance line and that LikeC4 accepts now passes with exit code 0 (no known input produces this case, so it is not covered by a test). The exit codes and the success line are unchanged.
 - **Every CLI command also loads `.likec4` and `.like-c4` files.** The extensions are those LikeC4 reads. A `--dir` tree containing such files is now a different model: its files are read, written back under their own names, and counted in the success line of `validate`. The "no files found" error names the three extensions.
 - **`get-element --source --json`** prints the source text as a JSON string. Before, `--source` ignored `--json` and printed the raw text.
 - **`--tags` of `add-element` and `update-element`.** A value that is, as a whole, a JSON array of strings (including `'[]'`, the empty list) is now that list. Before, it was split on commas. A comma list and `--tags ''` (not given) parse as before.
@@ -22,7 +22,7 @@ Existing CLI invocations keep their behaviour except for the following.
   - `remove-element --cascade` lists the removed constructs after its existing lines.
 - **`--json` on every single-operation write command.** stdout carries only `{"operation": <the apply name>, "result": <the library method's value, or null>}`. `apply` is unchanged.
 - **Read commands.** `get-relationships`, `get-specification`, `list-views`, `get-view`, `list-deployment-nodes`, `get-deployment-node`, `get-deployment-node-kind`, `list-deployment-instances`, `get-deployment-instance` and `list-deployment-relationships`, next to `list-elements` and `get-element`. Their flags are the method's parameters; `--json` prints the method's value. A `get-*` command whose construct does not exist exits 1, with the reason on stderr.
-- **`validateModel(options?)`.** An asynchronous method that checks the loaded files as `likec4 validate` 1.59.4 does and resolves to `ValidationRecord[]` (exported type).
+- **`validateModel(options?)`.** An asynchronous method that checks the loaded files as `likec4 validate` 1.60.0 does and resolves to `ValidationRecord[]` (exported type).
   - Located records come from LikeC4's error diagnostics: file, 1-based line and column, message.
   - An exception escaping the computation and layout of the views is an unlocated record.
   - `{ layout: false }` skips the view step.
@@ -30,6 +30,15 @@ Existing CLI invocations keep their behaviour except for the following.
   - The promise rejects when the check cannot run.
   - `validate()` is unchanged.
 - **`validate --no-layout` and `validate --json`.** `--no-layout` skips the view computation and layout. `--json` prints only the array of records on stdout and leaves stderr empty, except `Error: <reason>` when the check cannot run.
+
+### Dependencies
+- `@likec4/language-server` and `@likec4/core` `^1.59.4` → `^1.60.0`; dev `langium` `3.5.0` → `4.4.0`, the version `@likec4/language-server@1.60.0` depends on. `esbuild` stays `0.28.2`, the optional peer `@likec4/language-server@1.60.0` pins. The rows of the new and changed grammar rules are in the [DSL coverage](docs/likec4-coverage.md).
+- What the library does with the constructs LikeC4 1.60.0 adds. Files using them parse and validate, and other edits keep them as written.
+  - **`sizing auto|fixed`** in a `style { }` block, a kind style or a `with { }`: not read (absent from every reported style and from `with`), and not a style field of the writes: `updateElement({ style: { sizing } })` and `updateDeploymentNode({ style: { sizing } })` reject it as an unknown field. Merging another field into the same block keeps it. In a view rule it can be written as part of the rule text.
+  - **View property `routing spline|ortho`** of element, dynamic and deployment views: not read and not written; `updateView` keeps it.
+  - **`autoLayout … spline|ortho`**, the edge routing after direction and spacing: `addView` and `updateView` accept and write it as part of the `autoLayout` string (`'LeftRight 120 40 ortho'`). The rule's `autoLayout` object does not report it; it is in the rule's `text`.
+  - **Shape `agent`**: accepted by the style writes like the other shapes, as their shape keywords come from the grammar.
+  - The new keywords are identifiers where LikeC4 1.60.0 accepts them: `addElement` accepts the names `routing`, `ortho`, `spline`, `auto`, `fixed` and `agent`, and `global predicate` / `global style` rules naming a keyword-like global (`global style fixed`) are reported and removed like others.
 
 ## [0.11.1] - 2026-10-19
 
