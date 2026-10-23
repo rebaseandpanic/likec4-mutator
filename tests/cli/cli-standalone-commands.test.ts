@@ -731,30 +731,37 @@ describe('row 26: the existing invocations of the five print their kept lines', 
       args: ['add-element', '--parent', 'app', '--kind', 'service', '--id', 'newSvc', '--title', 'New Service'],
       mutation: { op: 'addElement', parent: 'app', kind: 'service', id: 'newSvc', title: 'New Service' },
       lines: ["Created element 'app.newSvc'"],
+      applyLines: ["  addElement: created 'app.newSvc'"],
     },
     {
       args: ['add-relationship', '--source', 'app.api', '--target', 'app.db', '--label', 'syncs'],
       mutation: { op: 'addRelationship', source: 'app.api', target: 'app.db', label: 'syncs' },
       lines: ["Relationship 'app.api' -> 'app.db' added successfully"],
+      applyLines: [],
     },
     {
       args: ['update-element', '--fqn', 'app.api', '--description', 'Updated via CLI'],
       mutation: { op: 'updateElement', fqn: 'app.api', description: 'Updated via CLI' },
       lines: ["Element 'app.api' updated successfully"],
+      applyLines: [],
     },
     {
       args: ['remove-element', '--fqn', 'app.db'],
       mutation: { op: 'removeElement', fqn: 'app.db' },
       lines: ["Removed element 'app.db'", 'Also removed 1 relationship(s):', "  app.api -> app.db 'reads/writes'"],
+      applyLines: ["  removeElement: removed 'app.db' (1 relationship(s) also removed)"],
     },
     {
       args: ['remove-relationship', '--source', 'api', '--target', 'db'],
       mutation: { op: 'removeRelationship', source: 'api', target: 'db' },
       lines: ["Relationship 'api' -> 'db' removed successfully"],
+      applyLines: [],
     },
-  ])('$args.0', async ({ args, mutation, lines }) => {
-    const { command } = await expectSameAsApply('minimal', args, mutation);
+  ])('$args.0', async ({ args, mutation, lines, applyLines }) => {
+    const { command, apply } = await expectSameAsApply('minimal', args, mutation);
     expect(command.code).toBe(0);
     expect(command.stdout.split('\n')).toEqual([...lines, '']);
+    // apply keeps its own lines for the same mutation (INV-6, its format from before lc4m-15.31).
+    expect(apply.stdout.split('\n')).toEqual([...applyLines, 'Applied 1 mutation(s) successfully', '']);
   });
 });
