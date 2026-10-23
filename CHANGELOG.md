@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+CLI parity with `apply`, semantic validation like `likec4 validate`, and `.likec4` / `.like-c4` files in the CLI (lc4m-15.31, lc4m-28). See [CLI](README.md#cli) and [Semantic validation](README.md#semantic-validation) in the README.
+
+### Changed
+Existing CLI invocations keep their behaviour except for the following.
+- **`validate` reports what `likec4 validate` reports.** It checks the loaded files with LikeC4's own language services (LikeC4 1.59.4) instead of the library's syntax check: unresolved references, duplicate names, undeclared kinds and tags, invalid relationships and failures of the view computation and layout are now errors too. Each error is a line `file:line:column: message` on stderr with LikeC4's message text (1-based column), or the message alone for an error without a location. The brace-balance line is no longer printed. A file whose only error was the brace-balance line and that LikeC4 accepts now passes with exit code 0 (no known input produces this case, so it is not covered by a test). The exit codes and the success line are unchanged.
+- **Every CLI command also loads `.likec4` and `.like-c4` files.** The extensions are those LikeC4 reads. A `--dir` tree containing such files is now a different model: its files are read, written back under their own names, and counted in the success line of `validate`. The "no files found" error names the three extensions.
+- **`get-element --source --json`** prints the source text as a JSON string. Before, `--source` ignored `--json` and printed the raw text.
+- **`--tags` of `add-element` and `update-element`.** A value that is, as a whole, a JSON array of strings (including `'[]'`, the empty list) is now that list. Before, it was split on commas. A comma list and `--tags ''` (not given) parse as before.
+- **Rejections of the five existing commands name the flag with `apply`'s field path.** The path of the field inside the flag is kept, as `apply` reports it with `mutations[i].<field>`: `--tags[1]: …` where `--tags: …` was printed, `--style.color: …`. `remove-element` and `remove-relationship` now name the flag (`--fqn: …`, `--source: …`) before the library's message, which they printed alone before.
+- **`validate()` positions a syntax error at the end of a file (lc4m-28).** A file ending inside an open block was reported at `NaN:NaN`. It is now reported at the end of the file: the last line (a trailing newline starts an empty last line) and the column after its last character. Its other messages and the brace-balance line are unchanged.
+
+### Added
+- **A command for every `apply` operation.** The 34 operations without one get a command named by the operation in kebab-case (`add-view`, `update-view-step`, `remove-deployment-node`, ...). Its flags are the operation's fields in kebab-case. It runs the same checks and writes the same files as `apply` with that one operation, in place unless `--output` is given. Text output is the lines `apply` prints for the operation, or `<operation>: done`.
+- **Flag encoding for every field kind.** Text is taken literally. `--unset-<field>` passes `null`. `--match-bidirectional true|false`. Switches such as `--cascade` take no value. Numbers are JSON numbers. `tags` is a JSON array of strings or a comma list. Every other list and object is JSON. A rejection names the flag and writes nothing; a flag given twice takes its last value.
+- **Field parity of `add-element`, `add-relationship`, `update-element`, `remove-element` and `remove-relationship`.**
+  - Every field of their operation now has a flag. `add-element` and `update-element` gain `--links`, `--metadata` and `--style`, and `add-element` gains `--file`. `add-relationship` gains `--description`, `--technology`, `--tags`, `--links`, `--metadata`, `--style`, `--kind`, `--kind-form`, `--bidirectional`, `--placement`, `--file` and `--shared`. `remove-element` gains `--cascade`. `remove-relationship` gains the selector flags `--match-kind`, `--match-title`, `--match-bidirectional` and `--position`.
+  - `--parent` and `--title` of `add-element` are optional. Without `--parent`, the element is added at the model level; without `--title`, it gets the kind's title, else the name.
+  - `remove-element --cascade` lists the removed constructs after its existing lines.
+- **`--json` on every single-operation write command.** stdout carries only `{"operation": <the apply name>, "result": <the library method's value, or null>}`. `apply` is unchanged.
+- **Read commands.** `get-relationships`, `get-specification`, `list-views`, `get-view`, `list-deployment-nodes`, `get-deployment-node`, `get-deployment-node-kind`, `list-deployment-instances`, `get-deployment-instance` and `list-deployment-relationships`, next to `list-elements` and `get-element`. Their flags are the method's parameters; `--json` prints the method's value. A `get-*` command whose construct does not exist exits 1, with the reason on stderr.
+- **`validateModel(options?)`.** An asynchronous method that checks the loaded files as `likec4 validate` 1.59.4 does and resolves to `ValidationRecord[]` (exported type).
+  - Located records come from LikeC4's error diagnostics: file, 1-based line and column, message.
+  - An exception escaping the computation and layout of the views is an unlocated record.
+  - `{ layout: false }` skips the view step.
+  - The sources are copied at the call, and concurrent calls are independent.
+  - The promise rejects when the check cannot run.
+  - `validate()` is unchanged.
+- **`validate --no-layout` and `validate --json`.** `--no-layout` skips the view computation and layout. `--json` prints only the array of records on stdout and leaves stderr empty, except `Error: <reason>` when the check cannot run.
+
 ## [0.11.1] - 2026-10-19
 
 The first published release of the 0.11.0 changes below: the 0.11.0 tag was created, but its release run stopped on a test timeout before publishing to npm. No library or CLI change.
