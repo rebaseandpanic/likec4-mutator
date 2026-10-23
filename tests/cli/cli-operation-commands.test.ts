@@ -11,8 +11,9 @@
  * its own copies of one model: one copy gets the command, another `apply`
  * with the case's mutation; files are compared byte for byte.  Expected
  * sides are `apply`'s run on the same input (the spec's contract: the
- * command equals `apply`), and the library method's own value for
- * `--json`.
+ * command equals `apply`), the library method's own value for `--json`,
+ * and for the printed lines `apply`'s format from before this change
+ * (INV-6), written out per case.
  */
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -228,6 +229,12 @@ interface Case {
   mutation: { op: Mutation['op'] } & Record<string, unknown>;
   /** The library call of the operation with the same arguments */
   call: (m: LikeC4Mutator) => unknown;
+  /**
+   * The lines `apply` prints for the operation, in its format from before
+   * lc4m-15.31 (INV-6), filled in from the model by hand; absent where
+   * `apply` prints none, and the command prints `<operation>: done`
+   */
+  output?: string[];
 }
 
 const LINKS = [{ url: 'https://example.com/docs', label: 'Docs' }];
@@ -246,18 +253,21 @@ const CASES: Case[] = [
     model: 'zones',
     args: ['rename-element', '--fqn', 'shop.db', '--new-name', 'storage'],
     mutation: { op: 'renameElement', fqn: 'shop.db', newName: 'storage' },
+    output: ["  renameElement: renamed 'shop.db' to 'shop.storage'"],
     call: (m) => m.renameElement('shop.db', 'storage'),
   },
   {
     model: 'spec',
     args: ['move-element', '--fqn', 'other', '--parent', 'app'],
     mutation: { op: 'moveElement', fqn: 'other', parent: 'app' },
+    output: ["  moveElement: moved 'other' to 'app.other'"],
     call: (m) => m.moveElement('other', { parent: 'app' }),
   },
   {
     model: 'spec',
     args: ['move-element', '--fqn', 'app.api', '--unset-parent', '--file', 'model.c4'],
     mutation: { op: 'moveElement', fqn: 'app.api', parent: null, file: 'model.c4' },
+    output: ["  moveElement: moved 'app.api' to 'api'"],
     call: (m) => m.moveElement('app.api', { parent: null, file: 'model.c4' }),
   },
   {
@@ -270,6 +280,7 @@ const CASES: Case[] = [
       op: 'addKind', type: 'element', name: 'gateway', file: 'spec.c4', title: 'Gateway', summary: 'Entry point',
       description: 'Routes requests', technology: 'Envoy', tags: ['edge'], links: LINKS,
     },
+    output: ["  addKind: declared the element kind 'gateway'"],
     call: (m) =>
       m.addKind('element', 'gateway', {
         file: 'spec.c4', title: 'Gateway', summary: 'Entry point', description: 'Routes requests', technology: 'Envoy', tags: ['edge'], links: LINKS,
@@ -284,6 +295,7 @@ const CASES: Case[] = [
     mutation: {
       op: 'updateKind', type: 'element', name: 'service', title: 'Service', summary: 'A service', description: 'Runs code', tags: ['public'], links: LINKS,
     },
+    output: ["  updateKind: changed the element kind 'service'"],
     call: (m) =>
       m.updateKind('element', 'service', { title: 'Service', summary: 'A service', description: 'Runs code', tags: ['public'], links: LINKS }),
   },
@@ -291,42 +303,49 @@ const CASES: Case[] = [
     model: 'zones',
     args: ['update-kind', '--type', 'element', '--name', 'service', '--unset-technology'],
     mutation: { op: 'updateKind', type: 'element', name: 'service', technology: null },
+    output: ["  updateKind: changed the element kind 'service'"],
     call: (m) => m.updateKind('element', 'service', { technology: null }),
   },
   {
     model: 'zones',
     args: ['add-tag', '--name', 'beta', '--file', 'spec.c4'],
     mutation: { op: 'addTag', name: 'beta', file: 'spec.c4' },
+    output: ["  addTag: declared the tag 'beta'"],
     call: (m) => m.addTag('beta', { file: 'spec.c4' }),
   },
   {
     model: 'zones',
     args: ['rename-kind', '--type', 'element', '--name', 'worker', '--new-name', 'job'],
     mutation: { op: 'renameKind', type: 'element', name: 'worker', newName: 'job' },
+    output: ["  renameKind: renamed the element kind 'worker' to 'job'"],
     call: (m) => m.renameKind('element', 'worker', 'job'),
   },
   {
     model: 'spec',
     args: ['remove-kind', '--type', 'element', '--name', 'unused'],
     mutation: { op: 'removeKind', type: 'element', name: 'unused' },
+    output: ["  removeKind: removed the element kind 'unused'"],
     call: (m) => m.removeKind('element', 'unused'),
   },
   {
     model: 'zones',
     args: ['rename-tag', '--name', 'replica', '--new-name', 'standby'],
     mutation: { op: 'renameTag', name: 'replica', newName: 'standby' },
+    output: ["  renameTag: renamed the tag 'replica' to 'standby'"],
     call: (m) => m.renameTag('replica', 'standby'),
   },
   {
     model: 'spec',
     args: ['remove-tag', '--name', 'old'],
     mutation: { op: 'removeTag', name: 'old' },
+    output: ["  removeTag: removed the tag 'old'"],
     call: (m) => m.removeTag('old'),
   },
   {
     model: 'zones',
     args: ['add-element-extend', '--fqn', 'shop.web', '--file', 'model.c4', '--tags', 'internal', '--links', LINKS_JSON, '--metadata', '{"owner":"team-b"}'],
     mutation: { op: 'addElementExtend', fqn: 'shop.web', file: 'model.c4', tags: ['internal'], links: LINKS, metadata: { owner: 'team-b' } },
+    output: ["  addElementExtend: added an extend block of 'shop.web' in 'model.c4'"],
     call: (m) => m.addElementExtend('shop.web', { file: 'model.c4', tags: ['internal'], links: LINKS, metadata: { owner: 'team-b' } }),
   },
   {
@@ -339,6 +358,7 @@ const CASES: Case[] = [
       op: 'addRelationshipExtend', source: 'shop.web', target: 'shop.api', matchTitle: 'calls', matchBidirectional: false,
       file: 'model.c4', tags: ['public'], links: LINKS, metadata: { owner: 'team-b' },
     },
+    output: ["  addRelationshipExtend: added an extend block of 'shop.web' -> 'shop.api' in 'model.c4'"],
     call: (m) =>
       m.addRelationshipExtend(
         { source: 'shop.web', target: 'shop.api', matchTitle: 'calls', matchBidirectional: false },
@@ -349,12 +369,14 @@ const CASES: Case[] = [
     model: 'zones',
     args: ['add-relationship-extend', '--source', 'shop.api', '--target', 'shop.db', '--position', RS_JSON, '--file', 'model.c4', '--tags', 'internal', '--shared'],
     mutation: { op: 'addRelationshipExtend', source: 'shop.api', target: 'shop.db', position: RS, file: 'model.c4', tags: ['internal'], shared: true },
+    output: ["  addRelationshipExtend: added an extend block of 'shop.api' -> 'shop.db' in 'model.c4'"],
     call: (m) => m.addRelationshipExtend({ source: 'shop.api', target: 'shop.db', position: RS }, { file: 'model.c4', tags: ['internal'], shared: true }),
   },
   {
     model: 'flows',
     args: ['add-relationship-extend', '--source', 'portal.web', '--target', 'portal.gateway', '--match-kind', 'call', '--file', 'model.c4', '--tags', 'draft'],
     mutation: { op: 'addRelationshipExtend', source: 'portal.web', target: 'portal.gateway', matchKind: 'call', file: 'model.c4', tags: ['draft'] },
+    output: ["  addRelationshipExtend: added an extend block of 'portal.web' -> 'portal.gateway' in 'model.c4'"],
     call: (m) => m.addRelationshipExtend({ source: 'portal.web', target: 'portal.gateway', matchKind: 'call' }, { file: 'model.c4', tags: ['draft'] }),
   },
   {
@@ -419,6 +441,7 @@ const CASES: Case[] = [
       op: 'addDeploymentNode', parent: 'prod.eu', name: 'vm4', kind: 'host', title: 'VM 4', summary: 'Spare host', description: 'Standby',
       technology: 'KVM', tags: ['edge'], links: LINKS, style: { color: 'green' }, metadata: { owner: 'ops' },
     },
+    output: ["  addDeploymentNode: created 'prod.eu.vm4'"],
     call: (m) =>
       m.addDeploymentNode('prod.eu', {
         name: 'vm4', kind: 'host', title: 'VM 4', summary: 'Spare host', description: 'Standby', technology: 'KVM', tags: ['edge'],
@@ -429,6 +452,7 @@ const CASES: Case[] = [
     model: 'zones',
     args: ['add-deployment-node', '--name', 'staging', '--kind', 'environment', '--file', 'ext/eu.c4'],
     mutation: { op: 'addDeploymentNode', name: 'staging', kind: 'environment', file: 'ext/eu.c4' },
+    output: ["  addDeploymentNode: created 'staging'"],
     call: (m) => m.addDeploymentNode(null, { name: 'staging', kind: 'environment', file: 'ext/eu.c4' }),
   },
   {
@@ -451,6 +475,7 @@ const CASES: Case[] = [
     model: 'zones',
     args: ['remove-deployment-node', '--id', 'prod.eu.vm3', '--cascade'],
     mutation: { op: 'removeDeploymentNode', id: 'prod.eu.vm3', cascade: true },
+    output: ["  removeDeploymentNode: removed 'prod.eu.vm3' (1 relationship(s) also removed)"],
     call: (m) => m.removeDeploymentNode('prod.eu.vm3', { cascade: true }),
   },
   {
@@ -464,6 +489,7 @@ const CASES: Case[] = [
       op: 'addDeploymentInstance', node: 'prod.eu.vm2', element: 'shop.api', name: 'api3', title: 'API 3', summary: 'Third', description: 'Extra',
       technology: 'Go', tags: ['replica'], links: LINKS, style: { color: 'green' }, metadata: { tier: 'bronze' },
     },
+    output: ["  addDeploymentInstance: created 'prod.eu.vm2.api3'"],
     call: (m) =>
       m.addDeploymentInstance('prod.eu.vm2', {
         element: 'shop.api', name: 'api3', title: 'API 3', summary: 'Third', description: 'Extra', technology: 'Go', tags: ['replica'],
@@ -490,6 +516,7 @@ const CASES: Case[] = [
     model: 'zones',
     args: ['remove-deployment-instance', '--id', 'prod.eu.cache', '--cascade'],
     mutation: { op: 'removeDeploymentInstance', id: 'prod.eu.cache', cascade: true },
+    output: ["  removeDeploymentInstance: removed 'prod.eu.cache'"],
     call: (m) => m.removeDeploymentInstance('prod.eu.cache', { cascade: true }),
   },
   {
@@ -548,6 +575,7 @@ const CASES: Case[] = [
     model: 'zones',
     args: ['remove-deployment-extend', '--node', 'prod.eu', '--file', 'ext/eu.c4', '--occurrence', '1'],
     mutation: { op: 'removeDeploymentExtend', node: 'prod.eu', file: 'ext/eu.c4', occurrence: 1 },
+    output: ["  removeDeploymentExtend: removed 'extend prod.eu' in 'ext/eu.c4' (1 relationship(s) also removed)"],
     call: (m) => m.removeDeploymentExtend({ node: 'prod.eu', file: 'ext/eu.c4', occurrence: 1 }),
   },
   {
@@ -584,6 +612,7 @@ const CASES: Case[] = [
     model: 'flows',
     args: ['remove-view', '--id', 'delivery', '--cascade'],
     mutation: { op: 'removeView', id: 'delivery', cascade: true },
+    output: ["  removeView: removed 'delivery'", '  removeView: cascade removed flows.c4:28:18 (navigate-to), flows.c4:79:18 (navigate-to)'],
     call: (m) => m.removeView('delivery', { cascade: true }),
   },
   {
@@ -703,11 +732,11 @@ describe('row 8: each generated command writes what apply writes for the same mu
 
 describe("row 9: a generated command prints apply's lines without the summary, or '<operation>: done'", SLOW, () => {
   it.each(CASES.map((c) => [label(c), c] as const))('%s', async (_, c) => {
-    const lines = applyLines((await applyOf(c)).stdout);
+    expect(applyLines((await applyOf(c)).stdout)).toEqual(c.output ?? []);
     const command = await commandOf(c);
     expect(command.code).toBe(0);
     expect(command.stderr).toBe('');
-    expect(command.stdout).toBe(lines.length > 0 ? `${lines.join('\n')}\n` : `${c.mutation.op}: done\n`);
+    expect(command.stdout.split('\n')).toEqual([...(c.output ?? [`${c.mutation.op}: done`]), '']);
   });
 
   it.each([
