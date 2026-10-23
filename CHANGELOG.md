@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.12.0] - 2026-10-23
 
 CLI parity with `apply`, semantic validation like `likec4 validate`, and `.likec4` / `.like-c4` files in the CLI (lc4m-15.31, lc4m-28). See [CLI](README.md#cli) and [Semantic validation](README.md#semantic-validation) in the README.
 
