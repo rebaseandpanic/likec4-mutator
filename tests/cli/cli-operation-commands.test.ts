@@ -1023,6 +1023,20 @@ describe('row 14: the encoding keeps every value apply accepts', SLOW, () => {
     expect(given.command.code).not.toBe(omitted.command.code);
   });
 
+  it('--match-bidirectional true selects the bidirectional relationship, as in apply', async () => {
+    const args = ['update-relationship', '--source', 'a', '--target', 'b', '--technology', 'T'];
+    const mutation = { op: 'updateRelationship', source: 'a', target: 'b', technology: 'T' };
+    const chosen = await expectSameAsApply('bidi', [...args, '--match-bidirectional', 'true'], { ...mutation, matchBidirectional: true });
+    expect(chosen.command.code).toBe(0);
+    const lines = applyLines(chosen.apply.stdout);
+    expect(chosen.command.stdout).toBe(lines.length > 0 ? `${lines.join('\n')}\n` : 'updateRelationship: done\n');
+    // The other value of the flag picks the other relationship: different files.
+    const other = await runApply('bidi', { ...mutation, matchBidirectional: false });
+    const trueFiles = (await runApply('bidi', { ...mutation, matchBidirectional: true })).files;
+    expect(other.code).toBe(0);
+    expect(trueFiles).not.toEqual(other.files);
+  });
+
   it.each([
     ['null', 'null'],
     ['', ''],
