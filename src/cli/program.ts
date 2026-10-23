@@ -14,6 +14,7 @@ import { InvalidWriteError } from '../mutator/write-checks.js';
 import { runOperation } from '../operations/run-operation.js';
 import { likec4FileExtensionList, loadDirectory, writeOutput } from './files.js';
 import { addOperationCommands } from './operation-commands.js';
+import { addReadCommands } from './read-commands.js';
 
 /** A stream the program writes text to (`process.stdout`, or a test's collector). */
 export interface CliWriter {
@@ -96,109 +97,10 @@ export function buildProgram(io: CliIO, options: BuildProgramOptions = {}): CliP
     }));
 
   // ---------------------------------------------------------------------------
-  // list-elements
+  // The read commands, from the read table
   // ---------------------------------------------------------------------------
 
-  program
-    .command('list-elements')
-    .description('List all elements across the LikeC4 files in a directory')
-    .requiredOption('--dir <path>', dirDescription)
-    .option('--kind <kind>', 'Filter by element kind')
-    .option('--parent <fqn>', 'Filter by parent FQN')
-    .option('--json', 'Output as JSON array')
-    .action(action((opts: { dir: string; kind?: string; parent?: string; json?: boolean }) => {
-      try {
-        const files = loadDirectory(opts.dir);
-        const mutator = LikeC4Mutator.fromFiles(files);
-        const elements = mutator.listElements({
-          kind: opts.kind,
-          parentFqn: opts.parent,
-        });
-
-        if (opts.json) {
-          io.stdout.write(JSON.stringify(elements, null, 2) + '\n');
-        } else {
-          if (elements.length === 0) {
-            io.stdout.write('No elements found\n');
-          } else {
-            for (const el of elements) {
-              const parts = [el.fqn, `[${el.kind}]`];
-              if (el.title) parts.push(`"${el.title}"`);
-              if (el.technology) parts.push(`(${el.technology})`);
-              io.stdout.write(parts.join('  ') + '\n');
-            }
-          }
-        }
-        return 0;
-      } catch (err) {
-        io.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-        return 1;
-      }
-    }));
-
-  // ---------------------------------------------------------------------------
-  // get-element
-  // ---------------------------------------------------------------------------
-
-  program
-    .command('get-element')
-    .description('Get a single element by its fully qualified name')
-    .requiredOption('--dir <path>', dirDescription)
-    .requiredOption('--fqn <fqn>', 'Fully qualified name of the element')
-    .option('--json', 'Output as JSON')
-    .option('--source', 'Output raw DSL source text')
-    .action(action((opts: { dir: string; fqn: string; json?: boolean; source?: boolean }) => {
-      try {
-        const files = loadDirectory(opts.dir);
-        const mutator = LikeC4Mutator.fromFiles(files);
-
-        if (opts.source) {
-          const src = mutator.getElementSource(opts.fqn);
-          if (src === null) {
-            io.stderr.write(`Element '${opts.fqn}' not found\n`);
-            return 1;
-          }
-          io.stdout.write(src + '\n');
-        } else if (opts.json) {
-          const el = mutator.getElement(opts.fqn);
-          if (el === null) {
-            io.stderr.write(`Element '${opts.fqn}' not found\n`);
-            return 1;
-          }
-          io.stdout.write(JSON.stringify(el, null, 2) + '\n');
-        } else {
-          const el = mutator.getElement(opts.fqn);
-          if (el === null) {
-            io.stderr.write(`Element '${opts.fqn}' not found\n`);
-            return 1;
-          }
-          io.stdout.write(`FQN:         ${el.fqn}\n`);
-          io.stdout.write(`Name:        ${el.name}\n`);
-          io.stdout.write(`Kind:        ${el.kind}\n`);
-          if (el.title) io.stdout.write(`Title:       ${el.title}\n`);
-          if (el.summary) io.stdout.write(`Summary:     ${el.summary}\n`);
-          if (el.description) io.stdout.write(`Description: ${el.description}\n`);
-          if (el.technology) io.stdout.write(`Technology:  ${el.technology}\n`);
-          if (el.parentFqn) io.stdout.write(`Parent:      ${el.parentFqn}\n`);
-          if (el.children.length > 0) io.stdout.write(`Children:    ${el.children.join(', ')}\n`);
-          if (el.tags && el.tags.length > 0) io.stdout.write(`Tags:        ${el.tags.join(', ')}\n`);
-          if (el.fromSpecification) {
-            // 1-based line of the kind declaration whose defaults apply.
-            const spec = el.fromSpecification;
-            io.stdout.write(`Kind spec:   ${spec.file ?? '<unnamed>'}:${spec.sourceRange.line + 1}\n`);
-          }
-          if (el.extendedBy.length > 0) {
-            // 1-based line of each `extend` block that contributes to the element.
-            const places = el.extendedBy.map((e) => `${e.file ?? '<unnamed>'}:${e.sourceRange.line + 1}`);
-            io.stdout.write(`Extended by: ${places.join(', ')}\n`);
-          }
-        }
-        return 0;
-      } catch (err) {
-        io.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-        return 1;
-      }
-    }));
+  addReadCommands(program, { io, dirDescription, action });
 
   // ---------------------------------------------------------------------------
   // The single-operation commands, generated from the operation table
