@@ -127,6 +127,11 @@ describe("commander's own rejections exit 1 and write nothing (row 5)", SLOW, ()
     { name: 'an unknown option', args: (dir: string) => ['--dir', dir, '--parent', 'app', '--kind', 'system', '--id', 'n', '--title', 'N', '--no-such-flag', 'x'] },
     { name: 'a missing required --kind', args: (dir: string) => ['--dir', dir, '--parent', 'app', '--id', 'n', '--title', 'N'] },
     { name: 'a missing required --dir', args: () => ['--parent', 'app', '--kind', 'system', '--id', 'n', '--title', 'N'] },
+    // Only a field that accepts null has --unset-<field>; addElement's title does not.
+    {
+      name: 'an --unset- flag of a field that does not accept null',
+      args: (dir: string) => ['--dir', dir, '--parent', 'app', '--kind', 'system', '--id', 'n', '--title', 'N', '--unset-title'],
+    },
   ])('add-element with $name', async ({ args }) => {
     const dir = tempDir(MODEL);
     const result = await run('add-element', ...args(dir));
