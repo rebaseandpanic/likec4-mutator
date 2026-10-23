@@ -869,6 +869,14 @@ const REJECTIONS: Rejection[] = [
     field: 'occurrence',
     flag: 'occurrence',
   },
+  // A number of more than one digit: decoded as 12 and rejected by the library (one block), as in apply.
+  {
+    model: 'zones',
+    args: ['remove-deployment-extend', '--node', 'prod.eu', '--file', 'ext/eu.c4', '--occurrence', '12'],
+    mutation: { op: 'removeDeploymentExtend', node: 'prod.eu', file: 'ext/eu.c4', occurrence: 12 },
+    field: 'occurrence',
+    flag: 'occurrence',
+  },
   { model: 'flows', args: ['update-view', '--id', 'nope', '--title', 'x'], mutation: { op: 'updateView', id: 'nope', title: 'x' }, field: 'id', flag: 'id' },
   {
     model: 'flows',
