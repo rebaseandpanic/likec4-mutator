@@ -426,3 +426,88 @@ describe('addView autoLayout through apply (row 92)', SLOW, () => {
     expect(m.getView('x')!.rules.at(-1)).toMatchObject({ kind: 'autoLayout', autoLayout: { direction: 'RightLeft', rankSep: 80, nodeSep: 40 } });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Row 1 of the lc4m-15.31 test matrix (D145, INV-6): the cascade and
+// emptied-`par` lines `apply` prints stay exactly as they are once the
+// dispatch runs through the shared operation runner.  The line formats are
+// the ones `apply` has printed since its view writes (lc4m-35.1, emptied
+// `par`) and its cascade (lc4m-48.7); the positions are the 1-based
+// positions of each reference in the literal models below, counted by hand.
+// ---------------------------------------------------------------------------
+
+/** Model A: `base` is referred to by `navigateTo base` of view `nav` (line 15, `base` at column 18). */
+const MODEL_A = [
+  'specification {',
+  '  element system',
+  '}',
+  'model {',
+  '  app = system',
+  '  other = system',
+  '  app -> other',
+  '}',
+  'views {',
+  '  view base {',
+  '    include app, other',
+  '  }',
+  '  view nav {',
+  '    include app with {',
+  '      navigateTo base',
+  '    }',
+  '  }',
+  '  dynamic view flow {',
+  '    parallel {',
+  '      app -> other',
+  '    }',
+  '    app -> other',
+  '  }',
+  '}',
+  '',
+].join('\n');
+
+/** Model B: model A without view `nav`; the first `parallel` of `flow` holds one step. */
+const MODEL_B = MODEL_A.replace('  view nav {\n    include app with {\n      navigateTo base\n    }\n  }\n', '');
+
+/** Model C: `other` is an item of `include app, other` (line 10, `other` at column 18). */
+const MODEL_C = [
+  'specification {',
+  '  element system',
+  '}',
+  'model {',
+  '  app = system',
+  '  other = system',
+  '}',
+  'views {',
+  '  view base {',
+  '    include app, other',
+  '  }',
+  '}',
+  '',
+].join('\n');
+
+describe('cascade and emptied-par lines of apply (lc4m-15.31 row 1)', SLOW, () => {
+  it.each([
+    {
+      name: 'removeView with cascade',
+      model: MODEL_A,
+      mutation: { op: 'removeView', id: 'base', cascade: true },
+      lines: ["  removeView: removed 'base'", '  removeView: cascade removed model.c4:15:18 (navigate-to)'],
+    },
+    {
+      name: 'removeElement with cascade',
+      model: MODEL_C,
+      mutation: { op: 'removeElement', fqn: 'other', cascade: true },
+      lines: ["  removeElement: removed 'other'", '  removeElement: cascade removed model.c4:10:18 (predicate-item)'],
+    },
+    {
+      name: 'removeViewStep emptying a parallel block',
+      model: MODEL_B,
+      mutation: { op: 'removeViewStep', id: 'flow', address: { path: [0, 0] } },
+      lines: ['  removeViewStep: removed the emptied par block(s) [0]'],
+    },
+  ])('$name', ({ model, mutation, lines }) => {
+    const run = runApply([mutation], { 'model.c4': model });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout.split('\n')).toEqual([...lines, 'Applied 1 mutation(s) successfully', '']);
+  });
+});
