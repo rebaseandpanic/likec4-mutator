@@ -646,6 +646,16 @@ describe('row 23: --tags of a kept command (D156)', SLOW, () => {
     expect(command.code).toBe(0);
   });
 
+  it("'' on an element that has tags keeps them, as apply without tags", async () => {
+    const { command } = await expectSameAsApply('zones', ['update-element', '--fqn', 'shop.web', '--title', 'T', '--tags', ''], {
+      op: 'updateElement', fqn: 'shop.web', title: 'T',
+    });
+    expect(command.code).toBe(0);
+    // `shop.web` carries #public in the fixture; the empty list would remove it.
+    expect(modelFiles('zones')['model.c4']).toContain("    web = service 'Web' {\n      #public\n");
+    expect(command.files['model.c4']).toContain('      #public\n');
+  });
+
   it("'[1]' is the comma list [\"[1]\"] and is rejected at --tags[0]", async () => {
     const { command } = await expectSameAsApply('minimal', [...ARGS, '[1]'], { op: 'updateElement', fqn: 'app.api', title: 'T', tags: ['[1]'] }, {
       field: 'tags',
