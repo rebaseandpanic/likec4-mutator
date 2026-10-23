@@ -77,6 +77,7 @@ import type {
   ViewWriteResult,
 } from '../query/types.js';
 import type { ParsedDocument } from '../parser/types.js';
+import { checkLikeC4, type ValidationRecord } from '../validation/likec4-check.js';
 import { applyEdits, lineEndingOf, withLineEnding, type TextEdit } from './text-edit.js';
 import {
   addElementEdit,
@@ -3412,6 +3413,39 @@ export class LikeC4Mutator {
       errors.push(...this.fileErrors(filename, source, this.document(filename)));
     }
     return errors;
+  }
+
+  /**
+   * Check the loaded files as `likec4 validate` of LikeC4 1.59.4 does, with
+   * LikeC4's own language services, and report what it reports:
+   *
+   * - every diagnostic of error severity, as a located record: the file
+   *   name as loaded, the 1-based line and column of the diagnostic's start,
+   *   and LikeC4's message (`origin: 'language-services'`); warnings are not
+   *   reported;
+   * - unless `layout` is `false`, an exception escaping the computation and
+   *   layout of the views, as an unlocated record with the exception's
+   *   message only (`origin: 'views'`).  A view LikeC4 fails to lay out
+   *   without failing that step is logged by LikeC4 and is not an error, as
+   *   for the command; console output LikeC4 writes during the check is
+   *   discarded.  Manual layouts are not read, so layout drift never occurs.
+   *
+   * The sources are copied when the method is called: mutations made while
+   * the check runs do not change its result, and concurrent calls, on one
+   * instance or on several, are independent.  The promise rejects when the
+   * check cannot run (LikeC4's services cannot be built); that is not a
+   * record.  {@link validate} stays the synchronous syntax check.
+   *
+   * Not covered by tests, for lack of an input that triggers it: the
+   * unlocated record, the rejection, and a difference made by
+   * `layout: false`.
+   *
+   * @returns The records, language-service ones first in document order; empty when LikeC4 accepts the files
+   */
+  async validateModel(options: { layout?: boolean } = {}): Promise<ValidationRecord[]> {
+    // Copied before the first await: the check sees the sources of this call.
+    const files = this.serialize();
+    return checkLikeC4(files, { layout: options.layout !== false });
   }
 
   /**

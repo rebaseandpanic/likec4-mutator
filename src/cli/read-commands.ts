@@ -278,10 +278,11 @@ export const READ_COMMANDS = [
 
 /**
  * The public methods of the mutator that are neither an `apply` operation
- * nor a read entry: `serialize` (the files, not the model), `validate` (the
- * `validate` command) and `getElementSource`, read by `get-element --source`.
+ * nor a read entry: `serialize` (the files, not the model), `validate` and
+ * the semantic `validateModel` (checks, not reads) and `getElementSource`,
+ * read by `get-element --source`.
  */
-export const NOT_READ = ['serialize', 'validate', 'getElementSource'] as const satisfies readonly PublicMethod[];
+export const NOT_READ = ['serialize', 'validate', 'validateModel', 'getElementSource'] as const satisfies readonly PublicMethod[];
 
 /** The public methods the tables do not classify; must be none. */
 type Unclassified = Exclude<PublicMethod, Mutation['op'] | (typeof READ_COMMANDS)[number]['method'] | (typeof NOT_READ)[number]>;

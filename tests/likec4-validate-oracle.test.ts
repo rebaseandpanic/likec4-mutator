@@ -14,10 +14,17 @@
  * version on these sources and update them.  Cases cover valid sources,
  * warnings only, syntax errors, unresolved references, duplicates, view
  * predicates and `navigateTo`, dynamic and deployment views.
+ *
+ * The same samples and literals gate the library's `validateModel`
+ * (lc4m-15.31 rows 32–38), with its record mapping, view step, call-time
+ * snapshot and file names.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { LikeC4Mutator } from '../src/index.js';
 import { expectValidLikeC4, validateLikeC4 } from './helpers/likec4-model.js';
 
 const spec = `specification {
@@ -361,5 +368,142 @@ describe('reference fixtures pass likec4 validate', () => {
     const files = readWorkspace('refs-import');
     expect(Object.keys(files).length, '.c4 files of refs-import').toBeGreaterThan(0);
     await expectValidLikeC4(files, { projects: ['main', 'other'] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LikeC4Mutator.validateModel (lc4m-15.31 rows 32–38)
+// ---------------------------------------------------------------------------
+
+/** `<file>:<line>` of each record, sorted. */
+function locations(records: ReadonlyArray<{ file?: string; line?: number }>): string[] {
+  return records.map((r) => `${r.file}:${r.line}`).sort();
+}
+
+/** `a -> ghost` on line 4; `ghost` starts at the 1-based column 8. */
+const GHOST = 'specification { element service }\nmodel {\n  a = service\n  a -> ghost\n}\n';
+
+/**
+ * A sequence view stepping from a nested actor: LikeC4 lays it out and its
+ * sequence layout writes `Sequence view does not support nested actors`
+ * with `console.error`; no diagnostic is an error.
+ */
+const NESTED_ACTOR = `specification { element actor
+ element service }
+model { u = actor { v = actor }
+ s = service
+ u.v -> s }
+views { dynamic view d { variant sequence
+ u.v -> s
+ u -> s } }
+`;
+
+describe('validateModel reports what likec4 validate reports (row 32)', () => {
+  it.each(Object.entries(cliErrorLocations))('%s', async (name, expected) => {
+    const records = await LikeC4Mutator.fromFiles(samples[name]!).validateModel();
+    expect(locations(records)).toEqual([...expected].sort());
+    for (const record of records) {
+      expect(record.origin).toBe('language-services');
+      expect(Number.isInteger(record.line) && record.line! > 0, JSON.stringify(record)).toBe(true);
+      expect(Number.isInteger(record.column) && record.column! > 0, JSON.stringify(record)).toBe(true);
+      expect(typeof record.message).toBe('string');
+    }
+  });
+});
+
+describe('validateModel locates a record at the 1-based start of the diagnostic (row 33)', () => {
+  it('both diagnostics of an unresolved target are at model.c4:4:8', async () => {
+    const records = await LikeC4Mutator.fromFiles({ 'model.c4': GHOST }).validateModel();
+    expect(records.map((r) => [r.file, r.line, r.column])).toEqual([
+      ['model.c4', 4, 8],
+      ['model.c4', 4, 8],
+    ]);
+  });
+});
+
+describe('console output of the view step is not a record (row 34)', () => {
+  it.each([{}, { layout: false }])('validateModel(%j) of the nested-actor sample is empty', async (options) => {
+    await expect(LikeC4Mutator.fromFiles({ 'model.c4': NESTED_ACTOR }).validateModel(options)).resolves.toEqual([]);
+  });
+});
+
+describe('validateModel checks the sources of its call; calls are independent (row 35)', () => {
+  it('(a) a mutation made while the check runs does not change its result', async () => {
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': GHOST });
+    const pending = m.validateModel();
+    m.removeRelationship({ source: 'a', target: 'ghost' });
+    expect(m.serialize()['model.c4']).not.toContain('ghost');
+    expect((await pending).map((r) => [r.file, r.line, r.column])).toEqual([
+      ['model.c4', 4, 8],
+      ['model.c4', 4, 8],
+    ]);
+  });
+
+  it('(b) a call after the fix reports nothing while the earlier one still reports the errors', async () => {
+    const m = LikeC4Mutator.fromFiles({ 'model.c4': GHOST });
+    const before = m.validateModel();
+    m.removeRelationship({ source: 'a', target: 'ghost' });
+    const after = m.validateModel();
+    const [early, late] = await Promise.all([before, after]);
+    expect(locations(early)).toEqual(['model.c4:4', 'model.c4:4']);
+    expect(late).toEqual([]);
+  });
+
+  it('(c) two instances validated concurrently report their own records', async () => {
+    const other = 'specification { element service }\nmodel {\n  b = service\n\n\n  b -> nowhere\n}\n';
+    const [first, second] = await Promise.all([
+      LikeC4Mutator.fromFiles({ 'model.c4': GHOST }).validateModel(),
+      LikeC4Mutator.fromFiles({ 'other.c4': other }).validateModel(),
+    ]);
+    expect(locations(first)).toEqual(['model.c4:4', 'model.c4:4']);
+    expect(locations(second)).toEqual(['other.c4:6', 'other.c4:6']);
+  });
+});
+
+describe('validateModel({ layout: false }) still reports the language-service errors (row 36)', () => {
+  it.each(Object.entries(cliErrorLocations))('%s', async (name, expected) => {
+    const records = await LikeC4Mutator.fromFiles(samples[name]!).validateModel({ layout: false });
+    expect(locations(records)).toEqual([...expected].sort());
+  });
+});
+
+describe('overlapping validateModel calls keep LikeC4 console output off the process streams (row 37)', () => {
+  it('three overlapping calls on the nested-actor sample, then the caller writes to stderr', () => {
+    const root = resolve(import.meta.dirname, '..');
+    const dir = mkdtempSync(join(tmpdir(), 'likec4-mutator-overlap-'));
+    const script = join(dir, 'overlap.mts');
+    writeFileSync(
+      script,
+      [
+        `import { LikeC4Mutator } from ${JSON.stringify(join(root, 'src', 'index.ts'))};`,
+        `const files = { 'model.c4': ${JSON.stringify(NESTED_ACTOR)} };`,
+        'const first = LikeC4Mutator.fromFiles(files);',
+        'const second = LikeC4Mutator.fromFiles(files);',
+        'const calls = [first.validateModel(), first.validateModel(), second.validateModel()];',
+        'const results = await Promise.all(calls);',
+        "console.error('AFTER');",
+        'process.stdout.write(JSON.stringify(results));',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    const result = spawnSync('npx', ['tsx', script], { cwd: root, encoding: 'utf-8', timeout: 120_000 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([[], [], []]);
+    expect(result.stderr).toBe('AFTER\n');
+  }, 150_000);
+});
+
+describe('validateModel names each record by its file as loaded (row 38)', () => {
+  it('six awkward keys are returned verbatim, none collapsed', async () => {
+    // `dir\b.c4`, not `dir\a.c4`: the mutator itself refuses two keys that
+    // denote one path (`dir/a.c4` and `dir\a.c4`) before any check runs.
+    const keys = ['dir/a.c4', 'dir\\b.c4', 'my model.c4', 'a b.c4', 'a%20b.c4', 'caf\u00e9.c4'];
+    const files: Record<string, string> = { 'spec.c4': 'specification {\n  element system\n}\n' };
+    keys.forEach((key, i) => {
+      files[key] = `model {\n  e${i} = nokind\n}\n`;
+    });
+    const records = await LikeC4Mutator.fromFiles(files).validateModel();
+    expect(records.map((r) => `${r.file}:${r.line}`).sort()).toEqual(keys.map((key) => `${key}:2`).sort());
   });
 });

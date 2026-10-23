@@ -67,6 +67,7 @@ export type {
 
 // Mutation layer — public classes and option types
 export { LikeC4Mutator } from './mutator/mutator.js';
+export type { ValidationRecord } from './validation/likec4-check.js';
 export { InvalidWriteError, ReferencedRemovalError } from './mutator/write-checks.js';
 export { RelationshipAmbiguityError } from './mutator/relationship-selector.js';
 export type { RelatedConstruct, RemovalReference, RemovalReferenceRole, ViewRuleText } from './mutator/write-checks.js';

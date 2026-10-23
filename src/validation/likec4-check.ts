@@ -11,7 +11,8 @@
  * fresh services per call; manual layouts are not read, so the command's
  * layout-drift failure cannot occur.
  *
- * Internal module: not exported from the package entry.
+ * Internal module: the package entry exports only {@link ValidationRecord},
+ * the record of `LikeC4Mutator.validateModel`, which runs this check.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
