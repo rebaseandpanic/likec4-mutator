@@ -996,17 +996,21 @@ export interface FieldSpec {
 }
 
 /**
- * The kinds compatible with a field named `K` of type `T` (`undefined`
- * removed).  A relation, not a function of the type: both boolean kinds fit a
- * boolean, and `tags` fits only the `string[]` field named `tags` — every
- * other array, `includes` among them, and every object is `json`.
+ * The kind of a field named `K` of type `T` (`undefined` removed).  It
+ * depends on the name, not only on the type: a boolean is a `valueBoolean`
+ * only where `false` differs from its absence (`matchBidirectional`) and a
+ * `presenceBoolean` everywhere else, and `tags` fits only the `string[]`
+ * field named `tags` — every other array, `includes` among them, and every
+ * object is `json`.
  */
 type KindsFor<K, T> = [T] extends [string]
   ? 'string'
   : [T] extends [string | null]
     ? 'nullableString'
     : [T] extends [boolean]
-      ? 'presenceBoolean' | 'valueBoolean'
+      ? K extends 'matchBidirectional'
+        ? 'valueBoolean'
+        : 'presenceBoolean'
       : [T] extends [number]
         ? 'number'
         : K extends 'tags'
