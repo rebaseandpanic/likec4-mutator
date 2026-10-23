@@ -508,3 +508,17 @@ describe('validateModel names each record by its file as loaded (row 38)', () =>
     expect(records.map((r) => `${r.file}:${r.line}`).sort()).toEqual(keys.map((key) => `${key}:2`).sort());
   });
 });
+
+describe('validateModel gives the caller its own console methods back (D165)', () => {
+  const METHODS = ['debug', 'dir', 'error', 'info', 'log', 'table', 'trace', 'warn'] as const;
+  const files = { 'model.c4': NESTED_ACTOR };
+
+  it.each([
+    ['one call', () => LikeC4Mutator.fromFiles(files).validateModel()],
+    ['two overlapping calls on two instances', () => Promise.all([LikeC4Mutator.fromFiles(files).validateModel(), LikeC4Mutator.fromFiles(files).validateModel()])],
+  ] as const)("after %s every console method is the caller's original", async (_, check) => {
+    const saved = Object.fromEntries(METHODS.map((method) => [method, console[method]]));
+    await check();
+    for (const method of METHODS) expect(console[method], method).toBe(saved[method]);
+  });
+});
