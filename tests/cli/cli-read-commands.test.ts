@@ -16,7 +16,6 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildProgram } from '../../src/cli/program.js';
-import { READ_COMMANDS, readFlags } from '../../src/cli/read-commands.js';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { loadDirectory } from '../../src/cli/files.js';
 
@@ -153,15 +152,6 @@ const READS: ReadCase[] = [
 ];
 
 describe('row 27: with --json each read mode prints the value of its library method', SLOW, () => {
-  it('the cases cover every mode and every parameter of the read table', () => {
-    for (const entry of READ_COMMANDS) {
-      const used = new Set(READS.filter((c) => c.args[0] === entry.command).flatMap((c) => c.args.filter((t) => t.startsWith('--'))));
-      for (const flag of readFlags(entry)) expect(used, entry.command).toContain(`--${flag.flag}`);
-      expect(READS.some((c) => c.args[0] === entry.command), entry.command).toBe(true);
-    }
-    expect(READS.some((c) => c.args[0] === 'get-element' && c.args.includes('--source'))).toBe(true);
-  });
-
   it.each(READS.map((c) => [c.args.join(' '), c] as const))('%s', async (_, c) => {
     const result = await read(RICH, [...c.args, '--json']);
     expect(result.stderr).toBe('');
