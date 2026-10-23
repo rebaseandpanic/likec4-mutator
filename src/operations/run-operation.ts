@@ -13,6 +13,8 @@ export interface OperationOutcome {
   result: unknown;
   /** The lines `apply` prints for the operation, without line ends; often none */
   lines: string[];
+  /** The last of `lines` that list the constructs a cascade removed; none without a cascade */
+  cascadeLines: string[];
 }
 
 function assertNever(x: never): never {
@@ -43,9 +45,10 @@ function removedBlocksLines(op: Mutation['op'], paths: number[][]): string[] {
  * library call (an `InvalidWriteError` among them) propagate unchanged.
  */
 export function runOperation(mutator: LikeC4Mutator, mutation: Mutation): OperationOutcome {
-  const done = (result: unknown, lines: string[] = []): OperationOutcome => ({
+  const done = (result: unknown, lines: string[] = [], cascadeLines: string[] = []): OperationOutcome => ({
     result: result === undefined ? null : result,
-    lines,
+    lines: [...lines, ...cascadeLines],
+    cascadeLines,
   });
   switch (mutation.op) {
     case 'addElement': {
@@ -119,7 +122,7 @@ export function runOperation(mutator: LikeC4Mutator, mutation: Mutation): Operat
     case 'removeView': {
       const m = mutation;
       const result = mutator.removeView(m.id, { cascade: m.cascade === true });
-      return done(result, [`  removeView: removed '${m.id}'`, ...cascadedLines(m.op, result.cascaded)]);
+      return done(result, [`  removeView: removed '${m.id}'`], cascadedLines(m.op, result.cascaded));
     }
     case 'addViewStep': {
       const m = mutation;
@@ -167,10 +170,11 @@ export function runOperation(mutator: LikeC4Mutator, mutation: Mutation): Operat
     case 'removeElement': {
       const m = mutation;
       const result = mutator.removeElement(m.fqn, { cascade: m.cascade === true });
-      return done(result, [
-        removedLine(m.op, `'${m.fqn}'`, result.removedRelationships.length),
-        ...cascadedLines(m.op, result.cascaded),
-      ]);
+      return done(
+        result,
+        [removedLine(m.op, `'${m.fqn}'`, result.removedRelationships.length)],
+        cascadedLines(m.op, result.cascaded),
+      );
     }
     case 'addElementExtend': {
       const { op: _op, fqn, ...opts } = mutation;
@@ -313,10 +317,11 @@ export function runOperation(mutator: LikeC4Mutator, mutation: Mutation): Operat
       const options = { cascade: m.cascade === true };
       const result =
         m.op === 'removeDeploymentNode' ? mutator.removeDeploymentNode(m.id, options) : mutator.removeDeploymentInstance(m.id, options);
-      return done(result, [
-        removedLine(m.op, `'${m.id}'`, result.removedRelationships.length),
-        ...cascadedLines(m.op, result.cascaded),
-      ]);
+      return done(
+        result,
+        [removedLine(m.op, `'${m.id}'`, result.removedRelationships.length)],
+        cascadedLines(m.op, result.cascaded),
+      );
     }
     case 'addDeploymentInstance': {
       const m = mutation;
