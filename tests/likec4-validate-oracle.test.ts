@@ -495,10 +495,11 @@ describe('overlapping validateModel calls keep LikeC4 console output off the pro
 });
 
 describe('validateModel names each record by its file as loaded (row 38)', () => {
-  it('six awkward keys are returned verbatim, none collapsed', async () => {
+  it('seven awkward keys are returned verbatim, none collapsed', async () => {
     // `dir\b.c4`, not `dir\a.c4`: the mutator itself refuses two keys that
     // denote one path (`dir/a.c4` and `dir\a.c4`) before any check runs.
-    const keys = ['dir/a.c4', 'dir\\b.c4', 'my model.c4', 'a b.c4', 'a%20b.c4', 'caf\u00e9.c4'];
+    // `x\u{1F600}.c4` holds a character outside the Basic Multilingual Plane.
+    const keys = ['dir/a.c4', 'dir\\b.c4', 'my model.c4', 'a b.c4', 'a%20b.c4', 'caf\u00e9.c4', 'x\u{1F600}.c4'];
     const files: Record<string, string> = { 'spec.c4': 'specification {\n  element system\n}\n' };
     keys.forEach((key, i) => {
       files[key] = `model {\n  e${i} = nokind\n}\n`;
