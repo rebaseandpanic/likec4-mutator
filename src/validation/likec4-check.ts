@@ -44,9 +44,17 @@ export interface LikeC4CheckOptions {
 const WORKSPACE = URI.parse('file:///workspace');
 const SOURCES = UriUtils.joinPath(WORKSPACE, 'src');
 
-/** The document URI of a loaded file name: one path segment per `/`-separated part, so any other character stays in its segment. */
+/**
+ * The document URI of a loaded file name (or of a project folder): one path
+ * segment per `/`-separated part, so any other character stays in its
+ * segment.  Every segment gets the prefix `_` because joining normalizes
+ * empty, `.` and `..` segments, which would give two distinct names one URI
+ * (`a//b.c4` and `a/b.c4`, `a/../b.c4` and `b.c4`); with the prefix no
+ * segment is special, and the prefix being the same for all keeps the
+ * documents in the order of their names.
+ */
 function documentUri(name: string): URI {
-  return UriUtils.joinPath(SOURCES, ...name.split('/'));
+  return UriUtils.joinPath(SOURCES, ...name.split('/').map((segment) => `_${segment}`));
 }
 
 /** LSP severity of an error diagnostic. */
