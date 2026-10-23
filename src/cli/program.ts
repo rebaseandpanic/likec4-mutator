@@ -13,6 +13,7 @@ import { mutationFieldPath, parseMutationsFile } from '../mutations-file.js';
 import { InvalidWriteError } from '../mutator/write-checks.js';
 import { runOperation } from '../operations/run-operation.js';
 import { likec4FileExtensionList, loadDirectory, writeOutput } from './files.js';
+import { addOperationCommands } from './operation-commands.js';
 
 /** A stream the program writes text to (`process.stdout`, or a test's collector). */
 export interface CliWriter {
@@ -413,6 +414,12 @@ export function buildProgram(io: CliIO, options: BuildProgramOptions = {}): CliP
         return 1;
       }
     }));
+
+  // ---------------------------------------------------------------------------
+  // The commands of the other operations, generated from the operation table
+  // ---------------------------------------------------------------------------
+
+  addOperationCommands(program, { io, dirDescription, action });
 
   // ---------------------------------------------------------------------------
   // apply
