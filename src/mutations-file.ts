@@ -519,7 +519,8 @@ export interface MutationsFile {
 export class MutationsFileError extends Error {
   constructor(
     readonly path: string,
-    detail: string,
+    /** The reason, without the path */
+    readonly detail: string,
   ) {
     super(`${path}: ${detail}`);
     this.name = 'MutationsFileError';
