@@ -451,6 +451,11 @@ function endOfFile(source: string): { line: number; column: number } {
   return { line: lines.length, column: lines[lines.length - 1].length + 1 };
 }
 
+/** Whether a 1-based line or column of a parse error is a real position. */
+function hasPosition(value: number): boolean {
+  return Number.isInteger(value) && value >= 1;
+}
+
 /**
  * Programmatic read/write access to a set of LikeC4 source files.
  *
@@ -3478,8 +3483,9 @@ export class LikeC4Mutator {
   private fileErrors(filename: string, source: string, doc: ParsedDocument): string[] {
     if (doc.errors.length > 0) {
       return doc.errors.map((err) => {
-        // A token without a position (the end of the input) is reported at the end of the file.
-        const { line, column } = Number.isFinite(err.line) && Number.isFinite(err.column) ? err : endOfFile(source);
+        // A token without a position (the end of the input: NaN, or -1 in newer LikeC4 releases)
+        // is reported at the end of the file.
+        const { line, column } = hasPosition(err.line) && hasPosition(err.column) ? err : endOfFile(source);
         return `${filename}:${line}:${column}: ${err.message}`;
       });
     }
