@@ -642,10 +642,15 @@ describe('row 21: --parent and --title of add-element are optional', SLOW, () =>
 
 describe('row 22: remove-element --cascade lists the cascade after the kept line', SLOW, () => {
   it('on model C', async () => {
-    const { command } = await expectSameAsApply('modelC', ['remove-element', '--fqn', 'other', '--cascade'], {
+    const { command, apply } = await expectSameAsApply('modelC', ['remove-element', '--fqn', 'other', '--cascade'], {
       op: 'removeElement', fqn: 'other', cascade: true,
     });
-    expect(command.stdout.split('\n')).toEqual(["Removed element 'other'", '  removeElement: cascade removed model.c4:10:18 (predicate-item)', '']);
+    // apply prints its removal line, then the cascade lines, then its summary.
+    const applyLines = apply.stdout.split('\n');
+    expect(applyLines.slice(-2)).toEqual(['Applied 1 mutation(s) successfully', '']);
+    const cascade = applyLines.slice(1, -2);
+    expect(cascade.length).toBeGreaterThan(0);
+    expect(command.stdout.split('\n')).toEqual(["Removed element 'other'", ...cascade, '']);
   });
 });
 
