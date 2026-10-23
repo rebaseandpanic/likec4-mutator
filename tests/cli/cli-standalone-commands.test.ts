@@ -689,6 +689,20 @@ describe('row 24: the kept commands decode their flags as the generated ones do'
     await expectSameAsApply('minimal', args, mutation, { field: 'title', flag: 'title' });
   });
 
+  it('--match-bidirectional true removes the bidirectional relationship, as in apply', async () => {
+    const mutation = { op: 'removeRelationship', source: 'a', target: 'b' };
+    const { command } = await expectSameAsApply('bidi', ['remove-relationship', '--source', 'a', '--target', 'b', '--match-bidirectional', 'true'], {
+      ...mutation,
+      matchBidirectional: true,
+    });
+    expect(command.code).toBe(0);
+    expect(command.stdout).toBe("Relationship 'a' -> 'b' removed successfully\n");
+    // The other value of the flag removes the other relationship: different files.
+    const other = await runApply('bidi', { ...mutation, matchBidirectional: false });
+    expect(other.code).toBe(0);
+    expect(command.files).not.toEqual(other.files);
+  });
+
   it.each(
     (
       [
