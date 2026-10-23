@@ -196,6 +196,8 @@ describe('row 28: a missing get-* exits 1; no specification and empty lists succ
     const text = await read(EMPTY, ['get-specification']);
     expect(text.code).toBe(0);
     expect(text.stderr).toBe('');
+    // Readable text says so (US-3); its wording is not a contract.
+    expect(text.stdout.trim()).not.toBe('');
     const json = await read(EMPTY, ['get-specification', '--json']);
     expect(json.code).toBe(0);
     expect(JSON.parse(json.stdout)).toBeNull();
