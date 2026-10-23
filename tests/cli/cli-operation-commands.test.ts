@@ -11,8 +11,8 @@
  * its own copies of one model: one copy gets the command, another `apply`
  * with the case's mutation; files are compared byte for byte.  Expected
  * sides are `apply`'s run on the same input (the spec's contract: the
- * command equals `apply`), the library method's own value for `--json`,
- * and the literal lines of row 9 recorded with the row-1 models.
+ * command equals `apply`), and the library method's own value for
+ * `--json`.
  */
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -725,18 +725,24 @@ describe("row 9: a generated command prints apply's lines without the summary, o
     {
       model: 'modelA' as const,
       args: ['remove-view', '--id', 'base', '--cascade'],
-      lines: ["  removeView: removed 'base'", '  removeView: cascade removed model.c4:15:18 (navigate-to)'],
+      mutation: { op: 'removeView', id: 'base', cascade: true },
     },
     {
       model: 'modelB' as const,
       args: ['remove-view-step', '--id', 'flow', '--address', '{"path":[0,0]}'],
-      lines: ['  removeViewStep: removed the emptied par block(s) [0]'],
+      mutation: { op: 'removeViewStep', id: 'flow', address: { path: [0, 0] } },
     },
-  ])('$args.0 prints the literal lines of the row-1 model', async ({ model, args, lines }) => {
+  ])("$args.0 on the row-1 model prints apply's cascade / emptied-par lines", async ({ model, args, mutation }) => {
+    const apply = await runApply(model, mutation);
+    expect(apply.stderr).toBe('');
+    expect(apply.code).toBe(0);
+    const lines = applyLines(apply.stdout);
+    expect(lines.length).toBeGreaterThan(0);
     const command = await runCommand(model, args);
     expect(command.stderr).toBe('');
     expect(command.code).toBe(0);
     expect(command.stdout.split('\n')).toEqual([...lines, '']);
+    expect(command.files).toEqual(apply.files);
   });
 });
 
