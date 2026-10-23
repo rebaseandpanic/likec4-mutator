@@ -2,8 +2,9 @@
  * The CLI program builder and its directory loader / writer (rows 2, 3, 5,
  * 6 and 7 of the lc4m-15.31 test matrix): the three LikeC4 file extensions
  * form one model, commander's own rejections exit 1 and write nothing,
- * `--version` prints the given version, `apply` rejects a mutation without a known op at its path, the
- * "no files found" failure names the extensions, and the output writer keeps
+ * `--version` prints the given version, `apply` rejects a mutation without
+ * a known op at its path and passes a library rejection that names no field
+ * through unchanged, the "no files found" failure names the extensions, and the output writer keeps
  * its path-traversal guard.
  *
  * The program runs in process through `buildProgram` with collecting
@@ -18,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { buildProgram } from '../../src/cli/program.js';
 import { writeOutput } from '../../src/cli/files.js';
 import { LikeC4Mutator } from '../../src/mutator/mutator.js';
+import { InvalidWriteError } from '../../src/mutator/write-checks.js';
 import { expectValidLikeC4 } from '../helpers/likec4-model.js';
 
 const SLOW = { timeout: 120_000 };
@@ -171,6 +173,37 @@ describe('apply rejects a mutation without a known op at mutations[i].op', SLOW,
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr.startsWith('Error: mutations[0].op'), result.stderr).toBe(true);
+    expect(readDir(dir)).toEqual(MODEL);
+  });
+});
+
+describe('apply passes a library rejection that names no field through unchanged', SLOW, () => {
+  // A new label would move the 'T' extend block onto the other x -> y, which
+  // already takes the kind's title 'U': the library refuses with a plain error.
+  const MODEL = {
+    'model.c4':
+      "specification {\n  element service\n  relationship titled {\n    title 'U'\n  }\n  tag a\n  tag b\n}\n" +
+      "model {\n  x = service\n  y = service\n  x -[titled]-> y 'T'\n  x -[titled]-> y\n  extend x -[titled]-> y 'T' { #a }\n}\n",
+  };
+  const MUTATION = { op: 'updateRelationship', source: 'x', target: 'y', matchTitle: 'T', label: '' };
+
+  it("prints 'Error: <the library's message>', exits 1 and writes nothing", async () => {
+    let rejection: unknown;
+    try {
+      LikeC4Mutator.fromFiles(MODEL).updateRelationship({ source: 'x', target: 'y', matchTitle: 'T' }, { label: '' });
+    } catch (err) {
+      rejection = err;
+    }
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBeInstanceOf(InvalidWriteError);
+
+    const dir = tempDir(MODEL);
+    const mutations = join(mkdtempSync(join(tmpdir(), 'likec4-mutator-program-mutations-')), 'mutations.json');
+    writeFileSync(mutations, JSON.stringify({ mutations: [MUTATION] }), 'utf-8');
+    const result = await run('apply', '--dir', dir, '--mutations', mutations, '--in-place');
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(`Error: ${(rejection as Error).message}\n`);
     expect(readDir(dir)).toEqual(MODEL);
   });
 });
