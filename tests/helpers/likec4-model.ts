@@ -8,6 +8,7 @@
 import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
 import { AstUtils, URI, type AstNode, type CstNode, type LangiumDocument } from 'langium';
 import { expect } from 'vitest';
+import { checkLikeC4 } from '../../src/validation/likec4-check.js';
 
 /** A string value of the LikeC4 model: plain, or `{ md }` / `{ txt }` for Markdown-or-string properties. */
 export type LikeC4ModelString = string | { md?: string; txt?: string };
@@ -263,58 +264,33 @@ function getterValues(source: DeploymentGetterSource): LikeC4DeploymentGetters {
  * What `likec4 validate` of LikeC4 1.59.4 reports for `files`, in process:
  * an empty array means the command would exit with 0.
  *
- * The command (`validate` in `likec4/dist/cli/index.mjs`) loads the
- * workspace, builds every document with validation, and fails on
- * - every diagnostic of severity error in a source file
- *   (`LikeC4.getErrors()`); warnings, hints and infos never fail it;
- * - unless `--no-layout` is given: an exception while laying out the views
- *   (`Layout validation failed: ...`) and a view whose manual layout drifted
- *   from the model (`Layout drift detected on view '...'`).  A view that
- *   graphviz fails to lay out is only logged, not reported.
- *
- * Both are done here the same way, with the same language services: errors
- * from `LanguageServices.getErrors()`, layout from
- * `LanguageServices.diagrams()`, which resolves the project with
- * `ensureProjectId` and then calls `Views.diagrams(projectId)` — the path the
- * command takes through `LikeC4.diagrams(project)` without `--project`.
- * Errors are `<file>:<line>: <message>` (1-based line, as in
- * {@link LikeC4ModelResult.errors}).
+ * The records come from the product's LikeC4 check
+ * (`src/validation/likec4-check.ts`, see there for what the command does
+ * and how the check follows it): every diagnostic of severity error in a
+ * source file, as `<file>:<line>: <message>` (1-based line, as in
+ * {@link LikeC4ModelResult.errors}), then an exception while laying out the
+ * views, as `Layout validation failed: <message>`.  A view that graphviz fails
+ * to lay out is only logged, by the command and by the check; manual layouts
+ * are not read, so a layout drift cannot occur.
  *
  * Limits.  The sources are one in-memory workspace folder, so there is one
  * project and no project configuration (`likec4.config.json`, its `include` /
  * `exclude`, multi-project `import` — except as below); `--project` and `--file` are not
- * implemented.  The two layout branches are not exercised by any test: the
- * language services are built with `NoLikeC4ManualLayouts`, so a drift cannot
- * occur, and no fixture is known that makes `diagrams()` throw (a view that
- * fails to lay out, e.g. a sequence view with nested actors, is only logged by
- * both the command and this function).
+ * implemented.  No fixture is known that makes the layout step throw.
  *
  * With `options.projects`, each named top-level folder of `files` is
- * registered as a project (see {@link buildWorkspace}), so `import` between
- * them resolves, and the layout of every named project is checked.  This
- * multi-project form has not been compared with the command's output.
+ * registered as a project, so `import` between them resolves, and the layout
+ * of every named project is checked.  This multi-project form has not been
+ * compared with the command's output.
  */
 export async function validateLikeC4(
   files: Record<string, string>,
   options: { projects?: readonly string[] } = {},
 ): Promise<string[]> {
-  const { services } = await buildWorkspace(files, undefined, options.projects);
-  type ProjectId = Parameters<typeof services.likec4.LanguageServices.diagrams>[0];
-  const errors = services.likec4.LanguageServices.getErrors().map(
-    (e) => `${e.sourceFsPath.slice(SOURCES.length)}:${e.line + 1}: ${e.message}`,
+  const records = await checkLikeC4(files, { projects: options.projects ?? [] });
+  return records.map((r) =>
+    r.origin === 'views' ? `Layout validation failed: ${r.message}` : `${r.file}:${r.line}: ${r.message}`,
   );
-  const layout: string[] = [];
-  const projectIds: ProjectId[] = options.projects?.length ? options.projects.map((p) => p as ProjectId) : [undefined];
-  try {
-    for (const projectId of projectIds) {
-      for (const view of await services.likec4.LanguageServices.diagrams(projectId)) {
-        if (view.drifts && view.drifts.length > 0) layout.push(`Layout drift detected on view '${view.id}'`);
-      }
-    }
-  } catch (e) {
-    layout.push(`Layout validation failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  return [...errors, ...layout];
 }
 
 /** Assert that `files` pass `likec4 validate` of LikeC4 1.59.4 — see {@link validateLikeC4}. */
