@@ -178,7 +178,7 @@ Every write of the library has a command: each [`apply`](#apply) operation is on
 
 ### Files
 
-Every command loads the files LikeC4 reads — `.c4`, `.likec4` and `.like-c4` (the extensions come from LikeC4's language metadata) — from the whole `--dir` tree, subdirectories included, as one model: references between files of different extensions resolve, and a write chooses its default file among all of them alike. A write command writes every loaded file back under its own relative path and extension, unchanged files byte-identical: to `--output` when given, otherwise in place. A directory without such files fails with exit code 1.
+Every command loads the files LikeC4 reads — `.c4`, `.likec4` and `.like-c4` (the extensions come from LikeC4's language metadata) — from the whole `--dir` tree, subdirectories included, as one model: references between files of different extensions resolve, and a write chooses its default file among all of them alike. A write command writes every loaded file back under its own relative path and extension, unchanged files byte-identical, to `--output` when given. A single-operation command writes in place without `--output`; `apply` keeps requiring `--output` or `--in-place`. A directory without such files fails with exit code 1.
 
 ### Operation commands
 
