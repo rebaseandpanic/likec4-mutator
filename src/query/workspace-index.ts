@@ -485,7 +485,7 @@ export type ReferencePosition =
  * (`api`, `app.api`, ...) to, when it is written at `position` in the
  * document `ast`; undefined when it does not resolve.
  *
- * Follows LikeC4 1.59.4 (language-server `LikeC4ScopeProvider.computeScope`
+ * Follows LikeC4 1.60.0 (language-server `LikeC4ScopeProvider.computeScope`
  * and `streamForFqnRef`): a parentless name is looked up in the local scope
  * of each container from the reference outwards — for a model-level relation
  * the `model` block (its children and unique descendants), for a reference in

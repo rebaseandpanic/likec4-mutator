@@ -1,5 +1,5 @@
 /**
- * The LikeC4 check: what `likec4 validate` of LikeC4 1.59.4 reports for a set
+ * The LikeC4 check: what `likec4 validate` of LikeC4 1.60.0 reports for a set
  * of in-memory files, computed with LikeC4's own language services.
  *
  * The command (`validate` in `likec4/dist/cli/index.mjs`) loads the
@@ -99,7 +99,8 @@ async function runCheck(files: Record<string, string>, options: LikeC4CheckOptio
       if (diagnostic.severity !== ERROR_SEVERITY) continue;
       records.push({
         origin: 'language-services',
-        message: diagnostic.message,
+        // LSP 3.18 allows a markup message; its text is the message.
+        message: typeof diagnostic.message === 'string' ? diagnostic.message : diagnostic.message.value,
         file,
         line: diagnostic.range.start.line + 1,
         column: diagnostic.range.start.character + 1,

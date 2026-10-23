@@ -231,10 +231,10 @@ describe('kind and reference form', () => {
   });
 });
 
-// Keywords of the style value rules of the LikeC4 1.59.4 grammar.
+// Keywords of the style value rules of the LikeC4 1.60.0 grammar.
 const SIZES = ['xs', 'sm', 'md', 'lg', 'xl', 'xsmall', 'small', 'medium', 'large', 'xlarge'];
 const ELEMENT_KEYWORDS: Array<[string, string[]]> = [
-  ['shape', ['rectangle', 'component', 'person', 'browser', 'mobile', 'cylinder', 'storage', 'queue', 'bucket', 'document']],
+  ['shape', ['rectangle', 'component', 'person', 'browser', 'mobile', 'cylinder', 'storage', 'queue', 'bucket', 'document', 'agent']],
   ['border', ['solid', 'dashed', 'dotted', 'none']],
   ['size', SIZES],
   ['padding', SIZES],

@@ -3,7 +3,7 @@ import { LikeC4Mutator } from '../../src/mutator/mutator.js';
 import { buildLikeC4Model, expectRelationshipsAgreeWithLikeC4 } from '../helpers/likec4-model.js';
 
 /**
- * Two relationship forms LikeC4 1.59.4 accepts and reads (language-server
+ * Two relationship forms LikeC4 1.60.0 accepts and reads (language-server
  * `parseRelation`):
  *  - the kind written as `.kind` (`dotKind`) instead of `-[kind]->`;
  *  - tags written after the title on the relation line (header tags).  LikeC4

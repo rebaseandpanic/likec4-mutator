@@ -7,7 +7,7 @@ import { buildLikeC4Model, expectRelationshipsAgreeWithLikeC4 } from '../helpers
 
 /**
  * `extend a -> b { ... }` blocks add tags, links and metadata to existing
- * relationships.  LikeC4 1.59.4 (language-server `buildModelData`,
+ * relationships.  LikeC4 1.60.0 (language-server `buildModelData`,
  * `relationFingerprint`) applies a block to every relation with the same
  * source, target, kind (`default` when none), title and direction —
  * bidirectional endpoints in either order — and merges the relation's own

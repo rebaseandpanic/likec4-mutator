@@ -11,7 +11,7 @@
  *
  * Expected texts come from D64 / FR-021 and the request (`name = kind` is the
  * form the write produces); expected element values are the ones LikeC4
- * 1.59.4 computes from the written files (`expectAgreesWithLikeC4`); every
+ * 1.60.0 computes from the written files (`expectAgreesWithLikeC4`); every
  * accepted write passes the accepted-write bundle.
  */
 import { describe, expect, it } from 'vitest';

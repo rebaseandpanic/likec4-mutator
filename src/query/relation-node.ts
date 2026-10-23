@@ -1,5 +1,5 @@
 /**
- * Reading parts of a `Relation` AST node the way LikeC4 1.59.4 does
+ * Reading parts of a `Relation` AST node the way LikeC4 1.60.0 does
  * (language-server `ModelParser.parseRelation`).
  */
 

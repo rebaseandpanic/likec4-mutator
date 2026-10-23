@@ -1,5 +1,5 @@
 /**
- * Resolution of deployment references the way LikeC4 1.59.4 links them
+ * Resolution of deployment references the way LikeC4 1.60.0 links them
  * (language-server `LikeC4ScopeComputation.processDeployments`,
  * `LikeC4ScopeProvider.computeScope` / `streamForFqnRef` /
  * `getScopeForStrictFqnRef`, `FqnIndex.uniqueDescedants`).

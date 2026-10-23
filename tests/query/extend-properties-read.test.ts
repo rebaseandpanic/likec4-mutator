@@ -6,7 +6,7 @@ import { expectAgreesWithLikeC4 } from '../helpers/likec4-model.js';
 
 /**
  * `extend X { ... }` blocks add tags, links and metadata to X.  The element
- * read API reports the effective values LikeC4 1.59.4 computes (body first,
+ * read API reports the effective values LikeC4 1.60.0 computes (body first,
  * then extend blocks in document order — documents sorted by path with
  * LikeC4's natural hierarchical comparator — then source order), plus where
  * each value came from.

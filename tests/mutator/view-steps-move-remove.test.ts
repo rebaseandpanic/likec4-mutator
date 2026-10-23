@@ -5,7 +5,7 @@
  * with the `try` / `alt` contribution classes, and the rejections.
  *
  * Expected texts are written by hand from the spec's examples and the
- * input; expected sequences are LikeC4 1.59.4's computed sequence before the
+ * input; expected sequences are LikeC4 1.60.0's computed sequence before the
  * write, transformed as the spec says (SEQ); every accepted write passes the
  * conventions of `view-writes.ts`.
  */

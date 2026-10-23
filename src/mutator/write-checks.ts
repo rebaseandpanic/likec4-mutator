@@ -324,7 +324,7 @@ function expectedStyleValue(key: string): string {
  * The checks LikeC4 applies to a parsed style property beyond its form:
  * a custom color must be declared, a library icon must exist, an icon URI
  * must not use `file://` (error), an opacity must lie in 0%..100% (otherwise
- * LikeC4 ignores it with a warning).  See language-server 1.59.4
+ * LikeC4 ignores it with a warning).  See language-server 1.60.0
  * `src/validation/property-checks.ts`.
  */
 function checkParsedStyleValue(
@@ -503,7 +503,7 @@ interface RuleContents {
  *     scopes it (see {@link ViewReferenceResolver}); in a deployment view
  *     a model reference only inside a relation predicate of an `exclude`
  *     rule, and a reference into an instance's internals only inside a
- *     relation predicate (LikeC4 1.59.4 `checkFqnRefExpr`,
+ *     relation predicate (LikeC4 1.60.0 `checkFqnRefExpr`,
  *     `checkRelationExpr`); every
  *     `navigateTo` names a view of a type its place accepts (any view from
  *     an element `with`, a dynamic view from a relation `with`);
@@ -610,7 +610,7 @@ export function checkViewRule(
     }
   }
 
-  // (5) `with` properties: the property checks of LikeC4 1.59.4
+  // (5) `with` properties: the property checks of LikeC4 1.60.0
   // (`property-checks.ts`), the one on the body included: an icon is given
   // once (`Icon must be defined once`).
   for (const body of contents.bodies) {

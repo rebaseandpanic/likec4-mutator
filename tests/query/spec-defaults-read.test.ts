@@ -1,5 +1,5 @@
 /**
- * Element kind defaults: LikeC4 1.59.4 (`MergedSpecification.toModelElement`)
+ * Element kind defaults: LikeC4 1.60.0 (`MergedSpecification.toModelElement`)
  * fills an element's title, summary, description, technology, tags and links
  * from the `specification { element <kind> { ... } }` declaration of its kind
  * before the `extend` blocks are merged.  Expected values come from the model

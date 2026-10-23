@@ -1,5 +1,5 @@
 /**
- * Deployment references resolve to the targets LikeC4 1.59.4 links them to:
+ * Deployment references resolve to the targets LikeC4 1.60.0 links them to:
  * relationship endpoints, `instanceOf` targets, `extend <node>` targets and
  * references in deployment view rules.
  *

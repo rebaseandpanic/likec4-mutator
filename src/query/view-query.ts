@@ -4,7 +4,7 @@
  * dynamic view (US-4), built from the `ViewIndex` and resolved with the
  * `ViewReferenceResolver`.
  *
- * Structure and values follow LikeC4 1.59.4's parse of the same text
+ * Structure and values follow LikeC4 1.60.0's parse of the same text
  * (language-server `ViewsParser`, `parseFqnExprWith`,
  * `parseCustomRelationProperties`, `parseWhereClause`), except where the
  * library reports what is written: the relationship kind of a relation

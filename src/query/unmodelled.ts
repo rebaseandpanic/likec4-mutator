@@ -9,7 +9,8 @@
  *    block, an `import`.
  *  - **Inventory, recovered text.**  Every Langium cross-reference in those
  *    subtrees, classed by the reference type the grammar declares for it
- *    (`AstReflection.getReferenceType`): element and deployment references
+ *    (the property's `referenceType` in `AstReflection.getTypeMetaData`):
+ *    element and deployment references
  *    (`Referenceable`, `Element`) — an `FqnRef` / `StrictFqnRef` /
  *    `StrictFqnElementRef` chain joined into one dotted name with the
  *    position of each segment; view references; element, deployment node,
@@ -136,7 +137,8 @@ export function unmodelledInventory(documents: Iterable<{ file: string; parsed: 
 
     walk(parsed.ast as AstLike, undefined, (node, property, ref, at) => {
       place = at;
-      const type = reflection.getReferenceType({ container: node, property, reference: ref } as Parameters<typeof reflection.getReferenceType>[0]);
+      const type = reflection.getTypeMetaData(node.$type ?? '').properties[property]?.referenceType;
+      if (type === undefined) throw new Error(`Internal error: ${node.$type}.${property} is not a reference in '${file}'`);
       if (IGNORED_REFERENCE_TYPES.has(type)) return;
       const nameClass = REFERENCE_CLASSES[type];
       if (!nameClass) throw new Error(`Internal error: unknown reference type '${type}' of ${node.$type}.${property} in '${file}'`);

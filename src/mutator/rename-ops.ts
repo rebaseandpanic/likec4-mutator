@@ -22,7 +22,7 @@
  *  - **Moved text.**  A moved declaration keeps its leading comments and is
  *    written at the indentation of its new place; a value LikeC4 resolves
  *    relative to the declaring file (an `icon` or a `link` starting with
- *    `./` or `../`, as LikeC4 1.59.4 tells relative paths apart) pins it to
+ *    `./` or `../`, as LikeC4 1.60.0 tells relative paths apart) pins it to
  *    its file.
  */
 import { commentRanges, multiLineTokenRanges } from '../parser/grammar.js';

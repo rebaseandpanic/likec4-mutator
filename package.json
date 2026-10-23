@@ -24,8 +24,8 @@
     "lint": "tsc --noEmit && tsc -p scripts && tsc -p tests/types && tsx scripts/grammar-rules.ts --check docs/likec4-coverage.md"
   },
   "dependencies": {
-    "@likec4/core": "^1.59.4",
-    "@likec4/language-server": "^1.59.4",
+    "@likec4/core": "^1.60.0",
+    "@likec4/language-server": "^1.60.0",
     "bundle-require": "^5.1.0",
     "commander": "^15.0.0",
     "esbuild": "0.28.2",
@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "langium": "3.5.0",
+    "langium": "4.4.0",
     "tsdown": "^0.23.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

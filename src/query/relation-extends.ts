@@ -1,5 +1,5 @@
 /**
- * `extend a -> b { ... }` blocks (`ExtendRelation`) and how LikeC4 1.59.4
+ * `extend a -> b { ... }` blocks (`ExtendRelation`) and how LikeC4 1.60.0
  * applies them to relationships (language-server `relationFingerprint`,
  * `ModelParser.parseExtendRelation` and the relation step of
  * `buildModelData`).

@@ -1,5 +1,5 @@
 /**
- * References written in views resolve to the targets LikeC4 1.59.4 links
+ * References written in views resolve to the targets LikeC4 1.60.0 links
  * them to (`ViewReferenceResolver`), and the `ViewIndex` reverse index lists
  * every reference to a view.
  *

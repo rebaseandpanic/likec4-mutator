@@ -261,7 +261,7 @@ export function isSingleIncludeRule(expression: string, type: IncludeViewType): 
 
 /**
  * Names LikeC4 rejects for an element, an element kind or a view although the
- * `Id` rule accepts them: `Reserved word: <name>` (language-server 1.59.4,
+ * `Id` rule accepts them: `Reserved word: <name>` (language-server 1.60.0,
  * `src/validation/index.ts` `RESERVED_WORDS`, used by `checkElement`,
  * `checkElementKind` and `viewChecks`).  The list is not exported by the
  * package, so it is repeated here.

@@ -1,5 +1,5 @@
 /**
- * Text normalization LikeC4 1.59.4 applies when it builds its model from
+ * Text normalization LikeC4 1.60.0 applies when it builds its model from
  * string values (language-server `removeIndent` / `toSingleLine`).  Used for
  * effective values only; declarative views keep strings as written.
  */

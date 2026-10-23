@@ -5,7 +5,7 @@
  * and structure checks at the insertion place, and view addressing.
  *
  * Expected texts are written by hand from the request and the input;
- * expected view contents are what LikeC4 1.59.4 computes for those texts
+ * expected view contents are what LikeC4 1.60.0 computes for those texts
  * (CMP, and SEQ for dynamic views); every accepted write passes the
  * conventions of `view-writes.ts`.
  */

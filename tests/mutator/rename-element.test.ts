@@ -245,7 +245,7 @@ describe('the written form (row 79)', () => {
 });
 
 /**
- * Row 80 and row 91 (RES-T3, reachable in LikeC4 1.59.4): a reference `b`
+ * Row 80 and row 91 (RES-T3, reachable in LikeC4 1.60.0): a reference `b`
  * to `a.b` in the body of `a.y`.  Renamed to `foo`, `b` links to `z.b` and
  * `foo` to `a.y.foo`; `a.foo` links to the renamed element, unless `a.y`
  * has a child `a` (row 91), which `a.foo` then starts from.

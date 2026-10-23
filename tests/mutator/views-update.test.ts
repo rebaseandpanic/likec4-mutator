@@ -4,7 +4,7 @@
  * untouched text, view addressing and writes next to errors.
  *
  * Expected texts come from the request and the input; expected values from
- * LikeC4 1.59.4's parse and computed views; every accepted write passes the
+ * LikeC4 1.60.0's parse and computed views; every accepted write passes the
  * conventions of `view-writes.ts`.
  */
 import { describe, expect, it } from 'vitest';

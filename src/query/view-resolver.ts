@@ -1,5 +1,5 @@
 /**
- * Resolution of the references written in views, mirroring LikeC4 1.59.4's
+ * Resolution of the references written in views, mirroring LikeC4 1.60.0's
  * view scoping (language-server `LikeC4ScopeProvider`,
  * `genScopeForParentlessFqnRef` / `genScopeElementView`), and the
  * step-contribution predicate {@link contributesSteps}.
@@ -236,7 +236,7 @@ export class ViewReferenceResolver {
  *  - `try`: its `try` part contributes;
  *  - `alt`: at least one `if` / `when` / `else` branch contributes;
  *  - a stray `if` / `when` / `else` never contributes.
- * As observed on 1.59.4, a parent-child step and a `par` nested in a `par`
+ * As observed on 1.60.0, a parent-child step and a `par` nested in a `par`
  * are still parsed (and computed) despite their validation errors, and
  * unresolved relationship kinds or `navigateTo` targets do not stop a step
  * from contributing.

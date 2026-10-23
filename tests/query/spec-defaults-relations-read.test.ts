@@ -1,5 +1,5 @@
 /**
- * Relationship kind defaults: LikeC4 1.59.4 (`MergedSpecification.toModelRelation`)
+ * Relationship kind defaults: LikeC4 1.60.0 (`MergedSpecification.toModelRelation`)
  * fills a relationship's title, description, technology, tags and links from
  * the `specification { relationship <kind> { ... } }` declaration of its kind
  * before `extend a -> b` blocks apply.  Expected values come from the model

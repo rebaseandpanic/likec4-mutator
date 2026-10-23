@@ -2,7 +2,7 @@
  * The rules of a view and their structured predicates (US-2, US-3), read by
  * the rule builder of `src/query/view-query.ts`.
  *
- * Expected values come from LikeC4 1.59.4's own parse of the same files
+ * Expected values come from LikeC4 1.60.0's own parse of the same files
  * (`parsedViews`, compared through `expectRulesAgreeWithLikeC4`), its linker
  * (`linkedViewReferences`), its diagnostics, and from the input text itself
  * (ranges, source text, written forms).

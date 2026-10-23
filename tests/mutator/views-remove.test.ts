@@ -7,7 +7,7 @@
  * unmodelled places reject in both modes (D56, D61, D92, D104, D111–D113).
  *
  * Expected lines come from the input text; expected links from LikeC4
- * 1.59.4's linker; every accepted write passes the conventions of
+ * 1.60.0's linker; every accepted write passes the conventions of
  * `view-writes.ts`.
  */
 import { describe, expect, it } from 'vitest';

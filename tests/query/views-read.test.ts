@@ -1,6 +1,6 @@
 /**
  * Views through the public reads `listViews` / `getView` (US-1): every field
- * of every declared view, with rules and steps, against LikeC4 1.59.4's
+ * of every declared view, with rules and steps, against LikeC4 1.60.0's
  * per-document parse; the INV-4 exceptions, own values only (D21),
  * unnamed and generated views (D28, D29), duplicates, filters, references
  * and best-effort reads.

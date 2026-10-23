@@ -1,6 +1,6 @@
 /**
  * The obligations of an accepted view write (the conventions of the
- * lc4m-15.29 test matrix), checked against LikeC4 1.59.4 through the oracle
+ * lc4m-15.29 test matrix), checked against LikeC4 1.60.0 through the oracle
  * of `likec4-model.ts`; nothing here reads the library's own model except
  * `listViews()`, which is the value under test in Wv.
  *

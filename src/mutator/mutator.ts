@@ -1649,7 +1649,7 @@ export class LikeC4Mutator {
    *  - on `source` / `position`: no relationship matches; on `source`, a
    *    {@link RelationshipAmbiguityError} when several do;
    *  - on `source`: the relationship has no title of its own but its kind
-   *    declares one (D82: LikeC4 1.59.4 ignores a block without that title
+   *    declares one (D82: LikeC4 1.60.0 ignores a block without that title
    *    and warns about one with it);
    *  - on `shared`: other relationships share the identity and `shared` is
    *    not set; `related` lists them (`construct: 'relationship'`);
@@ -1670,7 +1670,7 @@ export class LikeC4Mutator {
     if (own.title === '' && identity.title !== '') {
       throw new InvalidWriteError(
         'source',
-        `the relationship's only title is '${identity.title}', the default of its kind '${own.kind}': LikeC4 1.59.4 ignores an extend block ` +
+        `the relationship's only title is '${identity.title}', the default of its kind '${own.kind}': LikeC4 1.60.0 ignores an extend block ` +
           `without that title and warns about one with it`,
       );
     }
@@ -3431,7 +3431,7 @@ export class LikeC4Mutator {
   }
 
   /**
-   * Check the loaded files as `likec4 validate` of LikeC4 1.59.4 does, with
+   * Check the loaded files as `likec4 validate` of LikeC4 1.60.0 does, with
    * LikeC4's own language services, and report what it reports:
    *
    * - every diagnostic of error severity, as a located record: the file

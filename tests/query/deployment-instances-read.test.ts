@@ -3,7 +3,7 @@
  * `listDeploymentInstances` (US-3): inheritance from the element, the D2
  * and D10 exceptions, names, element targets and filters.
  *
- * Expected values come from the model LikeC4 1.59.4 builds from the same
+ * Expected values come from the model LikeC4 1.60.0 builds from the same
  * files, from literals observed in that model by the reconnaissance spikes
  * (spike 02 and 06), and from the input text itself.
  */

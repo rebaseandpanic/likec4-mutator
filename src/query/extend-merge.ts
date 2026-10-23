@@ -2,7 +2,7 @@
  * Effective tags / links / metadata of an element whose declaration is
  * extended by `extend X { ... }` blocks.
  *
- * Mirrors LikeC4 1.59.4: the language-server document parser reads each
+ * Mirrors LikeC4 1.60.0: the language-server document parser reads each
  * body (`parseTags`: tags without duplicates; `parseLinks`: links with
  * single-line labels; `getMetadata`: normalized values grouped per key), `MergedExtends.merge` accumulates
  * the `extend` contributions in document order and `MergedExtends.applyExtended`

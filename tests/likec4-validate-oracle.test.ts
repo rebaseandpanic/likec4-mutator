@@ -1,15 +1,16 @@
 /**
  * The test oracle `validateLikeC4` / `expectValidLikeC4` (tests/helpers)
- * must reject exactly what `likec4 validate` of LikeC4 1.59.4 rejects, so
+ * must reject exactly what `likec4 validate` of LikeC4 1.60.0 rejects, so
  * that a mutation result checked with it is known to pass the command.
  *
  * Each case is a small project.  The expected `<file>:<line>` location (1-based)
  * of every error, one entry per error, was taken from running
- * `likec4 validate --json` of the `likec4@1.59.4` npm package (layout
+ * `likec4 validate --json` of the `likec4@1.59.4` npm package and re-run
+ * with `likec4@1.60.0`, which reports the same locations (layout
  * validation on) on the same sources; an empty list means the command exited
  * with 0.  A line with two errors is listed twice, so losing one of them
  * fails.  The messages are not compared (LikeC4's wording is not a contract
- * of this library).  The locations are a snapshot of 1.59.4: when the
+ * of this library).  The locations are a snapshot of 1.60.0: when the
  * `@likec4/language-server` dependency moves, re-run the command of the new
  * version on these sources and update them.  Cases cover valid sources,
  * warnings only, syntax errors, unresolved references, duplicates, view

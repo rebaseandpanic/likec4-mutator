@@ -2,7 +2,7 @@
  * The step statements of dynamic views (US-4), read by the step builder of
  * `src/query/view-query.ts`.
  *
- * Expected values come from LikeC4 1.59.4's own parse and computed views of
+ * Expected values come from LikeC4 1.60.0's own parse and computed views of
  * the same files (`parsedViews`, `computedViews`, compared through
  * `expectStepsAgreeWithLikeC4`), its linker (`linkedViewReferences`), its
  * diagnostics, and from the input text itself (paths, ranges, written

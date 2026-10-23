@@ -3,7 +3,7 @@
  * effective values, connector forms and positions, filters, endpoint
  * resolution through the public read, and provenance.
  *
- * Expected values come from the model LikeC4 1.59.4 builds from the same
+ * Expected values come from the model LikeC4 1.60.0 builds from the same
  * files (`$data.deployments.relations` and the relation getters), from
  * literals observed in that model by the reconnaissance spikes (02, 04 and
  * 06), and from the input text itself.

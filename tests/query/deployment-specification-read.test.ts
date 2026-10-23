@@ -3,7 +3,7 @@
  * `getDeploymentNodeKind()` (US-1), and the guard that the deployment model
  * does not leak into the existing logical reads (INV-7).
  *
- * Expected values come from the model LikeC4 1.59.4 builds from the same
+ * Expected values come from the model LikeC4 1.60.0 builds from the same
  * files (`$data.specification.deployments`, elements and relations), from
  * the positions of declarations in the input text, and from the names the
  * fixtures' specifications declare.

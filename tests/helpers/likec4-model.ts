@@ -6,7 +6,7 @@
  * computes from the same sources.
  */
 import { createLanguageServices, NoFileSystem, NoLikeC4ManualLayouts } from '@likec4/language-server/module';
-import { AstUtils, URI, type AstNode, type CstNode, type LangiumDocument } from 'langium';
+import { AstUtils, isReference, URI, type AstNode, type CstNode, type LangiumDocument } from 'langium';
 import { expect } from 'vitest';
 import { checkLikeC4 } from '../../src/validation/likec4-check.js';
 
@@ -261,7 +261,7 @@ function getterValues(source: DeploymentGetterSource): LikeC4DeploymentGetters {
 }
 
 /**
- * What `likec4 validate` of LikeC4 1.59.4 reports for `files`, in process:
+ * What `likec4 validate` of LikeC4 1.60.0 reports for `files`, in process:
  * an empty array means the command would exit with 0.
  *
  * The records come from the product's LikeC4 check
@@ -293,7 +293,7 @@ export async function validateLikeC4(
   );
 }
 
-/** Assert that `files` pass `likec4 validate` of LikeC4 1.59.4 — see {@link validateLikeC4}. */
+/** Assert that `files` pass `likec4 validate` of LikeC4 1.60.0 — see {@link validateLikeC4}. */
 export async function expectValidLikeC4(
   files: Record<string, string>,
   options: { projects?: readonly string[] } = {},
@@ -1622,6 +1622,8 @@ export async function linkedKindReferences(
         const kindType = KIND_REFERENCE_TYPES[reflection.getReferenceType(info)];
         if (!kindType) continue;
         const written = info.reference.$refNode!;
+        // A kind reference names one kind; langium 4 types a reference as single or multi.
+        if (!isReference(info.reference)) throw new Error(`kind reference at ${file}:${written.offset} is not a single reference`);
         const target = info.reference.ref as (AstNode & { name?: string }) | undefined;
         found.push({
           file,

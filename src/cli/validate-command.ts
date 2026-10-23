@@ -1,7 +1,7 @@
 /**
  * The `validate` command: the records `LikeC4Mutator.validateModel` gives
  * for the files loaded from `--dir`, which is what `likec4 validate` of
- * LikeC4 1.59.4 reports for those files.
+ * LikeC4 1.60.0 reports for those files.
  *
  * Text output: one line per record on stderr — `file:line:column: message`
  * for a located record (1-based), the message alone for an unlocated one —

@@ -11,7 +11,7 @@
  *    endpoint steps into one through an instance; an unreferenced
  *    neighbour is removed (row 36).
  *
- * The re-target of every rejection is confirmed by LikeC4 1.59.4 on the
+ * The re-target of every rejection is confirmed by LikeC4 1.60.0 on the
  * hand-written text the write would produce: the targets its linker bound
  * (`linkedReferences`), its deployment relations and its diagnostics.
  */

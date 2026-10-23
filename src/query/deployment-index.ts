@@ -3,7 +3,7 @@
  * `extend <node>` blocks, deployment relationships and deployment views of
  * every document, in LikeC4's document order.
  *
- * Ids are built the way LikeC4 1.59.4 builds them (language-server
+ * Ids are built the way LikeC4 1.60.0 builds them (language-server
  * `DeploymentsIndex.createDocumentIndex`, `LikeC4NameProvider.getName`):
  *
  *  - a node or instance id is its parent's id + `.` + its name; a root node's

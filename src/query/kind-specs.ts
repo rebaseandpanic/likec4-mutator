@@ -1,6 +1,6 @@
 /**
  * Kind declarations of `specification` blocks and the defaults they write,
- * read the way LikeC4 1.59.4 does (language-server
+ * read the way LikeC4 1.60.0 does (language-server
  * `SpecificationParser.parseSpecification` / `parseElementSpecificationNode`):
  * tags (`parseTags`), links (`parseLinks`) and the string properties through
  * `parseBaseProps` — the last declaration of a key counts.  A relationship

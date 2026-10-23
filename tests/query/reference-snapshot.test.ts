@@ -5,7 +5,7 @@
  * the internal errors; the view references, always covered since the
  * snapshot is built on the reference catalogue (lc4m-15.30, US-4).
  *
- * Expected targets are LikeC4 1.59.4's own observations of the same
+ * Expected targets are LikeC4 1.60.0's own observations of the same
  * sources: the targets its linker bound (`linkedReferences`), the endpoints
  * of `$data.relations` / `$data.deployments.relations`, and its
  * diagnostics.

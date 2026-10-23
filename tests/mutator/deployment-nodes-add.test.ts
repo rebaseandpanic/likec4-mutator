@@ -14,7 +14,7 @@
  *    the duplicate-id check (row 45).
  *
  * Expected values come from the request itself, the input text, and the
- * model LikeC4 1.59.4 builds from the same files (`buildLikeC4Model`,
+ * model LikeC4 1.60.0 builds from the same files (`buildLikeC4Model`,
  * `linkedReferences`, `expectValidLikeC4` and the deployment agreement
  * helpers).
  */

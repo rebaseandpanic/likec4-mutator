@@ -5,7 +5,7 @@
  *
  * Expected texts are written by hand from the patch and the input (the
  * whole file is compared, so every untouched byte is checked); expected
- * sequences are LikeC4 1.59.4's computed sequence before the write with the
+ * sequences are LikeC4 1.60.0's computed sequence before the write with the
  * patched step changed (SEQ); every accepted write passes the conventions
  * of `view-writes.ts`.
  */

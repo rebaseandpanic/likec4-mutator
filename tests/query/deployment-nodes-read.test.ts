@@ -3,7 +3,7 @@
  * (US-2): effective values, provenance, structure, filters, style and the
  * written form of opacity and icons (D18).
  *
- * Expected values come from the model LikeC4 1.59.4 builds from the same
+ * Expected values come from the model LikeC4 1.60.0 builds from the same
  * files, from literals observed in that model by the reconnaissance spikes
  * (spike 02 and 06), and from the input text itself (positions,
  * declarations, written style values).
@@ -368,7 +368,7 @@ describe('style values in written form (D18)', () => {
   // LikeC4 resolves relative and root-relative icon paths and image aliases
   // to URLs and stores opacity as a clamped number; the library reports the
   // values as written.  (Opacity '040%' stands for a spelling that differs
-  // from the number: LikeC4 1.59.4 accepts integer percents only, so a
+  // from the number: LikeC4 1.60.0 accepts integer percents only, so a
   // decimal such as '40.0%' is a syntax error.)
   const KINDS = `specification {
   element service

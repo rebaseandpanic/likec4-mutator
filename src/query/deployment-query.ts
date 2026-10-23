@@ -2,7 +2,7 @@
  * Read API of the deployment model: deployment nodes, instances and
  * relationships with their effective values and provenance.
  *
- * Effective values are LikeC4 1.59.4's computed model (language-server
+ * Effective values are LikeC4 1.60.0's computed model (language-server
  * `DeploymentModelParser.parseDeploymentNode` / `parseDeployedInstance` /
  * `parseDeploymentRelation`, `MergedSpecification.toDeploymentElement` /
  * `toDeploymentRelation`, `MergedExtends`, and the `DeploymentNodeModel` /

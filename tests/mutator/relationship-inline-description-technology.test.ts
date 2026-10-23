@@ -4,7 +4,7 @@ import { buildLikeC4Model } from '../helpers/likec4-model.js';
 
 /**
  * A relationship may carry description and technology as positional strings
- * after the title: `x -> y 'title' 'description' 'technology'`.  LikeC4 1.59.4
+ * after the title: `x -> y 'title' 'description' 'technology'`.  LikeC4 1.60.0
  * (`parseRelation` → `parseBaseProps`) uses them in preference to the body's
  * `description` / `technology`: a description when it is non-empty, a
  * technology whenever it is written (an empty one included).

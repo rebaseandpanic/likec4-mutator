@@ -1,6 +1,6 @@
 /**
  * Structured style of elements, deployment nodes, instances and
- * relationships, read the way LikeC4 1.59.4 builds the data layer of its
+ * relationships, read the way LikeC4 1.60.0 builds the data layer of its
  * model (language-server `parseElementStyle` / `parseStyleProps` and
  * `toRelationshipStyle`), without theme defaults:
  *

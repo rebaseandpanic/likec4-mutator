@@ -5,7 +5,7 @@
  * snapshot guard.
  *
  * Expected placement and text come from D27 / D41 and the input; expected
- * view contents from hand-written texts computed by LikeC4 1.59.4 (CMP,
+ * view contents from hand-written texts computed by LikeC4 1.60.0 (CMP,
  * SEQ); every accepted write passes the conventions of `view-writes.ts`.
  */
 import { describe, expect, it } from 'vitest';

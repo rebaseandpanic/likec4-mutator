@@ -5,7 +5,7 @@
  * and CRLF views.
  *
  * Expected texts are written by hand; expected sequences are LikeC4
- * 1.59.4's computed sequence before the write with the new step put where
+ * 1.60.0's computed sequence before the write with the new step put where
  * the spec says (SEQ); every accepted write passes the conventions of
  * `view-writes.ts`.
  */
