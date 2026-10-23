@@ -356,3 +356,24 @@ describe('Multiple mutations followed by validate', () => {
     expect(mutator.getElement('app.gateway.rateLimit')).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// lc4m-28 (lc4m-15.31 row 44): a syntax error at the end of a file is placed
+// at the end-of-file position — the last line (a final line end starts an
+// empty last line) and the column after its last character — never NaN.
+// Expected positions are computed by hand from that rule.
+// ---------------------------------------------------------------------------
+
+describe('validate() places an end-of-file syntax error at the end of the file (row 44)', () => {
+  it.each([
+    ['a final line end', 'model {\n  x = service {\n', 'b.c4:3:1: '],
+    ['no final line end', 'model {\n  x = service {', 'b.c4:2:16: '],
+    ['CRLF line ends', 'model {\r\n  x = service {\r\n', 'b.c4:3:1: '],
+    ['a single line', 'specification {', 'b.c4:1:16: '],
+  ])('%s', (_, source, prefix) => {
+    const errors = LikeC4Mutator.fromFiles({ 'b.c4': source }).validate();
+    expect(Array.isArray(errors)).toBe(true);
+    expect(errors.some((line) => line.startsWith(prefix)), errors.join('\n')).toBe(true);
+    for (const line of errors) expect(line).not.toContain('NaN');
+  });
+});

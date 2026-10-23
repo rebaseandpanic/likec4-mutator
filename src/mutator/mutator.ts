@@ -442,6 +442,16 @@ export interface UpdateRelationshipResult {
 }
 
 /**
+ * The 1-based position at the end of `source`: its last line (a final line
+ * end starts an empty last line; `\n`, `\r\n` and `\r` end a line, as in LSP)
+ * and the column after its last character.
+ */
+function endOfFile(source: string): { line: number; column: number } {
+  const lines = source.split(/\r\n|\r|\n/);
+  return { line: lines.length, column: lines[lines.length - 1].length + 1 };
+}
+
+/**
  * Programmatic read/write access to a set of LikeC4 source files.
  *
  * All mutations are text-level: each operation computes a TextEdit (or list of
@@ -3467,7 +3477,11 @@ export class LikeC4Mutator {
    */
   private fileErrors(filename: string, source: string, doc: ParsedDocument): string[] {
     if (doc.errors.length > 0) {
-      return doc.errors.map((err) => `${filename}:${err.line}:${err.column}: ${err.message}`);
+      return doc.errors.map((err) => {
+        // A token without a position (the end of the input) is reported at the end of the file.
+        const { line, column } = Number.isFinite(err.line) && Number.isFinite(err.column) ? err : endOfFile(source);
+        return `${filename}:${line}:${column}: ${err.message}`;
+      });
     }
     const balanceError = checkBraceBalance(source);
     return balanceError === null ? [] : [`${filename}: ${balanceError}`];
